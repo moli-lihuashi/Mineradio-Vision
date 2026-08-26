@@ -1,0 +1,18 @@
+{
+  "name": "mineradio-bpm",
+  "version": "0.1.0",
+  "description": "Native C++ BPM analyzer for Mineradio - N-API addon 验证原型",
+  "main": "index.js",
+  "gypfile": true,
+  "scripts": {
+    "rebuild": "node-gyp rebuild",
+    "rebuild:electron": "node-gyp rebuild --target=42.4.1 --arch=x64 --dist-url=https://electronjs.org/dist",
+    "test": "node test/benchmark.js",
+    "test:dj": "node test/dj-energy-benchmark.js",
+    "test:beatmap": "node test/dj-beatmap-benchmark.js"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.0",
+    "bindings": "^1.5.0"
+  }
+}

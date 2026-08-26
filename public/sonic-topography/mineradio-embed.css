@@ -1,0 +1,19 @@
+/* Mineradio embed overrides for Sonic Topography */
+
+html,
+body,
+#root {
+  background: transparent !important;
+}
+
+.w-screen.h-screen.overflow-hidden {
+  background: transparent !important;
+}
+
+/* Hide Wallpaper Engine media player card (album + progress) */
+div.absolute.z-50.select-none {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}

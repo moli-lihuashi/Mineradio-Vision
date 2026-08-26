@@ -1,0 +1,119 @@
+{
+  "name": "mineradio",
+  "productName": "Mineradio",
+  "version": "3.0.0",
+  "description": "沉浸式音乐播放器，融合天气电台、歌词舞台、粒子视觉和 3D 歌单架。",
+  "author": "Mineradio",
+  "main": "desktop/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node scripts/run-tests.js",
+    "test:unit": "node scripts/run-tests.js unit",
+    "test:quick": "node scripts/run-tests.js quick",
+    "build:win": "electron-builder --win nsis",
+    "build:win:dir": "electron-builder --win dir",
+    "build:win:internal-beta": "electron-builder --config electron-builder.internal-beta.json --win nsis --publish never",
+    "organize:dist": "node build/organize-dist.js",
+    "sync:dist": "node scripts/sync-dist-app.js"
+  },
+  "build": {
+    "appId": "com.mineradio.desktop",
+    "productName": "Mineradio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "afterPack": "build/after-pack.js",
+    "afterAllArtifactBuild": "build/organize-dist.js",
+    "toolsets": {
+      "winCodeSign": "1.1.0"
+    },
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "build/**/*",
+      "cuefield/**/*",
+      "server/**/*",
+      "server.js",
+      "dj-analyzer.js",
+      "native/mineradio-bpm/index.js",
+      "native/mineradio-bpm/package.json",
+      "native/mineradio-bpm/binding.gyp",
+      "native/mineradio-bpm/build/Release/*.node",
+      "native/mineradio-bpm/node_modules/**/*",
+      "kugou-api.js",
+      "spotify-api.js",
+      "qishui-api.js",
+      "qq-vip-api.js",
+      "qishui-audio-decryptor/**/*",
+      "package.json",
+      "!public/index.*.html",
+      "public/index.html",
+      "node_modules/**/*",
+      "!node_modules/{electron,electron-builder,electron-rebuild,app-builder-lib,app-builder-bin,rcedit}/**/*",
+      "!node_modules/**/{test,tests,__tests__,example,examples,doc,docs}/**/*",
+      "!node_modules/**/*.md",
+      "!node_modules/**/{.github,.git,.npm,.cache}/**/*"
+    ],
+    "asar": false,
+    "win": {
+      "executableName": "Mineradio",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mineradio",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "include": "build/installer.nsh",
+      "artifactName": "Mineradio-${version}-Setup.${ext}"
+    }
+  },
+  "mineradio": {
+    "update": {
+      "provider": "github",
+      "owner": "moli-lihuashi",
+      "repo": "Mineradio-Vision",
+      "preview": true,
+      "preferMirrors": false,
+      "mirrors": [
+        "https://gh.llkk.cc/",
+        "https://ghfast.top/",
+        "https://gh-proxy.com/"
+      ]
+    }
+  },
+  "dependencies": {
+    "gsap": "^3.15.0",
+    "mpg123-decoder": "^1.0.3",
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "rcedit": "^5.0.2"
+  },
+  "overrides": {
+    "axios": "1.18.1",
+    "body-parser": "1.20.6"
+  }
+}

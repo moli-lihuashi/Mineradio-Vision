@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>音域回响 · Sonic Topography</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      #root { width: 100%; height: 100%; background: transparent; }
+    </style>
+    <script src="mineradio-bridge.js"></script>
+    <script>
+      // 立即注册 Wallpaper Engine Media Integration 回调
+      // 必须在脚本加载时立即注册，不能延迟到 onload 或模块加载后
+      window.__mediaState = {
+        title: '',
+        artist: '',
+        thumbnail: '',
+        primaryColor: '',
+        textColor: '',
+        isPlaying: false,
+        position: 0,
+        duration: 0,
+        _callbacks: []
+      };
+
+      window.__notifyMediaChange = function() {
+        window.__mediaState._callbacks.forEach(function(cb) {
+          cb({
+            title: window.__mediaState.title,
+            artist: window.__mediaState.artist,
+            thumbnail: window.__mediaState.thumbnail,
+            primaryColor: window.__mediaState.primaryColor,
+            textColor: window.__mediaState.textColor,
+            isPlaying: window.__mediaState.isPlaying,
+            position: window.__mediaState.position,
+            duration: window.__mediaState.duration
+          });
+        });
+      };
+
+      if (window.wallpaperRegisterMediaPropertiesListener) {
+        window.wallpaperRegisterMediaPropertiesListener(function(props) {
+          window.__mediaState.title = props.title || '';
+          window.__mediaState.artist = props.artist || '';
+          window.__mediaState.position = 0;
+          window.__mediaState.duration = 0;
+          window.__notifyMediaChange();
+        });
+      }
+
+      if (window.wallpaperRegisterMediaThumbnailListener) {
+        window.wallpaperRegisterMediaThumbnailListener(function(thumb) {
+          window.__mediaState.thumbnail = thumb.thumbnail || '';
+          window.__mediaState.primaryColor = thumb.primaryColor || '';
+          window.__mediaState.textColor = thumb.textColor || '';
+          window.__notifyMediaChange();
+        });
+      }
+
+      if (window.wallpaperRegisterMediaPlaybackListener) {
+        window.wallpaperRegisterMediaPlaybackListener(function(pb) {
+          var PLAYING = (window.wallpaperMediaIntegration && window.wallpaperMediaIntegration.PLAYBACK_PLAYING) || 0;
+          window.__mediaState.isPlaying = pb.state === PLAYING;
+          window.__notifyMediaChange();
+        });
+      }
+
+      if (window.wallpaperRegisterMediaTimelineListener) {
+        window.wallpaperRegisterMediaTimelineListener(function(tl) {
+          window.__mediaState.position = tl.position || 0;
+          window.__mediaState.duration = tl.duration || 0;
+          window.__notifyMediaChange();
+        });
+      }
+    </script>
+    <script type="module" crossorigin src="assets/index-Z-j1MQ-r.js"></script>
+    <link rel="stylesheet" crossorigin href="assets/index-Bhwp8mwk.css">
+    <link rel="stylesheet" href="mineradio-embed.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

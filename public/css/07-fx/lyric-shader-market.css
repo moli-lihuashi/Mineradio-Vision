@@ -1,0 +1,23 @@
+/* 歌词着色器市场 — 9.14 */
+.lyric-shader-market { padding: 4px 0; }
+.lyric-shader-market-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 8px; }
+.lyric-shader-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+.lyric-shader-card {
+  padding: 8px 6px; border-radius: 10px; cursor: pointer; text-align: center;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.18s ease;
+}
+.lyric-shader-card:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); }
+.lyric-shader-card.active { background: rgba(120,180,255,0.12); border-color: rgba(120,180,255,0.4); box-shadow: 0 0 0 1px rgba(120,180,255,0.2); }
+.lyric-shader-preview {
+  width: 100%; height: 48px; border-radius: 6px; margin-bottom: 6px;
+  background: rgba(255,255,255,0.04);
+}
+.lyric-shader-preview-default { background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)); }
+.lyric-shader-preview-aurora { background: linear-gradient(135deg, rgba(51,204,102,0.4), rgba(153,51,204,0.4)); }
+.lyric-shader-preview-neon { background: linear-gradient(180deg, rgba(0,242,255,0.15), rgba(0,242,255,0.6)); }
+.lyric-shader-preview-warm { background: radial-gradient(circle at center, rgba(255,179,77,0.5), rgba(255,179,77,0.05)); }
+.lyric-shader-name { font-size: 11px; color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyric-shader-desc { font-size: 9.5px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyric-shader-empty { font-size: 11px; color: rgba(255,255,255,0.4); padding: 12px 8px; text-align: center; line-height: 1.5; }
+.lyric-shader-loading { font-size: 11px; color: rgba(255,255,255,0.4); padding: 12px 8px; text-align: center; }

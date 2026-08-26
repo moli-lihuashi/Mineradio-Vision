@@ -1,0 +1,87 @@
+/* ============================================================ */
+/*  舞台歌词 (大字 + 3D 入场 + 呼吸)                              */
+/* ============================================================ */
+#stage-lyrics{display:none}
+.stage-lyric-line{position:absolute;font-family:var(--font-sans);font-weight:700;font-size:clamp(34px,5.6vw,76px);letter-spacing:2px;text-align:center;color:#fff;white-space:nowrap;max-width:92vw;padding:0 24px;text-shadow:0 0 14px rgba(168,246,255,.38),0 0 36px rgba(143,233,255,.30),0 0 80px rgba(115,167,255,.16);background:linear-gradient(180deg,rgba(246,253,255,1) 0%,rgba(168,246,255,1) 55%,rgba(126,205,255,1) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;opacity:0;transform-style:preserve-3d;will-change:transform,opacity,filter;filter:drop-shadow(0 4px 22px rgba(143,233,255,.30))}
+.stage-lyric-line.in{animation:lyr-in 900ms cubic-bezier(.16,.84,.32,1.02) forwards,lyr-bob 5.6s ease-in-out 900ms infinite}
+.stage-lyric-line.out{animation:lyr-out 700ms cubic-bezier(.55,0,.85,.45) forwards}
+@keyframes lyr-bob{0%,100%{transform:translate3d(var(--bx,0px),0,0) rotateX(0deg) rotateY(0deg) scale(1)}25%{transform:translate3d(calc(var(--bx,0px) + 6px),-7px,12px) rotateX(2deg) rotateY(-1.5deg) scale(1.01)}50%{transform:translate3d(var(--bx,0px),3px,0) rotateX(-1.5deg) rotateY(0deg) scale(.99)}75%{transform:translate3d(calc(var(--bx,0px) - 6px),-4px,8px) rotateX(1.2deg) rotateY(1.5deg) scale(1.005)}}
+@keyframes lyr-in{0%{opacity:0;transform:translate3d(var(--inx,-60px),var(--iny,40px),-160px) rotateX(var(--inrx,28deg)) rotateY(var(--inry,-22deg)) scale(.7);filter:blur(14px) drop-shadow(0 4px 22px rgba(143,233,255,.30))}55%{opacity:1;filter:blur(0) drop-shadow(0 4px 22px rgba(143,233,255,.30))}100%{opacity:1;transform:translate3d(var(--bx,0px),0,0) rotateX(0deg) rotateY(0deg) scale(1);filter:blur(0) drop-shadow(0 4px 22px rgba(143,233,255,.30))}}
+@keyframes lyr-out{0%{opacity:1;transform:translate3d(var(--bx,0px),0,0) rotateX(0) rotateY(0) scale(1);filter:blur(0)}100%{opacity:0;transform:translate3d(var(--outx,60px),var(--outy,-40px),-120px) rotateX(var(--outrx,-22deg)) rotateY(var(--outry,18deg)) scale(.78);filter:blur(10px)}}
+
+/* ============================================================ */
+/*  经典播放器预设 (Preset 11) - 网易云沉浸式 修改版                           */
+/* ============================================================ */
+#classic-player{position:fixed;inset:0;z-index:5;pointer-events:none;opacity:0;transition:opacity .45s ease}
+#classic-player.active{opacity:1;pointer-events:auto}
+body.empty-home-active #classic-player.active{z-index:2;opacity:0!important;pointer-events:none!important;visibility:hidden!important;transition:none!important}
+.cp-bg{position:absolute;inset:0;overflow:hidden}
+.cp-bg-blur{position:absolute;inset:-20%;background-size:cover;background-position:center;filter:blur(120px) saturate(1.6);transform:scale(1.15);opacity:.55}
+.cp-bg-overlay{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.cp-container{position:relative;display:flex;align-items:stretch;height:100%}
+.cp-left{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:0 0 40%;padding-left:5%;padding-right:2%}
+.cp-cover-wrap{position:relative;width:min(20vw,280px);aspect-ratio:1/1;margin-bottom:32px}
+
+/* 封面。如果想要图1的圆角矩形，把 50% 改为 24px */
+
+.cp-cover{position:absolute;inset:0;border-radius:50%;background-size:cover;background-position:center;box-shadow:0 24px 64px rgba(0,0,0,.6)}
+.cp-cover-shadow{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 35% 35%,rgba(255,255,255,.15),transparent 55%);pointer-events:none}
+.cp-song-info{text-align:center;min-width:0;max-width:100%}
+.cp-song-name{font-size:clamp(24px,2.8vw,36px);font-weight:700;color:#fff;letter-spacing:.5px;margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+.cp-artist{font-size:clamp(14px,1.4vw,18px);color:rgba(255,255,255,.6);margin-bottom:6px}
+.cp-album{font-size:clamp(12px,1.1vw,14px);color:rgba(255,255,255,.3)}
+.cp-lyrics-wrap{position:absolute;top:var(--cp-lyric-offset-y,0);bottom:0;overflow:visible;mask-image:linear-gradient(180deg,transparent 0%,#000 15%,#000 85%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 15%,#000 85%,transparent 100%);left:calc(45% + var(--cp-lyric-offset-x,0%) + var(--cp-lyric-curve-shift-x,0%));right:6%;width:auto;perspective:900px;padding-left:var(--cp-lyric-inset-left,0px);padding-right:var(--cp-lyric-inset-right,0px);box-sizing:border-box}
+.cp-lyrics{position:absolute;top:0;left:0;width:100%;height:-webkit-max-content;height:max-content;transition:transform .4s cubic-bezier(.25,.46,.45,.94);padding:50vh 0;box-sizing:border-box}
+#classic-player.cp-hide-cover .cp-left{display:none}
+#classic-player.cp-hide-cover .cp-lyrics-wrap{left:calc(8% + var(--cp-lyric-offset-x,0%) + var(--cp-lyric-curve-shift-x,0%));right:8%}
+#classic-player.cp-hide-bg .cp-bg{display:none}
+
+/* 歌词单行样式，去掉JS强制覆盖后，完全依赖这里的 CSS */
+
+.cp-lyric-line{padding:14px 0;margin:0;font-size:calc(18px * var(--cp-lyric-scale,1));color:rgba(255,255,255,.72);text-align:left;line-height:1.4;white-space:nowrap;opacity:.42;transform-origin:0% 50%;will-change:transform,opacity;transition:color .4s cubic-bezier(.25,.46,.45,.94),font-size .4s cubic-bezier(.25,.46,.45,.94),opacity .35s cubic-bezier(.25,.46,.45,.94),transform .4s cubic-bezier(.25,.46,.45,.94)}
+.cp-lyric-line.active{color:#fff;font-size:calc(32px * var(--cp-lyric-scale,1));font-weight:700;text-shadow:0 0 24px rgba(255,255,255,.18)}
+.cp-lyric-line.past{color:rgba(255,255,255,.52)}
+.cp-lyric-line.future{color:rgba(255,255,255,.62)}
+
+/* 节拍呼吸脉动：JS 每帧设置 --cp-beat-pulse (0~1)，用 filter 避免与 JS transform 冲突 */
+.cp-cover-wrap{transform:scale(calc(1 + var(--cp-beat-pulse,0) * 0.03));transition:transform .12s ease-out}
+.cp-cover{box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 calc(40px * var(--cp-beat-pulse,0)) rgba(255,255,255,.12)}
+
+/* 逐字高亮（卡拉OK）：JS 将 active 行文字拆为 char span，已唱部分加 .cp-sung */
+/* --cp-beat-glow 由 JS 每帧设置，驱动节拍呼吸光晕 */
+.cp-lyric-line.active .cp-char{color:rgba(255,255,255,.38);transition:color .15s ease}
+.cp-lyric-line.active .cp-char.cp-sung{color:#fff;text-shadow:0 0 calc(12px * var(--cp-beat-glow,1)) rgba(255,255,255,.4)}
+.cp-lyric-line.active .cp-char.cp-singing{color:rgba(255,255,255,.85);text-shadow:0 0 calc(18px * var(--cp-beat-glow,1)) rgba(255,255,255,.55)}
+/* 歌词结束余韵：末句唱完后缓慢上浮+渐淡+微粒子化飘散，像烟一样散开 */
+.cp-lyric-line--ending{animation:cp-ending-float 2.2s cubic-bezier(.22,1,.36,1) forwards!important}
+@keyframes cp-ending-float{0%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}40%{opacity:.88}100%{opacity:0;transform:translateY(-72px) scale(1.06);filter:blur(7px)}}
+#cp-ending-particles{position:absolute;inset:0;pointer-events:none;overflow:visible;z-index:3}
+.cp-ending-spark{position:absolute;width:4px;height:4px;border-radius:50%;background:rgb(var(--beat-glow-rgb,143,233,255));box-shadow:0 0 8px rgb(var(--beat-glow-rgb,143,233,255));will-change:transform,opacity;animation:cp-ending-spark 1.8s cubic-bezier(.16,1,.3,1) forwards}
+@keyframes cp-ending-spark{0%{opacity:.9;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(calc(-50% + var(--ex,0px)),calc(-50% + var(--ey,-60px))) scale(.2)}}
+
+/* ============================================================ */
+/*  手势 HUD + 手骨架                                            */
+/* ============================================================ */
+.gesture-hud{position:fixed;left:50%;bottom:110px;z-index:21;width:min(440px,calc(100vw - 44px));padding:12px 16px;border-radius:16px;background:rgba(10,10,16,.42);border:1px solid rgba(255,255,255,.10);backdrop-filter:blur(28px) saturate(1.4);-webkit-backdrop-filter:blur(28px) saturate(1.4);font-size:12px;color:rgba(255,255,255,.80);opacity:0;transform:translate(-50%,8px);transition:all .2s;pointer-events:none;box-shadow:0 18px 60px rgba(0,0,0,.4)}
+.gesture-hud.show{opacity:1;transform:translate(-50%,0)}
+.gesture-hud b{color:var(--champagne);font-weight:600}
+.gesture-confirm{font-size:10.5px;color:rgba(255,255,255,.52);margin-top:5px}
+.gesture-meter{height:3px;background:rgba(255,255,255,.10);border-radius:4px;overflow:hidden;margin-top:8px}
+.gesture-meter span{display:block;height:100%;width:0%;background:var(--champagne);border-radius:4px;transition:width .08s linear}
+.gesture-legend{font-size:10px;color:rgba(255,255,255,.4);margin-top:6px;line-height:1.5}
+#hand-canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:22;opacity:0;transition:opacity .35s}
+#hand-canvas.show{opacity:1}
+
+/* ============================================================ */
+/*  响应式                                                        */
+/* ============================================================ */
+@media (max-width:720px){
+  #fx-panel,#playlist-panel{right:12px;left:12px;width:auto;top:76px;bottom:auto}
+  #top-right{right:12px}
+}
+@media (max-width:520px){
+  .preset-grid,.fx-toggle-grid{grid-template-columns:1fr}
+  .fx-slider{grid-template-columns:74px minmax(0,1fr) 40px 28px;gap:8px;padding:8px}
+  .lyric-color-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+

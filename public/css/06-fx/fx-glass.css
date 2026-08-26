@@ -1,0 +1,429 @@
+/* ===== fx-panel WebGL 玻璃激活态 ===== */
+#fx-panel.lg-loading{
+  backdrop-filter:blur(20px) saturate(1.3)!important;
+  -webkit-backdrop-filter:blur(20px) saturate(1.3)!important;
+  transition:backdrop-filter .4s ease,-webkit-backdrop-filter .4s ease;
+}
+#fx-panel.lg-active,
+html.control-glass-svg-ok #fx-panel.lg-active{
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  border:1.5px solid rgba(255,255,255,.22)!important;
+  border-top-color:rgba(255,255,255,.35)!important;
+  border-bottom-color:rgba(255,255,255,.16)!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.18),
+    inset 0 -1px 0 rgba(0,0,0,.30),
+    0 8px 40px rgba(0,0,0,.45)!important;
+  overflow:hidden!important;
+  max-height:min(650px,calc(100vh - 132px))!important;
+}
+#fx-panel.lg-active::before,
+#fx-panel.lg-active::after{
+  display:none!important;
+}
+#fx-panel:not(.show):not(.peek) canvas{
+  visibility:hidden!important;
+}
+/* WebGL 玻璃表面涂层 — 渐变 + 双层噪点（粗颗粒 + 细颗粒，强化磨砂） */
+#fx-panel.lg-active::after{
+  display:block!important;
+  content:"";
+  position:fixed;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  z-index:1;
+  background:
+    /* 顶层：高光渐变（进一步增强顶部光泽与底部阴影对比） */
+    linear-gradient(180deg,
+      rgba(255,255,255,.28) 0%,
+      rgba(255,255,255,.12) 22%,
+      rgba(255,255,255,.03) 50%,
+      rgba(0,0,0,.06) 70%,
+      rgba(0,0,0,.34) 100%),
+    /* 中层：粗颗粒磨砂（主磨砂质感，提高颗粒对比度） */
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n1'><feTurbulence type='fractalNoise' baseFrequency='0.55' numOctaves='5' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.32 0'/></filter><rect width='100%' height='100%' filter='url(%23n1)'/></svg>"),
+    /* 底层：细颗粒磨砂（更密的高频颗粒） */
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='84' height='84'><filter id='n2'><feTurbulence type='fractalNoise' baseFrequency='1.65' numOctaves='2' seed='11' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.22 0'/></filter><rect width='100%' height='100%' filter='url(%23n2)'/></svg>");
+  background-blend-mode:overlay,overlay,soft-light;
+}
+/* 边框高光 — 由元素自身 border 提供，不再用伪元素 */
+#fx-panel.lg-active::before{
+  display:none!important;
+}
+
+/* ===== 搜索框 / 底部控件 LiquidGlass 激活态 ===== */
+/* Backdrop shell：Background(抓屏) → Glass(shell canvas) → Content(其余 DOM) */
+.lg-host {
+  isolation: isolate;
+}
+.lg-host > .lg-glass-shell {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0 !important;
+  overflow: hidden;
+}
+/* 只抬内容层 z-index，勿强改 position：
+   #bottom-bar 的 .mini-queue-popover 等是 absolute 悬浮层，
+   若被改成 relative 会进入 flex 流，控制条会突然被撑得很高。 */
+.lg-host > :not(.lg-glass-shell) {
+  z-index: 1;
+}
+/* visual.css 对 #search-box > * 强制 z-index:3，需把 shell 钉回底层 */
+#search-box.lg-host > .lg-glass-shell,
+#bottom-bar.lg-host > .lg-glass-shell,
+#fx-panel.lg-host > .lg-glass-shell {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
+#search-box.lg-host > :not(.lg-glass-shell) {
+  position: relative;
+  z-index: 3;
+}
+#bottom-bar.lg-host > #progress-bar,
+#bottom-bar.lg-host > #controls {
+  position: relative;
+  z-index: 1;
+}
+#bottom-bar.lg-host > .mini-queue-popover {
+  position: absolute;
+  z-index: 7;
+}
+.lg-host > .lg-glass-shell > canvas {
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* 当 .lg-active 时，禁用所有原有 backdrop-filter（CSS 模糊 + SVG 置换滤镜），
+   交由 WebGL LiquidGlass 接管玻璃渲染；弱化白边，避免塑料感 */
+#search-box.lg-active,
+html.control-glass-svg-ok #search-box.lg-active,
+html.lg-controls-webgl #search-box {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  box-shadow:
+    0 10px 32px rgba(0, 0, 0, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+}
+#search-box.lg-active::before,
+#search-box.lg-active::after {
+  opacity: 0.35 !important;
+}
+#search-box.lg-active canvas,
+#search-box .lg-glass-shell canvas {
+  border-radius: inherit;
+  pointer-events: none;
+}
+#search-box.lg-loading {
+  opacity: 0.96;
+}
+
+#bottom-bar.lg-active,
+html.control-glass-svg-ok #bottom-bar.lg-active,
+#bottom-bar.visible.lg-active,
+html.control-glass-svg-ok #bottom-bar.visible.lg-active,
+html.lg-controls-webgl #bottom-bar.visible,
+html.lg-controls-webgl #bottom-bar.visible.lg-active {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 14px 44px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+}
+#bottom-bar.lg-active canvas,
+#bottom-bar .lg-glass-shell canvas {
+  border-radius: inherit;
+  pointer-events: none;
+}
+#bottom-bar.lg-loading {
+  opacity: 0.91;
+}
+
+#fx-panel.lg-host > .lg-glass-shell {
+  /* 面板可滚动时 shell 仍铺满可视圆角区域 */
+  position: absolute;
+}
+
+/* ===== 首页卡片 LiquidGlass 激活态（非降级）=====
+   兜底背景：WebGL canvas 渲染时会盖住它；canvas 未渲染或失败时也能看到磨砂卡片，
+   避免透明落回下层黑色。降级时由 body.lg-degraded .home-card.lg-active 接管。 */
+.home-card.lg-active,
+.home-tile.lg-active,
+.home-mosaic-cell.lg-active{
+  background:linear-gradient(142deg,rgba(18,21,26,.58),rgba(8,9,13,.70));
+  backdrop-filter:blur(20px) saturate(1.2);
+  -webkit-backdrop-filter:blur(20px) saturate(1.2);
+}
+.home-card.lg-active canvas,
+.home-tile.lg-active canvas,
+.home-mosaic-cell.lg-active canvas{
+  border-radius:inherit;
+  pointer-events:none;
+}
+
+/* ===== LiquidGlass 性能降级回退 ===== */
+/* 当 body.lg-degraded 时，隐藏 WebGL canvas 并回退到 CSS backdrop-filter 提供基础磨砂 */
+body.lg-degraded #fx-panel.lg-active canvas,
+body.lg-degraded #search-box.lg-active canvas,
+body.lg-degraded #bottom-bar.lg-active canvas,
+body.lg-degraded .home-card.lg-active canvas{
+  visibility:hidden!important;
+}
+body.lg-degraded #fx-panel.lg-active{
+  background:rgba(20,22,28,.42)!important;
+  backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+}
+body.lg-degraded #fx-panel.lg-active::after{
+  /* 保留磨砂涂层，但减弱避免与 backdrop-filter 叠加过重 */
+  opacity:.55;
+}
+body.lg-degraded #search-box.lg-active{
+  background:rgba(20,22,28,.42)!important;
+  backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+}
+body.lg-degraded #bottom-bar.lg-active,
+body.lg-degraded #bottom-bar.visible.lg-active{
+  background:rgba(0,0,0,.18)!important;
+  backdrop-filter:blur(14px) saturate(1.6) brightness(1.12)!important;
+  -webkit-backdrop-filter:blur(14px) saturate(1.6) brightness(1.12)!important;
+}
+body.lg-degraded .home-card.lg-active{
+  background:linear-gradient(142deg,rgba(18,21,26,.66),rgba(8,9,13,.76))!important;
+  backdrop-filter:blur(24px) saturate(1.12)!important;
+  -webkit-backdrop-filter:blur(24px) saturate(1.12)!important;
+}
+/* 强制关闭状态：与降级相同的回退 */
+body.lg-forced-off #fx-panel.lg-active canvas,
+body.lg-forced-off #search-box.lg-active canvas,
+body.lg-forced-off #bottom-bar.lg-active canvas,
+body.lg-forced-off .home-card.lg-active canvas{
+  visibility:hidden!important;
+}
+body.lg-forced-off #fx-panel.lg-active{
+  background:rgba(20,22,28,.42)!important;
+  backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+}
+body.lg-forced-off #search-box.lg-active{
+  background:rgba(20,22,28,.42)!important;
+  backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+}
+body.lg-forced-off #bottom-bar.lg-active,
+body.lg-forced-off #bottom-bar.visible.lg-active{
+  background:rgba(0,0,0,.18)!important;
+  backdrop-filter:blur(14px) saturate(1.6) brightness(1.12)!important;
+  -webkit-backdrop-filter:blur(14px) saturate(1.6) brightness(1.12)!important;
+}
+body.lg-forced-off .home-card.lg-active{
+  background:linear-gradient(142deg,rgba(18,21,26,.66),rgba(8,9,13,.76))!important;
+  backdrop-filter:blur(24px) saturate(1.12)!important;
+  -webkit-backdrop-filter:blur(24px) saturate(1.12)!important;
+}
+
+/* ===== GooseHyperGlass 风格控件 (fx-panel 内部) ===== */
+#fx-panel .fx-slider,
+#fx-panel .fx-toggle,
+#fx-panel .fx-mini-btn,
+#fx-panel .fx-select,
+#fx-panel .fx-seg,
+#fx-panel .fx-fold-head,
+#fx-panel .fx-advanced{
+  background:linear-gradient(180deg,rgba(48,48,52,.55),rgba(20,20,24,.55))!important;
+  backdrop-filter:blur(6px) saturate(1.3)!important;
+  -webkit-backdrop-filter:blur(6px) saturate(1.3)!important;
+  border:0.5px solid rgba(255,255,255,.22)!important;
+  border-top-color:rgba(255,255,255,.34)!important;
+  border-bottom-color:rgba(255,255,255,.16)!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.18),
+    inset 0 -1px 0 rgba(0,0,0,.20),
+    0 1px 3px rgba(0,0,0,.25)!important;
+  position:relative;
+  transition:transform .18s cubic-bezier(.22,1,.36,1),
+             background .25s ease,
+             border-color .25s ease,
+             box-shadow .25s ease;
+}
+#fx-panel .fx-slider::before,
+#fx-panel .fx-mini-btn::before,
+#fx-panel .fx-select::before,
+#fx-panel .fx-seg::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  background:linear-gradient(135deg,
+    rgba(255,255,255,.14) 0%,
+    rgba(255,255,255,0) 40%,
+    rgba(255,255,255,0) 60%,
+    rgba(255,255,255,.06) 100%);
+  opacity:.8;
+}
+#fx-panel .fx-mini-btn:hover,
+#fx-panel .fx-select:hover,
+#fx-panel .fx-seg:hover{
+  background:linear-gradient(180deg,rgba(64,64,70,.60),rgba(28,28,32,.60))!important;
+  border-color:rgba(255,255,255,.38)!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.28),
+    inset 0 -1px 0 rgba(0,0,0,.22),
+    0 2px 8px rgba(0,0,0,.35)!important;
+}
+#fx-panel .fx-mini-btn:active,
+#fx-panel .fx-select:active,
+#fx-panel .fx-seg:active{
+  transform:scale(.96);
+  box-shadow:
+    inset 0 2px 4px rgba(0,0,0,.3),
+    0 1px 2px rgba(0,0,0,.2)!important;
+}
+#fx-panel .fx-toggle:active{
+  transform:scale(.97);
+}
+#fx-panel .fx-toggle.on{
+  background:linear-gradient(180deg,rgba(0,245,212,.18),rgba(0,245,212,.10))!important;
+  border-color:rgba(0,245,212,.45)!important;
+}
+#fx-panel .fx-toggle.on::after{
+  background:linear-gradient(180deg,#00f5d4,#00d6bf)!important;
+  box-shadow:0 0 8px rgba(0,245,212,.5)!important;
+}
+#fx-panel .fx-mini-btn.active{
+  background:linear-gradient(180deg,rgba(255,210,130,.25),rgba(200,160,80,.25))!important;
+  border-color:rgba(255,210,130,.50)!important;
+}
+#fx-panel.lg-active .fx-slider,
+#fx-panel.lg-active .fx-toggle,
+#fx-panel.lg-active .fx-mini-btn,
+#fx-panel.lg-active .fx-select,
+#fx-panel.lg-active .fx-seg,
+#fx-panel.lg-active .fx-fold-head{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+#fx-panel .fx-slider input[type=range]{
+  accent-color:var(--fc-accent,#0091ff);
+}
+
+/* ===== iOS 液态玻璃动画 ===== */
+@keyframes lg-gloss-wipe{
+  0%{transform:translateX(-120%)}
+  100%{transform:translateX(120%)}
+}
+#fx-panel .fx-toggle.on::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  background:linear-gradient(90deg,
+    transparent 0%,
+    rgba(255,255,255,.25) 50%,
+    transparent 100%);
+  animation:lg-gloss-wipe .6s cubic-bezier(.22,1,.36,1);
+}
+#fx-panel .fx-slider:active input[type=range]{
+  filter:brightness(1.2);
+}
+@media (hover:none){
+  #fx-panel .fx-mini-btn:active,
+  #fx-panel .fx-select:active,
+  #fx-panel .fx-seg:active{
+    transform:scale(.94);
+  }
+}
+
+/* ===== 磨砂玻璃卡片层 ===== */
+.pl-card,
+.pl-detail-row,
+.queue-item,
+.user-archive-slot{
+  background:linear-gradient(180deg,
+    rgba(255,255,255,.09) 0%,
+    rgba(255,255,255,.04) 50%,
+    rgba(0,0,0,.16) 100%)!important;
+  backdrop-filter:blur(8px) saturate(1.2);
+  -webkit-backdrop-filter:blur(8px) saturate(1.2);
+  border:1px solid rgba(255,255,255,.10)!important;
+  border-top-color:rgba(255,255,255,.18)!important;
+  border-bottom-color:rgba(255,255,255,.05)!important;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255,255,255,.12),
+    0 2px 8px rgba(0,0,0,.20)!important;
+  transition:transform .2s cubic-bezier(.22,1,.36,1),
+             background .25s ease,
+             border-color .25s ease,
+             box-shadow .25s ease;
+}
+.pl-card:hover,
+.pl-detail-row:hover,
+.queue-item:hover,
+.user-archive-slot:hover{
+  transform:translateY(-1px);
+  background:linear-gradient(180deg,
+    rgba(255,255,255,.14) 0%,
+    rgba(255,255,255,.06) 50%,
+    rgba(0,0,0,.14) 100%)!important;
+  border-color:rgba(255,255,255,.22)!important;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255,255,255,.22),
+    0 4px 16px rgba(0,0,0,.30)!important;
+}
+.pl-card:active,
+.pl-detail-row:active,
+.queue-item:active,
+.user-archive-slot:active{
+  transform:scale(.98);
+  background:linear-gradient(180deg,
+    rgba(0,0,0,.18) 0%,
+    rgba(255,255,255,.04) 50%,
+    rgba(255,255,255,.10) 100%)!important;
+}
+.queue-item.now{
+  background:linear-gradient(180deg,
+    rgba(0,229,200,.18) 0%,
+    rgba(0,180,160,.10) 50%,
+    rgba(0,0,0,.16) 100%)!important;
+  border-color:rgba(0,229,200,.40)!important;
+  box-shadow:
+    inset 0 0.5px 0 rgba(0,229,200,.30),
+    0 0 16px rgba(0,229,200,.25),
+    0 2px 8px rgba(0,0,0,.20)!important;
+}
+.pl-card.expanded{
+  background:linear-gradient(180deg,
+    rgba(255,200,100,.14) 0%,
+    rgba(255,160,60,.08) 50%,
+    rgba(0,0,0,.16) 100%)!important;
+  border-color:rgba(255,200,100,.35)!important;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255,200,100,.25),
+    0 0 24px rgba(255,200,100,.20),
+    0 2px 8px rgba(0,0,0,.20)!important;
+}
+/* 暗色面板内禁用 backdrop-filter 避免嵌套模糊 */
+#playlist-panel .pl-card,
+#playlist-panel .pl-detail-row,
+#playlist-panel .queue-item,
+#search-results .pl-card,
+#search-results .pl-detail-row,
+#fx-panel .pl-card,
+#fx-panel .pl-detail-row,
+#fx-panel .queue-item{
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
