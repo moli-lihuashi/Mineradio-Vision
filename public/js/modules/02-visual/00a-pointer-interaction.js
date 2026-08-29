@@ -74,7 +74,6 @@ function updateParticlePointerFrame() {
 function beginParticlePointerDrag(e) {
   if (e.button === 2) return;
   if (isPointerOverUi(e)) return;
-  if (fx && fx.preset === 9) return;  // 涟漪预设禁用鼠标拖动
   markRenderInteraction('canvas-drag', 1200);
   idleGuidePointerDown(e);
   orbit.rotating = true; orbit.last.x = e.clientX; orbit.last.y = e.clientY;
@@ -117,8 +116,8 @@ window.addEventListener('mousemove', throttle(function(e){
     markRenderInteraction('canvas-drag', 900);
     unlockCenteredView();
     var dx = e.clientX - orbit.last.x, dy = e.clientY - orbit.last.y;
-    if (fx && fx.preset === 8 && typeof orbit !== 'undefined') {
-      // 黑洞预设：拖拽 = 相机轨道旋转（raymarch 相机联动，跟手方向）
+    if ((fx && (fx.preset === 8 || fx.preset === 9)) && typeof orbit !== 'undefined') {
+      // 黑洞/涟漪预设：拖拽 = 相机轨道旋转（歌词面向相机随之联动，跟手方向）
       orbit.userTheta -= dx * 0.005;
       orbit.userPhi = Math.max(orbit.minPhi, Math.min(orbit.maxPhi, orbit.userPhi + dy * 0.005));
       if (orbit.recentering) orbit.recentering = false;

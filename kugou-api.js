@@ -75,9 +75,22 @@ function requestText(targetUrl, opts, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(targetUrl);
     const lib = u.protocol === 'https:' ? https : http;
+    const headers = Object.assign({}, opts.headers || {});
+    let bodyBuffer = null;
+    if (body != null && body !== '') {
+      bodyBuffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
+      // 显式 Content-Length + JSON Content-Type：避免 chunked 编码，
+      // 网关/WAF 对 chunked + 非 ASCII body 的处理可能与定长不一致
+      if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'application/json';
+      }
+      if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-length')) {
+        headers['Content-Length'] = String(bodyBuffer.length);
+      }
+    }
     const req = lib.request(u, {
       method: opts.method || 'GET',
-      headers: opts.headers || {},
+      headers,
     }, response => {
       const chunks = [];
       response.on('data', chunk => chunks.push(chunk));
@@ -95,7 +108,7 @@ function requestText(targetUrl, opts, body) {
     });
     req.setTimeout(12000, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
-    if (body) req.write(body);
+    if (bodyBuffer) req.write(bodyBuffer);
     req.end();
   });
 }
@@ -437,11 +450,12 @@ function attachKugouPlaybackStatus(payload, cookie, auth, membership) {
   });
 }
 
-function signatureAndroidParams(params, data) {
+function signatureAndroidParams(params, data, saltOverride) {
+  const salt = saltOverride || KUGOU_ANDROID_SALT;
   const paramsString = Object.keys(params).sort()
     .map(key => `${key}=${typeof params[key] === 'object' ? JSON.stringify(params[key]) : params[key]}`)
     .join('');
-  return crypto.createHash('md5').update(`${KUGOU_ANDROID_SALT}${paramsString}${data || ''}${KUGOU_ANDROID_SALT}`).digest('hex');
+  return crypto.createHash('md5').update(`${salt}${paramsString}${data || ''}${salt}`).digest('hex');
 }
 
 function signatureH5Params(params, bodyObj) {
@@ -466,8 +480,180 @@ function buildKugouH5Params(auth, extra) {
   }, extra || {});
 }
 
+// 网关失败：把酷狗返回体压缩进错误信息，否则前端/日志只见裸 KUGOU_GATEWAY_FAILED 无法确诊
+function kugouGatewayError(json, path) {
+  const statusText = json && json.status !== undefined && json.status !== null ? `(status=${json.status})` : '';
+  const errCodeText = [json && json.error_code, json && json.errcode]
+    .filter(v => v !== undefined && v !== null && String(v) !== '0').map(v => `code=${v}`).join(' ');
+  const msg = json && (json.error || json.msg || json.message) || '';
+  let text = (msg || `KUGOU_GATEWAY_FAILED${statusText}${errCodeText ? ' ' + errCodeText : ''}`).trim();
+  if (!msg && json && typeof json === 'object') {
+    try { text += ' body=' + JSON.stringify(json).slice(0, 200); } catch (_) {}
+  }
+  const err = new Error(text);
+  err.body = json;
+  try { console.warn('[KugouGateway]', path || '', JSON.stringify(json).slice(0, 400)); } catch (_) {}
+  return err;
+}
+
+// ===== Cloudlist 设备注册（dfid） =====
+// web 扫码登录的 cookie 只有 KUGOU_API_GUID/MID 与 token/userid，没有 dfid；
+// cloudlist 服务（歌单读写）要求「已注册设备的 dfid」，缺失时一律返回 error_code=20017。
+// 首次使用 cloudlist 时向酷狗风控接口注册设备（AES+RSA，协议对齐 KuGouMusicApi register_dev），
+// 取回 dfid 后进程内缓存，并注入到后续 cloudlist 请求的 cookie/参数里。
+var kugouDfidCache = '';
+var kugouDfidPending = null;
+// 与 server.js 登录注册一致：使用 lite（酷狗概念版）RSA 公钥
+const KUGOU_REGISTER_RSA_PUBLIC_KEY = '-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27+0+4kBzTBTBOZ/WWU0WryL1JSXRTXLgFVxtzIY41Pe7lPOgsfTCn5kZcvKhYKJesKnnJDNr5/abvTGf+rHG3YRwsCHcQ08/q6ifSioBszvb3QiwIDAQAB\n-----END PUBLIC KEY-----';
+
+function kugouRandomSeed(len) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function kugouRegisterAesKeyIV(seed) {
+  const md5 = crypto.createHash('md5').update(seed).digest('hex');
+  return { key: md5.substring(0, 16), iv: md5.substring(16, 32) };
+}
+
+async function registerKugouCloudDevice(cookie) {
+  const auth = extractKugouAuth(cookie);
+  const guid = String(kugouCookieObject(cookie).KUGOU_API_GUID || auth.mid || '').trim();
+  const dataMap = {
+    availableRamSize: 4983533568, availableRomSize: 48114719, availableSDSize: 48114717,
+    basebandVer: '', batteryLevel: 100, batteryStatus: 3,
+    brand: 'Redmi', buildSerial: 'unknown', device: 'marble',
+    imei: guid, imsi: '', manufacturer: 'Xiaomi', uuid: guid,
+    accelerometer: false, accelerometerValue: '', gravity: false, gravityValue: '',
+    gyroscope: false, gyroscopeValue: '', light: false, lightValue: '',
+    magnetic: false, magneticValue: '', orientation: false, orientationValue: '',
+    pressure: false, pressureValue: '', step_counter: false, step_counterValue: '',
+    temperature: false, temperatureValue: '',
+  };
+  const seed = kugouRandomSeed(6);
+  const { key: aesKey, iv: aesIV } = kugouRegisterAesKeyIV(seed);
+  const cipher = crypto.createCipheriv('aes-128-cbc', Buffer.from(aesKey, 'utf8'), Buffer.from(aesIV, 'utf8'));
+  const aesStr = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(dataMap), 'utf8')), cipher.final()]).toString('base64');
+  const rsaPayload = JSON.stringify({ aes: seed, uid: Number(auth.userid) || 0, token: auth.token });
+  const p = crypto.publicEncrypt(
+    { key: KUGOU_REGISTER_RSA_PUBLIC_KEY, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(rsaPayload, 'utf8'),
+  ).toString('hex');
+
+  const params = buildKugouGatewayParams(auth, { part: 1, platid: 1, p });
+  // 注册也用 lite 客户端身份，与登录会话保持一致
+  params.appid = KUGOU_LITE_APPID;
+  params.clientver = KUGOU_LITE_CLIENTVER;
+  params.signature = signatureAndroidParams(params, aesStr, KUGOU_LITE_ANDROID_SALT);
+  const u = new URL('/risk/v2/r_register_dev', 'https://userservice.kugou.com');
+  Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
+  const headers = Object.assign({}, KUGOU_HEADERS, {
+    'User-Agent': KUGOU_LITE_GATEWAY_UA,
+    'Content-Type': 'application/json',
+    Cookie: buildKugouRequestCookie(cookie),
+  });
+  const bodyBuf = await new Promise((resolve, reject) => {
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.request(u, { method: 'POST', headers }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    });
+    req.setTimeout(12000, () => req.destroy(new Error('KUGOU_REGISTER_TIMEOUT')));
+    req.on('error', reject);
+    req.write(aesStr);
+    req.end();
+  });
+  let json = null;
+  const plain = bodyBuf.toString('utf8');
+  if (plain.trim().startsWith('{')) {
+    // 错误/风控响应是明文 JSON；成功响应才是 AES 密文（与 server.js 的注册实现一致）
+    try { json = JSON.parse(plain); } catch (_) { json = null; }
+  }
+  if (!json) {
+    const decipher = crypto.createDecipheriv('aes-128-cbc', Buffer.from(aesKey, 'utf8'), Buffer.from(aesIV, 'utf8'));
+    json = JSON.parse(Buffer.concat([decipher.update(bodyBuf), decipher.final()]).toString('utf8'));
+  }
+  if (json && json.status === 1 && json.data && json.data.dfid) return String(json.data.dfid);
+  throw new Error('KUGOU_REGISTER_DEV_FAILED ' + JSON.stringify(json).slice(0, 160));
+}
+
+async function ensureKugouDfid(cookie) {
+  if (kugouDfidCache) return kugouDfidCache;
+  if (kugouDfidPending) return kugouDfidPending;
+  const existing = kugouCookieObject(cookie);
+  const present = existing.kg_dfid || existing.KG_DFID || existing.dfid || existing.DFID;
+  if (present && present !== '-') {
+    kugouDfidCache = String(present).trim();
+    return kugouDfidCache;
+  }
+  kugouDfidPending = registerKugouCloudDevice(cookie)
+    .then((dfid) => { kugouDfidCache = dfid; kugouDfidPending = null; return dfid; })
+    .catch((e) => { kugouDfidPending = null; throw e; });
+  return kugouDfidPending;
+}
+
+async function kugouWithCloudlistDevice(opts) {
+  if (opts.router !== 'cloudlist.service.kugou.com') return;
+  const dfid = await ensureKugouDfid(opts.cookie || '');
+  if (dfid) {
+    opts.cookie = (opts.cookie ? String(opts.cookie) + '; ' : '') + 'kg_dfid=' + dfid + '; dfid=' + dfid;
+  }
+}
+
+// ===== Cloudlist 专用通道（酷狗概念版 lite 客户端身份） =====
+// 登录会话（token）是在 lite 客户端身份下签发的（appid=3116 / clientver=11440 / lite 盐 / UA 11440，
+// 与 server.js 的登录、歌单列表链路一致）。cloudlist 服务校验「请求客户端身份 == token 签发身份」，
+// 用标准版身份（1005/20489）访问会一律返回 error_code=20017——无论签名正确与否。
+const KUGOU_LITE_APPID = '3116';
+const KUGOU_LITE_CLIENTVER = '11440';
+const KUGOU_LITE_ANDROID_SALT = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA';
+const KUGOU_LITE_GATEWAY_UA = 'Android15-1070-11440-46-0-DiscoveryDRADProtocol-wifi';
+
+async function kugouCloudlistRequest(path, opts) {
+  opts = opts || {};
+  await kugouWithCloudlistDevice(opts);
+  const auth = extractKugouAuth(opts.cookie || '');
+  if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
+  const clienttime = Math.floor(Date.now() / 1000);
+  const params = Object.assign({
+    dfid: auth.dfid || '-',
+    mid: auth.mid,
+    uuid: '-',
+    appid: KUGOU_LITE_APPID,
+    clientver: KUGOU_LITE_CLIENTVER,
+    clienttime,
+    userid: auth.userid,
+    token: auth.token,
+  }, opts.params || {});
+  const dataString = opts.body == null ? '' : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
+  params.signature = signatureAndroidParams(params, dataString, KUGOU_LITE_ANDROID_SALT);
+  const u = new URL(path, KUGOU_GATEWAY);
+  Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
+  const headers = Object.assign({}, KUGOU_HEADERS, {
+    'User-Agent': KUGOU_LITE_GATEWAY_UA,
+    'x-router': 'cloudlist.service.kugou.com',
+    'kg-rc': '1',
+    'kg-thash': '5d816a0',
+    'kg-rec': '1',
+    'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
+    dfid: params.dfid,
+    mid: params.mid,
+    clienttime: String(clienttime),
+    Cookie: buildKugouRequestCookie(opts.cookie || ''),
+  });
+  if (dataString) headers['Content-Type'] = 'application/json';
+  const json = await requestJson(u.toString(), { method: 'POST', headers }, dataString || undefined);
+  if (json && Number(json.status) === 0) throw kugouGatewayError(json, path);
+  return json;
+}
+
 async function kugouH5GatewayRequest(path, opts) {
   opts = opts || {};
+  await kugouWithCloudlistDevice(opts);
   const auth = extractKugouAuth(opts.cookie || '');
   if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
   const bodyObj = opts.body == null ? null : (typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body);
@@ -483,9 +669,7 @@ async function kugouH5GatewayRequest(path, opts) {
   if (opts.router) headers['x-router'] = opts.router;
   const json = await requestJson(u.toString(), { method: opts.method || (bodyObj == null ? 'GET' : 'POST'), headers }, bodyText || undefined);
   if (json && Number(json.status) === 0) {
-    const err = new Error(json.error || json.msg || json.message || 'KUGOU_GATEWAY_FAILED');
-    err.body = json;
-    throw err;
+    throw kugouGatewayError(json, path);
   }
   return json;
 }
@@ -523,6 +707,7 @@ function buildKugouGatewayParams(auth, extra) {
 
 async function kugouGatewayRequest(path, opts) {
   opts = opts || {};
+  await kugouWithCloudlistDevice(opts);
   const auth = extractKugouAuth(opts.cookie || '');
   if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
   const body = opts.body == null ? '' : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
@@ -545,9 +730,7 @@ async function kugouGatewayRequest(path, opts) {
   if (body) headers['Content-Type'] = 'application/json';
   const json = await requestJson(u.toString(), { method: opts.method || 'GET', headers }, body || undefined);
   if (json && Number(json.status) === 0) {
-    const err = new Error(json.error || json.msg || json.message || 'KUGOU_GATEWAY_FAILED');
-    err.body = json;
-    throw err;
+    throw kugouGatewayError(json, path);
   }
   return json;
 }
@@ -1279,11 +1462,9 @@ async function fetchKugouProfileFromPlaylists(cookie, auth) {
   if (!auth.playbackReady) return {};
   const cacheKey = kugouProfileCacheKey(auth);
   return kugouProfileCache.wrap(cacheKey, 5 * 60 * 1000, async () => {
-    const json = await kugouH5GatewayRequest('/v7/get_all_list', {
-      method: 'POST',
+    const json = await kugouCloudlistRequest('/v7/get_all_list', {
       cookie,
-      router: 'cloudlist.service.kugou.com',
-      params: { plat: 1 },
+      params: { total_ver: 979, type: 2, page: 1, pagesize: 20, userid: auth.userid, token: auth.token },
       body: {
         userid: Number(auth.userid),
         token: auth.token,
@@ -1345,11 +1526,9 @@ async function handleKugouUserPlaylists(cookie) {
     return { provider: 'kugou', loggedIn: auth.loggedIn, playbackReady: false, playlists: [], error: 'KUGOU_AUTH_REQUIRED', message: '酷狗登录未完成，请重新网页登录' };
   }
   try {
-    const json = await kugouH5GatewayRequest('/v7/get_all_list', {
-      method: 'POST',
+    const json = await kugouCloudlistRequest('/v7/get_all_list', {
       cookie,
-      router: 'cloudlist.service.kugou.com',
-      params: { plat: 1 },
+      params: { total_ver: 979, type: 2, page: 1, pagesize: 50, userid: auth.userid, token: auth.token },
       body: {
         userid: Number(auth.userid),
         token: auth.token,
@@ -1398,11 +1577,8 @@ async function handleKugouPlaylistTracks(playlistId, cookie, opts = {}) {
   const cacheKey = String(listid) + ':' + String(auth.userid || '0');
   async function fetchPage(pageNo, baseOffset) {
     baseOffset = baseOffset || 0;
-    const json = await kugouH5GatewayRequest('/v4/get_list_all_file', {
-      method: 'POST',
+    const json = await kugouCloudlistRequest('/v4/get_list_all_file', {
       cookie,
-      router: 'cloudlist.service.kugou.com',
-      params: { plat: 1 },
       body: {
         listid: Number(listid) || listid,
         userid: Number(auth.userid),
@@ -1574,11 +1750,9 @@ async function resolveKugouFavoriteListId(cookie) {
   if (kugouFavoriteListCache.listId && kugouFavoriteListCache.userId === auth.userid && Date.now() - kugouFavoriteListCache.at < 300000) {
     return kugouFavoriteListCache.listId;
   }
-  const json = await kugouH5GatewayRequest('/v7/get_all_list', {
-    method: 'POST',
+  const json = await kugouCloudlistRequest('/v7/get_all_list', {
     cookie,
-    router: 'cloudlist.service.kugou.com',
-    params: { plat: 1 },
+    params: { total_ver: 979, type: 2, page: 1, pagesize: 50, userid: auth.userid, token: auth.token },
     body: {
       userid: Number(auth.userid),
       token: auth.token,
@@ -1674,10 +1848,9 @@ async function handleKugouAddSongToList(listId, song, cookie) {
     scene: 'false;null',
     data: [resource],
   };
-  const json = await kugouH5GatewayRequest('/v6/add_song', {
-    method: 'POST',
+  // 收藏/取消属于写操作：走 lite 客户端身份的 cloudlist 通道（H5/标准版身份会被 20017 拒绝）
+  const json = await kugouCloudlistRequest('/v6/add_song', {
     cookie,
-    router: 'cloudlist.service.kugou.com',
     params: {
       last_time: Math.floor(Date.now() / 1000),
       last_area: 'gztx',
@@ -1728,10 +1901,8 @@ async function handleKugouRemoveSongFromList(listId, song, cookie) {
     list_ver: 0,
     data: [{ fileid: Number(fileId) || fileId }],
   };
-  const json = await kugouH5GatewayRequest('/v4/delete_songs', {
-    method: 'POST',
+  const json = await kugouCloudlistRequest('/v4/delete_songs', {
     cookie,
-    router: 'cloudlist.service.kugou.com',
     body,
   });
   const hash = String((song && (song.hash || song.fileHash || song.id)) || '').trim().toLowerCase();
@@ -1945,6 +2116,9 @@ module.exports = {
   kugouCookieHasPlayback,
   kugouCookieUserId,
   extractKugouAuth,
+  kugouGatewayRequest,
+  kugouH5GatewayRequest,
+  ensureKugouDfid,
   buildKugouRequestCookie,
   kugouAudioReferer,
   mapKugouSearchItem,

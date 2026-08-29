@@ -98,7 +98,10 @@ function bindFxPanel() {
       if (pair[1] === 'lyricOffsetY') fx.lyricOffsetY = clampRange(fx.lyricOffsetY, -2.4, 2.7);
       if (pair[1] === 'lyricOffsetZ') fx.lyricOffsetZ = clampRange(fx.lyricOffsetZ, -3.2, 3.2);
       if (pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY') fx[pair[1]] = Math.round(clampRange(fx[pair[1]], -84, 84));
-      if (pair[1] === 'lyricCustomLines') fx.lyricCustomLines = Math.round(clampRange(fx.lyricCustomLines, 1, 10));
+      if (pair[1] === 'lyricCustomLines') {
+        fx.lyricCustomLines = Math.round(clampRange(fx.lyricCustomLines, 1, 10));
+        if (typeof scheduleLyricCustomLinesRebuild === 'function') scheduleLyricCustomLinesRebuild();
+      }
       if (pair[1] === 'lyricGlitchPower') fx.lyricGlitchPower = clampRange(fx.lyricGlitchPower, 0.14, 1.0);
       if (pair[1] === 'lyricGlitchRate') fx.lyricGlitchRate = clampRange(fx.lyricGlitchRate, 0.08, 0.54);
       if (/^classicLyric/.test(pair[1])) {
@@ -126,6 +129,24 @@ function bindFxPanel() {
       saveLyricLayout();
     });
   });
+  var lyricCustomLinesRebuildTimer = 0;
+  function scheduleLyricCustomLinesRebuild() {
+    if (lyricCustomLinesRebuildTimer) clearTimeout(lyricCustomLinesRebuildTimer);
+    lyricCustomLinesRebuildTimer = setTimeout(function () {
+      lyricCustomLinesRebuildTimer = 0;
+      try {
+        if (stageLyrics && stageLyrics.currentIdx >= 0 && lyricsLines && lyricsLines[stageLyrics.currentIdx] &&
+            typeof showStageLine === 'function' && typeof enrichLyricText === 'function') {
+          showStageLine(enrichLyricText(lyricsLines[stageLyrics.currentIdx].text || '', stageLyrics.currentIdx), false);
+        }
+      } catch (e) {}
+    }, 220);
+  }
+  var lyricCustomLinesSlider = document.getElementById('fx-lyriccustomlines');
+  if (lyricCustomLinesSlider) {
+    // 松手后按新行数重建歌词轨道（change 兜底；input 链路 debounce 已是主通道）
+    lyricCustomLinesSlider.addEventListener('change', function () { scheduleLyricCustomLinesRebuild(); });
+  }
   var lyricPicker = document.getElementById('lyric-color-picker');
   if (lyricPicker) {
     lyricPicker.addEventListener('input', function(){ setLyricColorCustom(lyricPicker.value, true); });

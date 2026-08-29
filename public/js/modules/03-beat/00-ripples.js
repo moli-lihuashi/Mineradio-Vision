@@ -41,9 +41,11 @@ function updateRipples(dt) {
     }
   }
 
+  var rippleAnyActive = false;
   for (var i = 0; i < RIPPLE_MAX; i++) {
     var r = ripples[i];
     if (r.str > 0.005) {
+      rippleAnyActive = true;
       r.age += dt;
       if (r.age > 2.0) { r.str = 0; r.age = -10; }
     }
@@ -53,7 +55,8 @@ function updateRipples(dt) {
     rippleData[off+2] = r.age;
     rippleData[off+3] = r.str;
   }
-  rippleTex.needsUpdate = true;
+  // 无活动涟漪时数据不再变化，跳过每帧纹理上传（首帧上传由 DataTexture 构造保证）
+  if (rippleAnyActive) rippleTex.needsUpdate = true;
 
   var active = 0;
   for (var i = 0; i < RIPPLE_MAX; i++) if (ripples[i].str > 0.005) active++;

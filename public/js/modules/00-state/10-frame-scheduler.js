@@ -1,6 +1,9 @@
 function createFrameGate(name, defaultFps) {
+  var gateName = String(name || 'frame-gate');
   return {
-    name: String(name || 'frame-gate'),
+    name: gateName,
+    skipKey: 'frameGate.' + gateName + '.skipped',
+    runKey: 'frameGate.' + gateName + '.runs',
     defaultFps: Math.max(0, Number(defaultFps) || 0),
     targetFps: Math.max(0, Number(defaultFps) || 0),
     lastRunAt: 0,
@@ -28,7 +31,7 @@ function consumeFrameGate(gate, now, dt, fps, force, reason) {
   if (gate.lastRunAt && now - gate.lastRunAt < minGap) {
     gate.skips += 1;
     if (window.__mineradioPerf && window.__mineradioPerf.count) {
-      window.__mineradioPerf.count('frameGate.' + gate.name + '.skipped');
+      window.__mineradioPerf.count(gate.skipKey || ('frameGate.' + gate.name + '.skipped'));
     }
     return 0;
   }
@@ -42,7 +45,7 @@ function runFrameGate(gate, now, fallbackDt) {
   gate.lastDt = Math.min(stepDt, 0.18);
   gate.runs += 1;
   if (window.__mineradioPerf && window.__mineradioPerf.count) {
-    window.__mineradioPerf.count('frameGate.' + gate.name + '.runs');
+    window.__mineradioPerf.count(gate.runKey || ('frameGate.' + gate.name + '.runs'));
   }
   return gate.lastDt;
 }

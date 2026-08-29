@@ -109,9 +109,11 @@ async function generateAiPlaylist() {
     });
     _aiPlaylistState.songs = (data && data.songs) || [];
     if (!_aiPlaylistState.songs.length) {
-      if (typeof showToast === 'function') showToast('AI 未返回有效歌单，请重试');
-    } else {
+      if (typeof showToast === 'function') showToast('未能生成推荐，请重试');
+    } else if (data && data.engine === 'llm') {
       if (typeof showToast === 'function') showToast('AI 推荐了 ' + _aiPlaylistState.songs.length + ' 首歌');
+    } else {
+      if (typeof showToast === 'function') showToast('本地智能推荐 ' + _aiPlaylistState.songs.length + ' 首歌（配置 LLM 可获得更强个性化）');
     }
   } catch (e) {
     if (typeof showToast === 'function') showToast('AI 歌单生成失败: ' + (e.message || e));
@@ -130,18 +132,14 @@ async function loadAiPlaylistConfig() {
     _aiPlaylistState.config = data;
     var statusEl = document.getElementById('ai-playlist-config-status');
     if (statusEl) {
-      statusEl.textContent = data.configured ? '已配置 ✓' : '未配置 API Key';
+      statusEl.textContent = data.configured ? 'LLM 增强已启用 ✓' : '本地智能推荐 · 无需配置';
       statusEl.className = 'ai-playlist-config-status' + (data.configured ? ' configured' : '');
     }
     var urlInput = document.getElementById('ai-playlist-baseurl');
     if (urlInput) urlInput.value = data.baseUrl || '';
     var modelInput = document.getElementById('ai-playlist-model');
     if (modelInput) modelInput.value = data.model || '';
-    // 如果未配置，自动展开配置区
-    if (!data.configured) {
-      var cfg = document.getElementById('ai-playlist-config-panel');
-      if (cfg) cfg.classList.add('open');
-    }
+    // LLM 是可选增强，未配置不再自动展开配置区（默认本地引擎即可用）
   } catch (_) {}
 }
 
@@ -197,5 +195,105 @@ function _fillAiPrompt(text) {
   if (input) {
     input.value = text;
     input.focus();
+  }
+}
+
+// ---- 全部加入队列：逐首搜索解析为真实曲目后入队 ----
+async function _resolveAiPlaylistSong(song) {
+  var query = (song.title + (song.artist ? ' ' + song.artist : '')).trim();
+  if (!query) return null;
+  var url = (typeof searchProviderUrl === 'function')
+    ? searchProviderUrl('netease', query, 3, 0)
+    : ('/api/search?keywords=' + encodeURIComponent(query) + '&limit=3');
+  var data = await apiJson(url, { timeoutMs: 8000 });
+  var list = data && (data.songs || data.result || []);
+  if (!Array.isArray(list) || !list.length) return null;
+  for (var i = 0; i < list.length; i++) {
+    if (typeof isSameTitleArtist === 'function' &&
+        isSameTitleArtist({ name: song.title, artist: song.artist }, list[i])) return list[i];
+  }
+  return list[0];
+}
+
+// ---- 逐首搜索解析：入队 / 存为歌单共用 ----
+async function _resolveAiPlaylistSongs(songs, onProgress) {
+  var resolved = [];
+  for (var i = 0; i < songs.length; i++) {
+    try {
+      var hit = await _resolveAiPlaylistSong(songs[i]);
+      if (hit) resolved.push(hit);
+    } catch (_) {}
+    if (onProgress) onProgress(i + 1, songs.length);
+  }
+  return resolved;
+}
+
+var _aiQueueAllBusy = false;
+async function queueAllAiPlaylistSongs() {
+  if (_aiQueueAllBusy) return;
+  var songs = (_aiPlaylistState.songs || []).slice();
+  if (!songs.length) {
+    if (typeof showToast === 'function') showToast('先生成 AI 歌单，再加入队列');
+    return;
+  }
+  _aiQueueAllBusy = true;
+  var btn = document.getElementById('ai-playlist-queue-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
+  try {
+    var resolved = await _resolveAiPlaylistSongs(songs, function (done, total) {
+      if (btn) btn.textContent = '加入队列 ' + done + '/' + total;
+    });
+    var added = 0;
+    if (typeof queueSong === 'function') {
+      resolved.forEach(function (s) { if (queueSong(s) >= 0) added++; });
+    }
+    if (typeof showToast === 'function') {
+      showToast('已加入 ' + added + ' 首到播放队列' + (songs.length > added ? '（' + (songs.length - added) + ' 首未匹配/重复）' : ''));
+    }
+  } finally {
+    _aiQueueAllBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '全部加入队列'; }
+  }
+}
+
+// ---- 存为本地歌单：解析为可播放曲目后落库，左侧「歌单」面板「本地歌单」分组查看 ----
+var _aiSaveBusy = false;
+async function saveAiPlaylistToLocal() {
+  if (_aiSaveBusy) return;
+  var songs = (_aiPlaylistState.songs || []).slice();
+  if (!songs.length) {
+    if (typeof showToast === 'function') showToast('先生成 AI 歌单，再保存');
+    return;
+  }
+  if (typeof createLocalPlaylist !== 'function') return;
+  var nameInput = document.getElementById('ai-playlist-save-name');
+  var name = (nameInput && nameInput.value || '').trim();
+  if (!name) {
+    var promptInput = document.getElementById('ai-playlist-prompt');
+    name = (promptInput && promptInput.value || '').trim().slice(0, 24) || 'AI 歌单';
+  }
+  _aiSaveBusy = true;
+  var btn = document.getElementById('ai-playlist-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
+  try {
+    var resolved = await _resolveAiPlaylistSongs(songs, function (done, total) {
+      if (btn) btn.textContent = '解析 ' + done + '/' + total;
+    });
+    if (!resolved.length) {
+      if (typeof showToast === 'function') showToast('没有匹配到可播放的歌曲，保存取消');
+      return;
+    }
+    var pl = createLocalPlaylist(name, resolved);
+    if (!pl) return;
+    if (nameInput) nameInput.value = '';
+    if (typeof renderUserPlaylistsList === 'function' && document.getElementById('pl-list')) {
+      try { renderUserPlaylistsList({ reset: true }); } catch (_) {}
+    }
+    if (typeof showToast === 'function') {
+      showToast('已保存本地歌单「' + pl.name + '」· ' + resolved.length + ' 首（左侧歌单面板查看）');
+    }
+  } finally {
+    _aiSaveBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '存为歌单'; }
   }
 }

@@ -118,13 +118,14 @@ var PLAYBACK_RESUME_LONG_PAUSE_PROVIDER_MS = {
 };
 // AudioWorklet：从 PCM 自算 FFT（真离主线程）；失败自动回退主线程路径
 var ENABLE_AUDIO_WORKLET_ANALYSIS = true;
-// row-layers：3.2.11 Step D 默开；一次性 force_3210 清 force_326 的 '0'；?lyricRows=0 / localStorage=0 / eco 可退
+// row-layers：3.2.11 Step D 默开；一次性 force_3211 清掉历史 fail-open 写死的 '0'（现 fail-open 只锁会话不再持久化）；?lyricRows=0 / localStorage=0 / eco 可退
 var ENABLE_LYRIC_ROW_LAYERS = (function () {
   try {
     if (typeof localStorage !== 'undefined') {
-      if (localStorage.getItem('mineradio_lyric_row_layers_force_3210') !== '1') {
+      if (localStorage.getItem('mineradio_lyric_row_layers_force_3211') !== '1') {
         localStorage.setItem('mineradio_lyric_row_layers', '1');
-        localStorage.setItem('mineradio_lyric_row_layers_force_3210', '1');
+        localStorage.setItem('mineradio_lyric_row_layers_force_3211', '1');
+        localStorage.removeItem('mineradio_lyric_row_layers_force_3210');
         localStorage.removeItem('mineradio_lyric_row_layers_force_326');
         localStorage.removeItem('mineradio_lyric_row_layers_force_325');
         localStorage.removeItem('mineradio_lyric_row_layers_force_322');

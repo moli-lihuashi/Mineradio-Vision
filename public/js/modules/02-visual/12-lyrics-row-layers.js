@@ -1065,6 +1065,10 @@ function beginLyricQualitySelectionFrame(deferFinalize) {
   }
 }
 
+// 行层每帧候选收集的复用数组（消费方全部同步，见 registerLyricQualityCandidates）
+var _lyricRevealScratch = [];
+var _lyricQualityScratch = [];
+
 function registerLyricQualityCandidates(data, candidates, tier, rootPriority, buildDeferred) {
   if (!lyricQualityOwnerActive(data) || !Array.isArray(candidates) || !candidates.length || tier <= 1) return;
   rootPriority = Number(rootPriority) || 0;
@@ -1381,10 +1385,11 @@ function updateLyricRowLayers(data, opts) {
   var backdropAdapt = lyricSonicBackdropAdaptActive() ? lyricBackgroundAdaptStrengthValue() : 0;
   var readabilityBackdropColor = backdropAdapt > 0.001 ? lyricReadabilityColorForBrightBackdrop(backdropAdapt) : null;
   var activeRow = null;
-  var renderRevealCandidates = [];
+  // 每帧复用的候选数组（本函数内同步消费，registerLyricQualityCandidates 只复制不持有引用）
+  var renderRevealCandidates = _lyricRevealScratch; renderRevealCandidates.length = 0;
   var lyricQualityTier = lyricTextureClarityScale();
   var qualityBuildDeferred = typeof isProgressDragPreviewActive === 'function' && isProgressDragPreviewActive();
-  var lyricQualityCandidates = [];
+  var lyricQualityCandidates = _lyricQualityScratch; lyricQualityCandidates.length = 0;
   var revealOffsets = lyricDisplayOffsetsForMode(displayMode);
   var revealPrewarmMinOffset = 0;
   var revealPrewarmMaxOffset = 0;

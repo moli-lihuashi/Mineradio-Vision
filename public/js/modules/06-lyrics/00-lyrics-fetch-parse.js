@@ -203,7 +203,7 @@ function mergeNeteaseFallbackTranslationsIntoCurrent(song, token, payload, cache
   applyPreferredLyricsForCurrent(true);
   return true;
 }
-async function fetchNeteaseLyricTranslationFallback(song, token, cacheKey) {
+async function fetchNeteaseLyricTranslationFallbackCore(song, token, cacheKey) {
   if (!song || token !== trackSwitchToken) return false;
   var cached = lyricTranslationFallbackCache[cacheKey];
   if (cached) return mergeNeteaseFallbackTranslationsIntoCurrent(song, token, cached, cacheKey);
@@ -230,6 +230,16 @@ async function fetchNeteaseLyricTranslationFallback(song, token, cacheKey) {
     console.warn('[LyricTranslationFallback]', err);
     return false;
   }
+}
+// 网易回落失败时，继续走 AI 补译文（默认关：AI_LYRIC_TRANSLATE_STORE_KEY）
+async function fetchNeteaseLyricTranslationFallback(song, token, cacheKey) {
+  var ok = false;
+  try {
+    ok = await fetchNeteaseLyricTranslationFallbackCore(song, token, cacheKey);
+  } finally {
+    if (!ok && token === trackSwitchToken) scheduleAiLyricTranslationFallback(song, token);
+  }
+  return ok;
 }
 function scheduleNeteaseLyricTranslationFallback(song, token, state) {
   if (!shouldFetchNeteaseLyricTranslationFallback(song, state)) return;
@@ -678,3 +688,142 @@ function stageNextLyricText(text) {
   showStageNextLine(text);
 }
 function updateLyricsHighlight() { /* v8: 由 tickLyricsParticles 接管 */ }
+
+// ============================================================
+//  AI 补译文：网易回落失败后，用已配置的 LLM 逐行翻译（默认关）
+//  - 开关：localStorage mineradio-ai-translate-v1 === '1'（FX 面板「AI 补译文」）
+//  - 服务端：POST /api/ai/translate（行数校验 + LRU 缓存）
+//  - 回填：复用网易回落的 attachLyricTranslations + applyPreferredLyricsForCurrent 链路
+// ============================================================
+var AI_LYRIC_TRANSLATE_STORE_KEY = 'mineradio-ai-translate-v1';
+var aiLyricTranslationCache = {};
+var aiLyricTranslateInflight = {};
+var aiLyricTranslateConfigState = { checkedAt: 0, configured: false };
+
+function aiLyricTranslateEnabled() {
+  try { return localStorage.getItem(AI_LYRIC_TRANSLATE_STORE_KEY) === '1'; } catch (_) { return false; }
+}
+
+function updateAiLyricTranslateToggle() {
+  var el = document.getElementById('t-aiLyricTranslate');
+  if (el) el.classList.toggle('on', aiLyricTranslateEnabled());
+}
+
+function toggleAiLyricTranslate() {
+  var next = !aiLyricTranslateEnabled();
+  try { localStorage.setItem(AI_LYRIC_TRANSLATE_STORE_KEY, next ? '1' : '0'); } catch (_) {}
+  updateAiLyricTranslateToggle();
+  if (typeof showToast === 'function') {
+    showToast(next ? 'AI 补译文：已开启（歌词缺译文时自动翻译）' : 'AI 补译文：已关闭');
+  }
+  if (next) {
+    var song = (typeof currentLyricSong === 'function') ? currentLyricSong() : null;
+    if (song) scheduleAiLyricTranslationFallback(song, trackSwitchToken);
+  }
+}
+
+function lyricLineMostlyCjk(text) {
+  var s = String(text || '');
+  if (!s) return false;
+  var cjk = (s.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+  var letters = (s.match(/[A-Za-z]/g) || []).length;
+  return cjk >= Math.max(2, letters);
+}
+
+async function aiLyricTranslateConfigured() {
+  var now = Date.now();
+  if (now - aiLyricTranslateConfigState.checkedAt < 300000) return aiLyricTranslateConfigState.configured;
+  try {
+    var data = await apiJson('/api/ai/config', { method: 'GET', timeoutMs: 6000 });
+    aiLyricTranslateConfigState.configured = !!(data && data.configured);
+  } catch (_) {
+    aiLyricTranslateConfigState.configured = false;
+  }
+  aiLyricTranslateConfigState.checkedAt = now;
+  return aiLyricTranslateConfigState.configured;
+}
+
+function buildAiTranslateSourceLines(lines) {
+  var out = [];
+  (lines || []).forEach(function (line) {
+    if (!line || line.fallback) return;
+    var text = normalizeLyricLineText(line.text);
+    if (!text || text.length > 200 || (typeof isLyricCreditLineText === 'function' && isLyricCreditLineText(text))) return;
+    out.push({ t: Number(line.t) || 0, text: text });
+  });
+  return out.slice(0, 100);
+}
+
+function mergeAiLyricTranslation(token, cacheKey, payload) {
+  if (!payload || !payload.lines || !payload.lines.length) return false;
+  if (token !== trackSwitchToken) return false;
+  var currentSong = (typeof currentLyricSong === 'function') ? currentLyricSong() : null;
+  if (lyricTranslationFallbackKey(currentSong) !== cacheKey) return false;
+  if (originalLyricsState && originalLyricsState.translationLines && originalLyricsState.translationLines.length) return false;
+  var mergedLines = attachLyricTranslations(originalLyricsState.lines || [], payload.lines);
+  var attached = mergedLines.some(function (line) { return line && line.translation; });
+  if (!attached) return false;
+  setOriginalLyricsState(
+    mergedLines,
+    originalLyricsState.hasNativeKaraoke,
+    originalLyricsState.timingSource,
+    payload.lines,
+    'ai-translate'
+  );
+  applyPreferredLyricsForCurrent(true);
+  return true;
+}
+
+async function fetchAiLyricTranslation(song, token, cacheKey) {
+  if (!song || token !== trackSwitchToken || !aiLyricTranslateEnabled()) return false;
+  if (aiLyricTranslationCache[cacheKey]) return mergeAiLyricTranslation(token, cacheKey, aiLyricTranslationCache[cacheKey]);
+  if (aiLyricTranslateInflight[cacheKey]) return false;
+  var state = originalLyricsState;
+  if (!state || !state.lines || !state.lines.length) return false;
+  if (state.translationLines && state.translationLines.length) return false;
+  var srcLines = buildAiTranslateSourceLines(state.lines);
+  if (srcLines.length < 4) return false;
+  // 已经主要是中文的歌词不需要翻译
+  var cjkCount = 0;
+  srcLines.forEach(function (l) { if (lyricLineMostlyCjk(l.text)) cjkCount++; });
+  if (cjkCount > srcLines.length * 0.6) return false;
+  if (!(await aiLyricTranslateConfigured())) return false;
+  aiLyricTranslateInflight[cacheKey] = true;
+  try {
+    var data = await apiJson('/api/ai/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: srcLines, lang: 'zh' }),
+      timeoutMs: 45000,
+    });
+    if (token !== trackSwitchToken) return false;
+    var translations = data && data.translations;
+    if (!Array.isArray(translations) || translations.length !== srcLines.length) return false;
+    var payloadLines = [];
+    for (var i = 0; i < srcLines.length; i++) {
+      var text = normalizeLyricTranslationText(translations[i]);
+      if (!text || text === srcLines[i].text) continue;
+      payloadLines.push({ t: srcLines[i].t, text: text, source: 'ai' });
+    }
+    if (payloadLines.length < 4) return false;
+    var payload = { lines: payloadLines };
+    aiLyricTranslationCache[cacheKey] = payload;
+    return mergeAiLyricTranslation(token, cacheKey, payload);
+  } catch (_) {
+    return false;
+  } finally {
+    delete aiLyricTranslateInflight[cacheKey];
+  }
+}
+
+function scheduleAiLyricTranslationFallback(song, token) {
+  if (!song || token !== trackSwitchToken) return;
+  if (!aiLyricTranslateEnabled()) return;
+  var cacheKey = lyricTranslationFallbackKey(song);
+  setTimeout(function () {
+    if (token !== trackSwitchToken) return;
+    var start = function () { fetchAiLyricTranslation(song, token, cacheKey); };
+    if (window.requestIdleCallback) requestIdleCallback(start, { timeout: 2500 });
+    else start();
+  }, 1500);
+}

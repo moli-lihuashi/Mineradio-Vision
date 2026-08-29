@@ -805,8 +805,13 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
     },
     raycastCards: function(raycaster) {
       if (!group || !group.visible || !cards.length) return null;
-      var visibleMeshes = cards.filter(function(c){ return c.mesh.visible; }).map(function(c){ return c.mesh; });
-      var hits = raycaster.intersectObjects(visibleMeshes, false);
+      // 复用可见网格数组，避免每次 filter+map 分配两个临时数组
+      var scratch = this._raycastMeshScratch || (this._raycastMeshScratch = []);
+      scratch.length = 0;
+      for (var i = 0; i < cards.length; i++) {
+        if (cards[i].mesh.visible) scratch.push(cards[i].mesh);
+      }
+      var hits = raycaster.intersectObjects(scratch, false);
       if (!hits.length) return null;
       var card = cards.find(function(c){ return c.mesh === hits[0].object; });
       return { card: card, point: hits[0].point, uv: hits[0].uv };

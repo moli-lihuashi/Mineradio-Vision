@@ -234,7 +234,46 @@ async function submitSpotifyConfigLogin() {
   }
   if (shouldOpenOAuth) await openSpotifyWebLogin();
 }
+/* ===== 登录页平台布景：背景渐变层 + 中心光晕 + 头部文案（参考稿风格） ===== */
+var loginSceneryMeta = {
+  netease: { title: '网易云音乐 · 听见好时光', sub: '海量曲库，个性化推荐，与百万乐迷一起发现音乐。', glow: 'radial-gradient(circle,rgba(230,90,105,.12) 0%,transparent 70%)' },
+  qq: { title: 'QQ音乐 · 让生活充满音乐', sub: '千万级正版曲库，无损音质，陪你度过每个日常。', glow: 'radial-gradient(circle,rgba(191,214,107,.13) 0%,transparent 70%)' },
+  kugou: { title: '酷狗音乐 · 就是歌多', sub: '超全曲库，听歌识曲，直播互动，音乐不止于听。', glow: 'radial-gradient(circle,rgba(68,199,255,.13) 0%,transparent 70%)' },
+  qishui: { title: '汽水音乐 · 新鲜好歌', sub: '短视频热歌、新歌首发，让音乐像汽水一样清爽。', glow: 'radial-gradient(circle,rgba(29,185,84,.12) 0%,transparent 70%)' },
+  spotify: { title: 'Spotify · 全球音乐流媒体', sub: '数亿曲库，智能推荐，与世界同步聆听。', glow: 'radial-gradient(circle,rgba(29,185,84,.13) 0%,transparent 70%)' }
+};
+function syncLoginPlatformScenery(provider, withCopy) {
+  var meta = loginSceneryMeta[provider] || loginSceneryMeta.netease;
+  document.querySelectorAll('#login-modal .login-bg-layer').forEach(function (layer) {
+    layer.classList.toggle('active', layer.getAttribute('data-login-bg') === provider);
+  });
+  var glow = document.getElementById('login-glow');
+  if (glow) glow.style.background = meta.glow;
+  if (!withCopy) return;
+  var title = document.getElementById('login-intro-title');
+  var body = document.getElementById('login-intro-body');
+  if (!title || !body) return;
+  if (title.textContent === meta.title) return;
+  // 文案淡出 → 换字 → 淡入（参考稿 80ms 节奏）
+  title.style.opacity = '0';
+  body.style.opacity = '0';
+  title.style.transform = 'translateY(4px)';
+  body.style.transform = 'translateY(4px)';
+  setTimeout(function () {
+    title.textContent = meta.title;
+    body.textContent = meta.sub;
+    title.style.opacity = '1';
+    body.style.opacity = '1';
+    title.style.transform = 'translateY(0)';
+    body.style.transform = 'translateY(0)';
+  }, 80);
+  if (!title.style.transition) {
+    title.style.transition = 'opacity .4s ease,transform .4s ease';
+    body.style.transition = 'opacity .4s ease,transform .4s ease';
+  }
+}
 function updateLoginProviderUi() {
+  syncLoginPlatformScenery(loginProvider, false);
   var meta = platformMeta(loginProvider);
   var isQQ = loginProvider === 'qq';
   var isKugou = loginProvider === 'kugou';

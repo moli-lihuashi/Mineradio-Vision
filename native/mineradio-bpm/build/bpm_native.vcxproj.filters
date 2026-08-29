@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="..">
+      <UniqueIdentifier>{13ED4249-1F9C-5F0F-2651-29A73F3A7059}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="..\src">
+      <UniqueIdentifier>{F1003AD6-4B6D-45DF-3F56-5CAC869BF55E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:">
+      <UniqueIdentifier>{97E1A3A8-7FAC-1DB5-E5B7-486D2EFD27A1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:\Mineradio">
+      <UniqueIdentifier>{28467F81-66A8-939F-CF32-92B86E374972}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:\Mineradio\Mineradio-Kugou-Modified-main">
+      <UniqueIdentifier>{25CB17D9-0AF8-ABD8-10AF-2227086F6AA3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:\Mineradio\Mineradio-Kugou-Modified-main\node_modules">
+      <UniqueIdentifier>{126A39EA-1D28-5689-C126-0DA0AB5837A0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:\Mineradio\Mineradio-Kugou-Modified-main\node_modules\node-gyp">
+      <UniqueIdentifier>{49558BB4-6D34-CA91-A65D-85A65792DC11}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="E:\Mineradio\Mineradio-Kugou-Modified-main\node_modules\node-gyp\src">
+      <UniqueIdentifier>{F1003AD6-4B6D-45DF-3F56-5CAC869BF55E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="..">
+      <UniqueIdentifier>{13ED4249-1F9C-5F0F-2651-29A73F3A7059}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\bpm_native.cpp">
+      <Filter>..\src</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\Mineradio\Mineradio-Kugou-Modified-main\node_modules\node-gyp\src\win_delay_load_hook.cc">
+      <Filter>E:\Mineradio\Mineradio-Kugou-Modified-main\node_modules\node-gyp\src</Filter>
+    </ClCompile>
+    <None Include="..\binding.gyp">
+      <Filter>..</Filter>
+    </None>
+  </ItemGroup>
+</Project>

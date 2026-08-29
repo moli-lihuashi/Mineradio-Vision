@@ -18,6 +18,12 @@ win-unpacked/
 # User data and private state
 .cookie
 .qq-cookie
+.kugou-cookie
+.qishui-cookie
+.qishui-token
+.spotify-token.json
+.spotify-credentials.json
+.spotify-credentials
 updates/
 backups/
 *.log
@@ -25,6 +31,12 @@ backups/
 *.cache
 .env
 .env.*
+
+# Root-level debug/scratch scripts and screenshots (never commit)
+/_*.js
+/_*.bat
+/_*.png
+/_debug-archive/
 
 # Local development noise
 .DS_Store

@@ -377,6 +377,8 @@ function updateFxInputs() {
   if (liveBackgroundKeepToggle) liveBackgroundKeepToggle.classList.toggle('on', fx.liveBackgroundKeep === true);
   updatePerformanceControls();
   updateMemoryControls();
+  if (typeof updateWasapiOutputControls === 'function') updateWasapiOutputControls();
+  if (typeof updateAiLyricTranslateToggle === 'function') updateAiLyricTranslateToggle();
   updateDevelopmentFxControls();
   var aiDepthToggle = document.getElementById('t-aidepth');
   if (aiDepthToggle) aiDepthToggle.classList.toggle('on', fx.aiDepth);

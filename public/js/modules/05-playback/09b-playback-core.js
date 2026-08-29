@@ -242,7 +242,7 @@ async function playQueueAt(idx, opts) {
         executeSleepTimerStop();
         return;
       }
-      if (playMode === 'single') setTimeout(function(){ playQueueAt(currentIdx, { autoRepeat: true }); }, 0);
+      if (playMode === 'single') setTimeout(function(){ playQueueAt(currentIdx, { autoRepeat: true, preserveHomeState: true }); }, 0);
       else setTimeout(nextTrack, 0);
     };
     scheduleAudioResumePosition(audio, opts.resumeAt, token);
@@ -553,14 +553,14 @@ function nextTrack() {
   forcePlaybackControlsInteractive();
   if (playMode === 'shuffle') currentIdx = Math.floor(Math.random() * playQueue.length);
   else currentIdx = (currentIdx + 1) % playQueue.length;
-  Promise.resolve(playQueueAt(currentIdx, { context: scenePlaybackContextForTrackSwitch() })).finally(forcePlaybackControlsInteractive);
+  Promise.resolve(playQueueAt(currentIdx, { context: scenePlaybackContextForTrackSwitch(), preserveHomeState: true })).finally(forcePlaybackControlsInteractive);
 }
 function prevTrack() {
   if (!playQueue.length) return;
   playToggleBusy = false;
   forcePlaybackControlsInteractive();
   currentIdx = (currentIdx - 1 + playQueue.length) % playQueue.length;
-  Promise.resolve(playQueueAt(currentIdx, { context: scenePlaybackContextForTrackSwitch() })).finally(forcePlaybackControlsInteractive);
+  Promise.resolve(playQueueAt(currentIdx, { context: scenePlaybackContextForTrackSwitch(), preserveHomeState: true })).finally(forcePlaybackControlsInteractive);
 }
 function shuffleQueue() {
   for (var i = playQueue.length - 1; i > 0; i--) {

@@ -56,9 +56,10 @@ function updateCamera() {
     targetRadius = orbit.focus.radius;
     tLookAt = orbit.focus.lookAt;
   } else if (orbit.centerLocked) {
-    targetTheta = orbit.baselineTheta + orbit.cineTheta;
-    targetPhi = Math.max(orbit.minPhi, Math.min(orbit.maxPhi, orbit.baselinePhi + orbit.cinePhi));
-    targetRadius = Math.max(orbit.minRadius, Math.min(orbit.maxRadius, orbit.baselineRadius + orbit.cineRadius));
+    // centerLocked（涟漪/回正）仍叠加用户拖拽偏移：锁定基线但不禁拖，双击回正后可继续拖
+    targetTheta = orbit.baselineTheta + orbit.userTheta + orbit.cineTheta;
+    targetPhi = Math.max(orbit.minPhi, Math.min(orbit.maxPhi, orbit.baselinePhi + orbit.userPhi + orbit.cinePhi));
+    targetRadius = Math.max(orbit.minRadius, Math.min(orbit.maxRadius, orbit.baselineRadius + orbit.userRadius + orbit.cineRadius));
     tLookAt = ZERO_VEC;
   } else {
     targetTheta = orbit.userTheta + orbit.cineTheta;

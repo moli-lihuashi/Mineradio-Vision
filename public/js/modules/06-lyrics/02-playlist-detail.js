@@ -5,9 +5,14 @@
 async function refreshUserPlaylists(force) {
   if (!loginStatus.loggedIn && !qqLoginStatus.loggedIn && !kugouLoginStatus.loggedIn && !qishuiLoginStatus.loggedIn && !spotifyLoginStatus.loggedIn) {
     resetPlaylistPanelRenderLimit();
-    document.getElementById('pl-list').innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">登录后显示个人歌单</div>';
     var podcastListLoggedOut = document.getElementById('podcast-list');
     if (podcastListLoggedOut) podcastListLoggedOut.innerHTML = '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">登录后显示我的播客</div>';
+    // 未登录也展示本地歌单（AI 歌单保存 / 后续本地收藏的落点）
+    if (typeof listLocalPlaylists === 'function' && listLocalPlaylists().length) {
+      renderUserPlaylistsList({ reset: true });
+      return;
+    }
+    document.getElementById('pl-list').innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">登录后显示个人歌单</div>';
     return;
   }
   if (force) resetPlaylistPanelRenderLimit();
@@ -140,10 +145,13 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
   var collectionButton = canUncollect
     ? '<button class="fx-mini-btn ghost pl-detail-collection-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
     : '';
+  var localDeleteButton = provider === 'local'
+    ? '<button class="fx-mini-btn ghost" type="button" data-pl-detail-delete="' + escAttr(key) + '">删除歌单</button>'
+    : '';
   return '<div class="pl-inline-detail" data-pl-detail="' + escAttr(key) + '">' +
     '<div class="pl-detail-sticky">' +
       '<div class="pl-detail-head">' + img + '<div style="flex:1;min-width:0"><div class="pl-detail-title">' + escHtml(pl.name || '歌单详情') + '</div><div class="pl-detail-sub">' + escHtml((pl.trackCount || tracks.length || 0) + ' 首 · ' + (pl.creator || creatorFallback)) + '</div></div><div class="pl-detail-count">' + (loading ? '载入中' : (renderLimit + '/' + tracks.length)) + '</div></div>' +
-      '<div class="pl-detail-actions"><button class="pl-detail-play" type="button" data-pl-detail-play="' + escAttr(key) + '"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>播放歌单</button>' + collectionButton + '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-top="1">回到顶部</button></div>' +
+      '<div class="pl-detail-actions"><button class="pl-detail-play" type="button" data-pl-detail-play="' + escAttr(key) + '"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>播放歌单</button>' + collectionButton + localDeleteButton + '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-top="1">回到顶部</button></div>' +
     '</div>' +
     '<div class="pl-detail-list" data-pl-detail-scroll="' + escAttr(key) + '">' + rows + '</div>' +
   '</div>';
@@ -206,6 +214,24 @@ async function openPlaylistPanelDetail(provider, pid, title) {
     renderPlaylistPanelDetailState();
     return;
   }
+  // 本地歌单：曲目就在存储里，直接展开，不走平台详情接口
+  if (provider === 'local') {
+    var localPl = (typeof getLocalPlaylistById === 'function') ? getLocalPlaylistById(pid) : null;
+    if (!localPl) { showToast('本地歌单不存在或已被删除'); return; }
+    var localToken = ++playlistPanelDetailState.token;
+    playlistPanelDetailState = {
+      key: key,
+      loading: false,
+      playlist: { provider: 'local', id: localPl.id, name: localPl.name, cover: localPl.cover, trackCount: localPl.songs.length, creator: '本地歌单' },
+      tracks: localPl.songs.map(cloneSong),
+      token: localToken,
+      renderLimit: Math.min(localPl.songs.length, PLAYLIST_DETAIL_INITIAL_RENDER),
+      scrollTop: 0,
+    };
+    renderPlaylistPanelDetailState();
+    scrollPlaylistPanelDetailIntoView(key);
+    return;
+  }
   var token = ++playlistPanelDetailState.token;
   playlistPanelDetailState = { key: key, loading: true, playlist: pl, tracks: [], token: token, renderLimit: PLAYLIST_DETAIL_INITIAL_RENDER, scrollTop: 0 };
   renderPlaylistPanelDetailState();
@@ -232,6 +258,18 @@ function playPlaylistPanelDetail() {
   if (!st || !st.key) return;
   var parts = st.key.split(':');
   var provider = normalizePlaylistProvider(parts[0]);
+  if (provider === 'local') {
+    var tracks = (st.tracks || []).map(cloneSong);
+    if (!tracks.length) { showToast('歌单暂无可播放歌曲'); return; }
+    playQueue = tracks;
+    currentIdx = 0;
+    safeRenderQueuePanel('local-playlist-play');
+    safeSwitchPlaylistTab('queue', 'local-playlist-play');
+    safeShelfRebuild('local-playlist-play', true);
+    forcePlaybackControlsInteractive();
+    playQueueAt(0).catch(function(e){ console.warn('[LocalPlaylistPlay]', e); });
+    return;
+  }
   var pid = parts.slice(1).join(':');
   loadPlaylistIntoQueueById(playlistPanelProviderId(provider, pid), true, st.playlist && st.playlist.name || '');
 }
@@ -326,7 +364,8 @@ function renderUserPlaylistsList(opts) {
   opts = opts || {};
   var $pl = document.getElementById('pl-list');
   var seq = ++playlistRenderSeq;
-  if (!userPlaylists.length) {
+  var localItems = (typeof localPlaylistPanelItems === 'function') ? localPlaylistPanelItems() : [];
+  if (!userPlaylists.length && !localItems.length) {
     $pl.innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
     return;
   }
@@ -346,6 +385,7 @@ function renderUserPlaylistsList(opts) {
     '</div>' + playlistPanelDetailHtml(pl, provider, detailWindow);
   }
   var groups = [
+    { key:'local', label:'本地歌单', items:localItems },
     { key:'netease', label:'Netease Playlists', items:userPlaylists.filter(function(pl){ return pl.provider !== 'qq' && pl.provider !== 'kugou' && pl.provider !== 'qishui' && pl.provider !== 'spotify'; }) },
     { key:'qq', label:'QQ Music Playlists', items:userPlaylists.filter(function(pl){ return pl.provider === 'qq'; }) },
     { key:'kugou', label:'Kugou Playlists', items:userPlaylists.filter(function(pl){ return pl.provider === 'kugou'; }) },
@@ -444,6 +484,16 @@ document.getElementById('pl-list').addEventListener('click', function(e){
     e.preventDefault();
     e.stopPropagation();
     playPlaylistPanelDetailTrack(Number(row.getAttribute('data-pl-detail-row')));
+    return;
+  }
+  var deleteLocalBtn = e.target && e.target.closest ? e.target.closest('[data-pl-detail-delete]') : null;
+  if (deleteLocalBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    handleLocalPlaylistDetailDelete(
+      String(deleteLocalBtn.getAttribute('data-pl-detail-delete') || '').replace(/^local:/, ''),
+      deleteLocalBtn
+    );
     return;
   }
   var card = e.target && e.target.closest ? e.target.closest('.pl-card') : null;

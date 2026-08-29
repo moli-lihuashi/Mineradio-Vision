@@ -305,6 +305,10 @@
 
   function drawHomeRain2d() {
     if (!homeRainState || !homeRainState.running) return;
+    if (document.hidden) { // 后台/最小化：挂起绘制，恢复后原地继续
+      homeRainState.animId = requestAnimationFrame(drawHomeRain2d);
+      return;
+    }
     var target = homeRainState.canvas || canvasEl;
     if (!target) return;
     var w = homeRainState.width;
@@ -412,6 +416,10 @@
 
   function drawHomeSnow2d() {
     if (!homeSnowState || !homeSnowState.running || !canvasEl) return;
+    if (document.hidden) { // 后台/最小化：挂起绘制
+      homeSnowState.animId = requestAnimationFrame(drawHomeSnow2d);
+      return;
+    }
     var ctx = canvasEl.getContext('2d');
     if (!ctx) return;
     var w = homeSnowState.width;
@@ -490,6 +498,10 @@
 
   function drawHomeFog2d() {
     if (!homeFogState || !homeFogState.running || !canvasEl) return;
+    if (document.hidden) { // 后台/最小化：挂起绘制
+      homeFogState.animId = requestAnimationFrame(drawHomeFog2d);
+      return;
+    }
     var ctx = canvasEl.getContext('2d');
     if (!ctx) return;
     var w = homeFogState.width;
@@ -577,6 +589,10 @@
 
   function drawHomeStorm2d() {
     if (!homeStormState || !homeStormState.running) return;
+    if (document.hidden) { // 后台/最小化：挂起绘制
+      homeStormState.animId = requestAnimationFrame(drawHomeStorm2d);
+      return;
+    }
     var target = homeStormState.canvas || canvasEl;
     if (!target) return;
     var w = homeStormState.width;
@@ -874,49 +890,68 @@
     ctx.fillRect(0, 0, width, height);
   }
 
+  // 云团光斑预渲染：启动时烘焙 3 张软光斑贴图，每帧只做 drawImage，
+  // 替代每团每帧 3 个 createRadialGradient + ctx.filter=blur()（Chromium 软件高斯路径）
+  var atmoBlobSprites = null;
+  function ensureAtmoBlobSprites() {
+    if (atmoBlobSprites) return atmoBlobSprites;
+    function makeSprite(size, cx, cy, radius, stops, blurPx) {
+      var c = document.createElement('canvas');
+      c.width = c.height = size;
+      var g = c.getContext('2d');
+      if (blurPx) g.filter = 'blur(' + blurPx + 'px)';
+      var grad = g.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      stops.forEach(function (s) { grad.addColorStop(s[0], s[1]); });
+      g.fillStyle = grad;
+      g.fillRect(0, 0, size, size);
+      return c;
+    }
+    atmoBlobSprites = {
+      shadow: makeSprite(160, 80, 80, 80, [
+        [0, 'rgba(118,132,154,1)'], [0.55, 'rgba(96,108,128,0.47)'], [1, 'rgba(72,82,98,0)']
+      ], 6),
+      body: makeSprite(160, 80, 80, 80, [
+        [0, 'rgba(248,250,255,1)'], [0.28, 'rgba(228,234,244,0.65)'],
+        [0.62, 'rgba(196,206,222,0.27)'], [1, 'rgba(160,172,190,0)']
+      ], 4),
+      // 高光保持离心的偏移感：渐变中心烤在贴图内偏左上
+      highlight: makeSprite(96, 36, 34, 50, [
+        [0, 'rgba(255,255,255,1)'], [0.45, 'rgba(240,246,255,0.29)'], [1, 'rgba(255,255,255,0)']
+      ], 0)
+    };
+    return atmoBlobSprites;
+  }
+
   function drawVolumetricBlob(ctx, blob, time) {
+    var sprites = ensureAtmoBlobSprites();
     var x = blob.x + Math.sin(time * blob.wobble + blob.phase) * blob.wobbleAmp;
     var y = blob.y + Math.sin(time * blob.wobble * 0.7 + blob.phase * 1.4) * 2.5;
     var r = blob.radius * (0.92 + blob.depth * 0.12);
     var alpha = blob.opacity * (0.88 + blob.depth * 0.42);
 
-    ctx.save();
-    ctx.filter = 'blur(' + Math.round(r * 0.18) + 'px)';
+    // 阴影层（原：中心偏移 (r*0.12, r*0.16)，半径 r*1.15）
+    var sr = r * 1.15;
+    ctx.globalAlpha = Math.min(1, alpha * 0.34);
+    ctx.drawImage(sprites.shadow, x + r * 0.12 - sr, y + r * 0.16 - sr, sr * 2, sr * 2);
 
-    var shadow = ctx.createRadialGradient(x + r * 0.12, y + r * 0.16, 0, x, y, r * 1.15);
-    shadow.addColorStop(0, 'rgba(118, 132, 154, ' + (alpha * 0.34) + ')');
-    shadow.addColorStop(0.55, 'rgba(96, 108, 128, ' + (alpha * 0.16) + ')');
-    shadow.addColorStop(1, 'rgba(72, 82, 98, 0)');
-    ctx.fillStyle = shadow;
-    ctx.beginPath();
-    ctx.arc(x, y, r * 1.15, 0, Math.PI * 2);
-    ctx.fill();
+    // 主体层（原：中心偏移 (-r*0.18, -r*0.12)，半径 r*0.92）
+    var br = r * 0.92;
+    ctx.globalAlpha = Math.min(1, alpha * 0.52);
+    ctx.drawImage(sprites.body, x - r * 0.18 - br, y - r * 0.12 - br, br * 2, br * 2);
 
-    ctx.filter = 'blur(' + Math.round(r * 0.11) + 'px)';
-    var body = ctx.createRadialGradient(x - r * 0.18, y - r * 0.12, r * 0.08, x, y, r * 0.92);
-    body.addColorStop(0, 'rgba(248, 250, 255, ' + (alpha * 0.52) + ')');
-    body.addColorStop(0.28, 'rgba(228, 234, 244, ' + (alpha * 0.34) + ')');
-    body.addColorStop(0.62, 'rgba(196, 206, 222, ' + (alpha * 0.14) + ')');
-    body.addColorStop(1, 'rgba(160, 172, 190, 0)');
-    ctx.fillStyle = body;
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.92, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.filter = 'none';
-    var highlight = ctx.createRadialGradient(x - r * 0.34, y - r * 0.36, 0, x - r * 0.08, y - r * 0.08, r * 0.42);
-    highlight.addColorStop(0, 'rgba(255, 255, 255, ' + (alpha * 0.42) + ')');
-    highlight.addColorStop(0.45, 'rgba(240, 246, 255, ' + (alpha * 0.12) + ')');
-    highlight.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = highlight;
-    ctx.beginPath();
-    ctx.arc(x - r * 0.08, y - r * 0.08, r * 0.42, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    // 高光层（原：中心 (-r*0.08, -r*0.08)，半径 r*0.42）
+    var hr = r * 0.42;
+    ctx.globalAlpha = Math.min(1, alpha * 0.42);
+    ctx.drawImage(sprites.highlight, x - r * 0.08 - hr, y - r * 0.08 - hr, hr * 2, hr * 2);
+    ctx.globalAlpha = 1;
   }
 
   function tickAtmosphere() {
     if (!atmoState || !atmoState.running || atmoState.engine !== 'canvas2d' || !canvasEl) return;
+    if (document.hidden) { // 后台/最小化：挂起绘制
+      atmoState.animId = requestAnimationFrame(tickAtmosphere);
+      return;
+    }
     var ctx = canvasEl.getContext('2d');
     if (!ctx) return;
     var width = atmoState.width;
@@ -927,7 +962,11 @@
     ctx.clearRect(0, 0, width, height);
     drawAtmosphereWash(ctx, width, height, preset);
 
-    atmoState.blobs.sort(function (a, b) { return a.depth - b.depth; });
+    // blobs 的 depth 固定不变，仅在（重）建后排序一次；resize 会重建 atmoState，标志随之复位
+    if (!atmoState.blobsSorted) {
+      atmoState.blobs.sort(function (a, b) { return a.depth - b.depth; });
+      atmoState.blobsSorted = true;
+    }
     atmoState.blobs.forEach(function (blob) {
       blob.x += blob.drift + atmoState.wind * 0.015 * blob.depth;
       blob.y += blob.lift * 0.015;

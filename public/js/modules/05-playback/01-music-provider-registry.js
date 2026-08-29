@@ -5,7 +5,7 @@
 var MUSIC_PROVIDER_KEYS = ['netease', 'qq', 'kugou', 'qishui', 'spotify'];
 
 function normalizeMusicProviderKey(provider) {
-  if (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify') return provider;
+  if (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify' || provider === 'local') return provider;
   return 'netease';
 }
 
@@ -34,7 +34,7 @@ function normalizePlaylistProvider(provider) {
 
 function playlistProviderLabel(provider) {
   provider = normalizePlaylistProvider(provider);
-  return provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : 'NE')));
+  return provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : (provider === 'local' ? '本地' : 'NE'))));
 }
 
 function playlistTracksEndpoint(provider, pid, params) {

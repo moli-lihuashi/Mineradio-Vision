@@ -727,26 +727,27 @@ window.addEventListener('mousemove', throttle(function(e){
   }
   updateShelfHoverCueFromPointer(e);
   updateShelfCardHoverSelection(e);
+  // 批量先读所有 rect，再统一做 class 写入，避免读写交错反复强制同步布局
   var saOn = sa.classList.contains('peek');
+  var fpOn = fp.classList.contains('peek') || fp.classList.contains('show');
+  var ppOn = pp.classList.contains('peek');
   var saRect = sa.getBoundingClientRect();
+  var fpRect = fp.getBoundingClientRect();
+  var fab = document.getElementById('fx-fab');
+  var fabRect = fab ? fab.getBoundingClientRect() : { left:W, right:W, top:H, bottom:H };
+  var ppRect = pp.getBoundingClientRect();
   var searchFocused = document.activeElement === $input;
   var uploadTip = document.getElementById('upload-tip');
   var uploadTipOpen = !!(uploadTip && uploadTip.classList.contains('show'));
   var inSearchPanel = saOn && ex >= saRect.left - 24 && ex <= saRect.right + 24 && ey >= saRect.top - 22 && ey <= saRect.bottom + 42;
   if (ey < 66 || inSearchPanel || searchFocused || uploadTipOpen) setPeek(sa, true, 'search');
   else if (saOn && !emptyHomeActive) setPeek(sa, false, 'search');
-  var fpOn = fp.classList.contains('peek') || fp.classList.contains('show');
-  var fpRect = fp.getBoundingClientRect();
-  var fab = document.getElementById('fx-fab');
-  var fabRect = fab ? fab.getBoundingClientRect() : { left:W, right:W, top:H, bottom:H };
   var inFxPanel = fpOn && ex >= fpRect.left - 24 && ex <= fpRect.right + 24 && ey >= fpRect.top - 24 && ey <= fpRect.bottom + 24;
   var inFxFab = ex >= fabRect.left - 18 && ex <= fabRect.right + 18 && ey >= fabRect.top - 18 && ey <= fabRect.bottom + 18;
   var inFxBridge = fpOn && ex >= Math.min(fpRect.left, fabRect.left) - 18 && ex <= W && ey >= fpRect.bottom - 10 && ey <= fabRect.bottom + 18;
   if (!diyPlayerMode) inFxPanel = inFxFab = inFxBridge = false;
   if (inFxFab || inFxPanel || inFxBridge) setPeek(fp, true, 'fx');
   else if (fpOn && !fxPanelPinned) setPeek(fp, false, 'fx');
-  var ppOn = pp.classList.contains('peek');
-  var ppRect = pp.getBoundingClientRect();
   var inQueueTrigger = isPlaylistEdgeTrigger(ex, ey, H);
   var inQueuePanel = ppOn && ex >= ppRect.left - 18 && ex <= ppRect.right + 24 && ey >= ppRect.top - 22 && ey <= ppRect.bottom + 22;
   if (inQueueTrigger || inQueuePanel) setPeek(pp, true, 'pl');

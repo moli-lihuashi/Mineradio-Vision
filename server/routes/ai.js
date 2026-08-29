@@ -78,7 +78,8 @@ function buildPlaylistPrompt(userPrompt, profile) {
   return { systemMsg, userMsg };
 }
 
-function callLLM(baseUrl, apiKey, model, systemMsg, userMsg) {
+function callLLM(baseUrl, apiKey, model, systemMsg, userMsg, opts) {
+  opts = opts || {};
   return new Promise((resolve, reject) => {
     const url = new URL(baseUrl.replace(/\/+$/, '') + '/chat/completions');
     const transport = url.protocol === 'https:' ? https : http;
@@ -88,8 +89,8 @@ function callLLM(baseUrl, apiKey, model, systemMsg, userMsg) {
         { role: 'system', content: systemMsg },
         { role: 'user', content: userMsg },
       ],
-      temperature: 0.8,
-      max_tokens: 2000,
+      temperature: opts.temperature != null ? opts.temperature : 0.8,
+      max_tokens: opts.maxTokens || 2000,
     });
     const req = transport.request(url, {
       method: 'POST',
@@ -148,8 +149,142 @@ function parsePlaylistResponse(content) {
   }
 }
 
+// ---- 歌词翻译（LLM 逐行，带 LRU 缓存） ----
+const AI_TRANSLATE_CACHE_MAX = 40;
+const aiTranslateCache = new Map();
+
+function aiTranslateCacheKey(items) {
+  let h = 0x811c9dc5;
+  const text = items.length + '|' + items.map(l => l.text).join('\u0001');
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return String(h);
+}
+
+function buildTranslatePrompt(items) {
+  const systemMsg = '你是歌词翻译引擎。把用户给出的编号歌词逐行翻译成简体中文，保持编号与行数完全一致，'
+    + '返回纯 JSON 字符串数组（如 ["译文1","译文2"]），不要 markdown 代码块，不要解释。'
+    + '不要合并或拆分行，保留人名与专有名词；若某行已是中文或为纯符号，直接原样返回该行内容。';
+  const userMsg = items.map((l, i) => (i + 1) + '. ' + l.text).join('\n');
+  return { systemMsg, userMsg };
+}
+
+function parseTranslateResponse(content, expectedCount) {
+  let text = String(content || '').trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start < 0 || end <= start) return null;
+  try {
+    const arr = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(arr) || arr.length !== expectedCount) return null;
+    return arr.map(v => String(v == null ? '' : v).trim());
+  } catch (_) {
+    return null;
+  }
+}
+
+// ---- 本地智能推荐引擎（无需 LLM API Key 的默认路径） ----
+// 三个来源并行：酷狗猜你喜欢（登录后基于听歌历史）+ 网易 prompt 关键词搜索
+// + 常听歌手的更多热门作品；本地去重、过滤已听熟曲目、限制单歌手占比。
+const LOCAL_PLAYLIST_WANT = 14;
+
+function normalizeLocalSongName(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+async function buildLocalPlaylistSongs(prompt, profile, ctx, deps) {
+  const { cloudsearch, artist_top_song, mapSongRecord, handleKugouGuessLike } = deps;
+  const seen = new Set();
+  const collected = [];
+  const listenedNames = new Set(
+    ((profile && profile.topSongs) || []).map(s => normalizeLocalSongName(s && s.name))
+  );
+
+  function pushSongs(rawSongs, reason, sourceWeight) {
+    (rawSongs || []).forEach(song => {
+      if (!song) return;
+      const name = song.name || song.songname || song.title || song.filename || '';
+      let artist = song.artist || song.singer || song.singername || '';
+      if (!artist && Array.isArray(song.artists)) artist = song.artists.map(a => (a && a.name) || '').filter(Boolean).join('/');
+      if (!name || !normalizeLocalSongName(name)) return;
+      const key = normalizeLocalSongName(name) + '|' + normalizeLocalSongName(artist);
+      if (seen.has(key)) return;
+      if (listenedNames.has(normalizeLocalSongName(name))) return;
+      seen.add(key);
+      collected.push({
+        title: String(name),
+        artist: String(artist).split('/')[0].trim(),
+        reason: reason || '',
+        sourceWeight: sourceWeight || 0,
+      });
+    });
+  }
+
+  const jobs = [];
+  // 源 1：酷狗猜你喜欢（私人FM / 每日推荐 / 歌单聚合三层降级）
+  jobs.push((async () => {
+    try {
+      const r = await handleKugouGuessLike(ctx.kugouCookie, 20);
+      console.log('[AI Local] kugou guess songs:', (r && r.songs || []).length, (r && r.error) || '');
+      pushSongs((r && r.songs) || [], '根据你的收听喜好推荐', 30);
+    } catch (e) { console.warn('[AI Local] kugou source failed:', e.message); }
+  })());
+
+  // 源 2：网易 prompt 关键词搜索（贴合用户输入的场景/心情）
+  const keyword = String(prompt || '').trim().slice(0, 40);
+  if (keyword) {
+    jobs.push((async () => {
+      try {
+        const r = await cloudsearch({ keywords: keyword, limit: 30, cookie: ctx.userCookie, timestamp: Date.now() });
+        const songs = (r.body && r.body.result && r.body.result.songs) || [];
+        console.log('[AI Local] netease keyword songs:', songs.length);
+        pushSongs(songs.map(mapSongRecord), '符合「' + keyword + '」的氛围', 20);
+      } catch (e) { console.warn('[AI Local] netease keyword failed:', e.message); }
+    })());
+  }
+
+  // 源 3：常听歌手的更多热门作品
+  const topArtists = ((profile && profile.topArtists) || []).slice(0, 3);
+  jobs.push((async () => {
+    for (const item of topArtists) {
+      const artistName = item && item.name;
+      if (!artistName) continue;
+      try {
+        const ar = await cloudsearch({ keywords: artistName, type: 100, limit: 1, cookie: ctx.userCookie, timestamp: Date.now() });
+        const hit = ar.body && ar.body.result && ar.body.result.artists && ar.body.result.artists[0];
+        if (!hit || !hit.id) { console.log('[AI Local] artist no-hit:', artistName); continue; }
+        const top = await artist_top_song({ id: hit.id, cookie: ctx.userCookie, timestamp: Date.now() });
+        const songs = (top.body && top.body.songs) || [];
+        console.log('[AI Local] artist top songs:', artistName, songs.length);
+        pushSongs(songs.map(mapSongRecord).slice(0, 10), '你常听 ' + artistName + '，试试更多作品', 10);
+      } catch (e) { console.warn('[AI Local] artist source failed:', artistName, e.message); }
+    }
+  })());
+
+  await Promise.all(jobs);
+
+  // 选歌：按来源权重排序 + 每个歌手最多 2 首，保证多样性
+  const perArtist = new Map();
+  const picked = [];
+  collected
+    .sort((a, b) => (b.sourceWeight - a.sourceWeight) || (Math.random() - 0.5))
+    .forEach(song => {
+      if (picked.length >= LOCAL_PLAYLIST_WANT) return;
+      const artistKey = normalizeLocalSongName(song.artist);
+      const count = perArtist.get(artistKey) || 0;
+      if (artistKey && count >= 2) return;
+      perArtist.set(artistKey, count + 1);
+      picked.push({ title: song.title, artist: song.artist, reason: song.reason });
+    });
+  return picked;
+}
+
 module.exports = function register(ctx) {
-  const { sendJSON, readRequestBody } = ctx;
+  const { sendJSON, readRequestBody, cloudsearch, artist_top_song, mapSongRecord, handleKugouGuessLike } = ctx;
 
   return async function(req, res, url, pn) {
     // GET /api/ai/config — 查询配置状态（不回传密钥）
@@ -163,8 +298,7 @@ module.exports = function register(ctx) {
     // POST /api/ai/config — 保存配置
     if (pn === '/api/ai/config' && req.method === 'POST') {
       try {
-        const body = await readRequestBody(req);
-        const parsed = JSON.parse(body || '{}');
+        const parsed = await readRequestBody(req); // readRequestBody 返回已解析对象
         if (parsed.baseUrl) {
           const cfg = readConfig();
           cfg.baseUrl = parsed.baseUrl;
@@ -181,21 +315,83 @@ module.exports = function register(ctx) {
       return;
     }
 
-    // POST /api/ai/playlist — 生成歌单
+    // POST /api/ai/playlist — 生成歌单（LLM 增强优先；未配置/失败自动降级本地智能推荐）
     if (pn === '/api/ai/playlist' && req.method === 'POST') {
+      let llmError = null;
+      let songs = [];
+      let engine = 'local';
+      let parsed = {};
+      try {
+        parsed = await readRequestBody(req) || {}; // 返回已解析对象；只读一次，LLM 与本地引擎共用
+      } catch (_) { parsed = {}; }
+      try {
+        const apiKey = readSecret();
+        if (apiKey) {
+          try {
+            const cfg = readConfig();
+            const { systemMsg, userMsg } = buildPlaylistPrompt(parsed.prompt, parsed.profile);
+            const content = await callLLM(cfg.baseUrl, apiKey, cfg.model, systemMsg, userMsg);
+            songs = parsePlaylistResponse(content);
+            if (songs.length) engine = 'llm';
+          } catch (e) {
+            llmError = e;
+            console.warn('[AI Playlist] LLM failed, falling back to local engine:', e.message);
+          }
+        }
+      } catch (e) {
+        llmError = e;
+      }
+      if (!songs.length) {
+        try {
+          songs = await buildLocalPlaylistSongs(parsed.prompt, parsed.profile, ctx, {
+            cloudsearch, artist_top_song, mapSongRecord, handleKugouGuessLike,
+          });
+        } catch (e) {
+          console.error('[AI Playlist] local engine failed:', e.message);
+        }
+      }
+      if (!songs.length) {
+        const message = llmError ? ('LLM 调用失败且本地推荐为空：' + llmError.message) : '未能生成推荐，请稍后重试';
+        sendJSON(res, { error: message }, 502);
+        return;
+      }
+      sendJSON(res, { songs, engine, raw: '' });
+      return;
+    }
+    // POST /api/ai/translate — 歌词逐行翻译
+    if (pn === '/api/ai/translate' && req.method === 'POST') {
       try {
         const apiKey = readSecret();
         if (!apiKey) { sendJSON(res, { error: '未配置 LLM API Key，请先在设置中填写' }, 400); return; }
         const cfg = readConfig();
-        const body = await readRequestBody(req);
-        const parsed = JSON.parse(body || '{}');
-        const { systemMsg, userMsg } = buildPlaylistPrompt(parsed.prompt, parsed.profile);
-        const content = await callLLM(cfg.baseUrl, apiKey, cfg.model, systemMsg, userMsg);
-        const songs = parsePlaylistResponse(content);
-        if (!songs.length) { sendJSON(res, { error: 'LLM 未返回有效歌单，请重试' }, 502); return; }
-        sendJSON(res, { songs, raw: content.slice(0, 500) });
+        const parsed = await readRequestBody(req);
+        const rawLines = Array.isArray(parsed.lines) ? parsed.lines : [];
+        const items = rawLines
+          .map(l => ({ t: Number(l && l.t) || 0, text: String((l && l.text) || '').slice(0, 240) }))
+          .filter(l => l.text);
+        if (!items.length) { sendJSON(res, { error: '没有可翻译的歌词行' }, 400); return; }
+        if (items.length > 120) { sendJSON(res, { error: '歌词行数过多（>120），已拒绝翻译' }, 400); return; }
+        const cacheKey = aiTranslateCacheKey(items);
+        const cached = aiTranslateCache.get(cacheKey);
+        if (cached) { sendJSON(res, { translations: cached, cached: true }); return; }
+        const { systemMsg, userMsg } = buildTranslatePrompt(items);
+        const content = await callLLM(cfg.baseUrl, apiKey, cfg.model, systemMsg, userMsg, {
+          temperature: 0.2,
+          maxTokens: Math.min(4000, 600 + 80 * items.length),
+        });
+        const translations = parseTranslateResponse(content, items.length);
+        if (!translations) {
+          sendJSON(res, { error: 'LLM 翻译行数与原文不匹配，已放弃本次结果' }, 502);
+          return;
+        }
+        aiTranslateCache.set(cacheKey, translations);
+        if (aiTranslateCache.size > AI_TRANSLATE_CACHE_MAX) {
+          const oldest = aiTranslateCache.keys().next().value;
+          aiTranslateCache.delete(oldest);
+        }
+        sendJSON(res, { translations, count: translations.length });
       } catch (e) {
-        console.error('[AI Playlist]', e.message);
+        console.error('[AI Translate]', e.message);
         sendJSON(res, { error: e.message }, 500);
       }
       return;

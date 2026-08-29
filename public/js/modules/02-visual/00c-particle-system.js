@@ -197,6 +197,7 @@ function updateParticleSpectrumTexture(dt) {
   var kf = Math.max(0.05, Math.min(0.9, (dt || 0.016) * 60));
   var attackK = 1 - Math.pow(1 - 0.62, kf);
   var releaseK = 1 - Math.pow(1 - 0.13, kf);
+  var spectrumTexChanged = false;
   for (var i = 0; i < SPECTRUM_TEX_BINS; i++) {
     var x = 0;
     if (live) {
@@ -209,9 +210,14 @@ function updateParticleSpectrumTexture(dt) {
     spectrumSmooth[i] = prev + (x - prev) * (x > prev ? attackK : releaseK);
     var b8 = Math.round(spectrumSmooth[i] * 255);
     var o = i * 4;
-    spectrumTexData[o] = b8; spectrumTexData[o + 1] = b8; spectrumTexData[o + 2] = b8; spectrumTexData[o + 3] = 255;
+    if (spectrumTexData[o] !== b8) {
+      spectrumTexData[o] = b8; spectrumTexData[o + 1] = b8; spectrumTexData[o + 2] = b8;
+      spectrumTexChanged = true;
+    }
+    spectrumTexData[o + 3] = 255;
   }
-  spectrumTexture.needsUpdate = true;
+  // 衰减归零/静音后数据不再变化，跳过每帧纹理上传（首帧上传由 DataTexture 构造保证）
+  if (spectrumTexChanged) spectrumTexture.needsUpdate = true;
 }
 
 var uniforms = {
@@ -1148,9 +1154,10 @@ void main(){
       // 提高喷流粒子比例（约 12%），让喷流从细线变成可见光柱
       float jetChance = step(0.88, hash11(seed * 417.0));
       // 喷流驱动叠加频谱纹理高频段原始能量：wallpaperAudio 分支压低 uTreble 时仍能触发。
-      // 强度 = uJetStrength（JS 包络能量）：暂停→0 喷流消失；旧的 uAccretion 项会让暂停后残留 ~70s，已移除
+      // 强度 = uJetStrength（JS 包络能量，播放中带 0.18 保底）：暂停→0 喷流消失。
+      // 活动度 smoothstep 只调制 0.35~1.0 强度（旧版整体门限在安静段把 jetDrive 压为 0，喷流熄灭）
       float hiSpec = specAt(0.88);
-      float jetDrive = smoothstep(0.05, 0.50, uTreble + beatPulse * 0.3 + bassDrive * 0.35 + hiSpec * 0.30) * uJetStrength;
+      float jetDrive = (0.35 + 0.65 * smoothstep(0.05, 0.50, uTreble + beatPulse * 0.3 + bassDrive * 0.35 + hiSpec * 0.30)) * uJetStrength;
       bool isJet = (jetChance > 0.5 && jetDrive > 0.015);
 
       if (isJet) {
@@ -2148,8 +2155,11 @@ function updateBlackHoleLensFrame(camera) {
   u.uEnergy.value = _bhEnv.energy;
   u.uBass.value = _bhEnv.bass;
   // 喷流强度 = 包络能量经温和增益（真实播放能量偏低时喷流仍可见）：
-  // 暂停→0（喷流消失），安静段细，副歌粗壮。粒子层共享此 uniform。
+  // 暂停→0（喷流消失）；播放中保底 0.18——间奏/安静段喷流变细但不熄灭，副歌粗壮。
+  // （此前无保底：AGC 慢适应 + 安静段能量贴 0 → uJetStrength 归零 → 喷流在间奏整段消失）
   var jetS = _bhEnv.energy / 0.55;
+  var jetLive = (typeof playing !== 'undefined') && playing && audio && !audio.paused;
+  if (jetLive && jetS < 0.18) jetS = 0.18;
   uniforms.uJetStrength.value = jetS < 0 ? 0 : (jetS > 1 ? 1 : jetS);
 
   // ---- 转速律动积分器：能量驱动盘转速（能量高转快），积分相位保证平滑无跳变 ----

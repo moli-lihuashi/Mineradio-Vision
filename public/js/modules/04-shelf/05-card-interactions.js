@@ -5,12 +5,17 @@
 //   - 点击两侧卡: 滚到那张
 //   - ESC: 关闭内容框
 // ============================================================
+var _sharedPointerRaycaster = null;
+var _sharedPointerNdc = null;
 function raycasterFromPointerEvent(e) {
-  var mx = (e.clientX / innerWidth) * 2 - 1;
-  var my = -(e.clientY / innerHeight) * 2 + 1;
-  var rc = new THREE.Raycaster();
-  rc.setFromCamera(new THREE.Vector2(mx, my), camera);
-  return rc;
+  // 仅在事件调用栈内同步使用；mousemove 高频路径，模块级复用避免每次 new
+  if (!_sharedPointerRaycaster) {
+    _sharedPointerRaycaster = new THREE.Raycaster();
+    _sharedPointerNdc = new THREE.Vector2();
+  }
+  _sharedPointerNdc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  _sharedPointerRaycaster.setFromCamera(_sharedPointerNdc, camera);
+  return _sharedPointerRaycaster;
 }
 function pointerCardHit(rc, e, screenPad) {
   if (!shelfManager) return null;

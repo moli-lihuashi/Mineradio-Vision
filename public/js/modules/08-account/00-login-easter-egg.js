@@ -35,6 +35,8 @@ function selectLoginProviderNode(provider) {
   var drawer = document.getElementById('login-auth-drawer');
   if (drawer) drawer.classList.add('show');
   updateLoginProviderUi();
+  // 用户主动切换平台 → 更新头部平台文案（布景随 updateLoginProviderUi 已同步）
+  if (typeof syncLoginPlatformScenery === 'function') syncLoginPlatformScenery(provider, true);
 }
 function selectLoginMode(mode) {
   if (loginProvider === 'qishui') qishuiManualCookieOpen = (mode === 'cookie');

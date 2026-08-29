@@ -189,6 +189,10 @@
 
   function tick() {
     if (!volState || !volState.running) return;
+    if (document.hidden) { // 后台/最小化：挂起渲染
+      volState.animId = requestAnimationFrame(tick);
+      return;
+    }
     var now = performance.now();
     if (volState.lastTick && (now - volState.lastTick) < 33) {
       volState.animId = requestAnimationFrame(tick);

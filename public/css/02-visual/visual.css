@@ -273,7 +273,7 @@ body.simple-mode .mini-queue-popover{width:min(380px,calc(100vw - 32px))}
 }
 .home-card > *{position:relative;z-index:3}
 .home-card > .home-card-art{z-index:1}
-.home-card:hover::before{
+.home-card.lg-hover::before{
   background:
     linear-gradient(118deg,color-mix(in srgb,var(--tone-a) 36%,transparent),transparent 38%,color-mix(in srgb,var(--tone-b) 28%,transparent) 74%,transparent),
     linear-gradient(90deg,rgba(255,255,255,.055) 0 1px,transparent 1px 38px);

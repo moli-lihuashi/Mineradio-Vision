@@ -480,11 +480,12 @@ function animate() {
         else if (i >= vocalEnd && i < midEnd) mInst += v;
         else if (i >= midEnd) tHigh += v;
       }
-      for (var j = 0; j < timeDomainData.length; j += ((typeof runtimeAnalysisStride === 'function') ? runtimeAnalysisStride('time', timeDomainData.length) : 1)) {
+      // stride 是常量：循环外只求值一次，避免 FFT 每个样本都调一次函数
+      var timeStride = (typeof runtimeAnalysisStride === 'function') ? runtimeAnalysisStride('time', timeDomainData.length) : 1;
+      for (var j = 0; j < timeDomainData.length; j += timeStride) {
         var tv = (timeDomainData[j] - 128) / 128;
         rms += tv * tv;
       }
-      var timeStride = (typeof runtimeAnalysisStride === 'function') ? runtimeAnalysisStride('time', timeDomainData.length) : 1;
       var timeSamples = Math.max(1, Math.ceil(timeDomainData.length / Math.max(1, timeStride)));
       bKick /= Math.max(1, kickEnd - kickStart);
       bKick *= clampRange((Number(fx.sonicAudioSensitivity) || 50) / 50, 0.4, 1.6);
@@ -855,6 +856,9 @@ function animate() {
 var _lgMirrorCanvas = null;
 var _lgMirrorCtx = null;
 var _lgMirrorFrame = 0;
+var _lgMirrorBgColor = '#000';
+var _lgMirrorBgColorAt = 0;
+var _lgMirrorRectAt = 0;
 function updateLiquidGlassBackdropMirror() {
   var mgr = window._liquidGlassMgr;
   if (!mgr || !mgr._instances || !Object.keys(mgr._instances).length) return;
@@ -865,19 +869,34 @@ function updateLiquidGlassBackdropMirror() {
     _lgMirrorCtx = _lgMirrorCanvas.getContext('2d');
     window.__lgBackdropCanvas = _lgMirrorCanvas;
     window.__lgBackdropRect = { left: 0, top: 0, scale: 1 };
+    _lgMirrorRectAt = 0;
   }
   if (_lgMirrorCanvas.width !== src.width || _lgMirrorCanvas.height !== src.height) {
     _lgMirrorCanvas.width = src.width;
     _lgMirrorCanvas.height = src.height;
+    _lgMirrorRectAt = 0;
   }
-  var r = src.getBoundingClientRect();
+  // 背景是动态的（音乐律动），blit 与玻璃重采样同频节流：每 3 帧 ≈ 20fps 合成一次，
+  // 避免每帧整幅拷贝 WebGL 画布；首帧必做，保证玻璃首绘有底
+  if ((_lgMirrorFrame++ % 3) !== 0) return;
   var info = window.__lgBackdropRect;
-  info.left = r.left; info.top = r.top;
-  info.scale = r.width > 0 ? src.width / r.width : 1;
+  if (!info) { info = window.__lgBackdropRect = { left: 0, top: 0, scale: 1 }; }
+  var nowMs = performance.now();
+  // 画布位置/缩放仅在窗口布局变化后读取（1s 兜底刷新），不再每帧 getBoundingClientRect
+  if (!_lgMirrorRectAt || (nowMs - _lgMirrorRectAt) > 1000) {
+    var r = src.getBoundingClientRect();
+    info.left = r.left; info.top = r.top;
+    info.scale = r.width > 0 ? src.width / r.width : 1;
+    _lgMirrorRectAt = nowMs;
+  }
   var W = _lgMirrorCanvas.width, H = _lgMirrorCanvas.height;
   // 合成完整页面背景：壁纸底色 + 壁纸视频（cover）+ 主视觉 WebGL canvas（透明叠层）
-  var bgCol = getComputedStyle(document.documentElement).getPropertyValue('--custom-bg-color') || '#000';
-  _lgMirrorCtx.fillStyle = bgCol.trim() || '#000';
+  // CSS 变量读结果缓存 2s，避免每帧 getComputedStyle
+  if (!_lgMirrorBgColorAt || (nowMs - _lgMirrorBgColorAt) > 2000) {
+    _lgMirrorBgColor = (getComputedStyle(document.documentElement).getPropertyValue('--custom-bg-color') || '').trim() || '#000';
+    _lgMirrorBgColorAt = nowMs;
+  }
+  _lgMirrorCtx.fillStyle = _lgMirrorBgColor;
   _lgMirrorCtx.fillRect(0, 0, W, H);
   var vid = document.getElementById('custom-bg-video');
   if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {
@@ -888,13 +907,10 @@ function updateLiquidGlassBackdropMirror() {
     } catch (_) {}
   }
   _lgMirrorCtx.drawImage(src, 0, 0);
-  // 背景是动态的（音乐律动），节流标脏让玻璃定期重采样（每 3 帧 ≈ 20fps，平衡流畅与开销）
-  if ((++_lgMirrorFrame % 3) === 0) {
-    for (var k in mgr._instances) {
-      var e = mgr._instances[k];
-      if (e && e.instance && e.instance._running) {
-        e.instance._globalDirty = true;
-      }
+  for (var k in mgr._instances) {
+    var e = mgr._instances[k];
+    if (e && e.instance && e.instance._running) {
+      e.instance._globalDirty = true;
     }
   }
 }

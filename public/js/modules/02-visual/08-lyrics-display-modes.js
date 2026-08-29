@@ -12,9 +12,11 @@ function normalizeLyricTranslationMode(mode) {
   return STAGE_LYRIC_TRANSLATION_MODES[mode] ? mode : 'off';
 }
 function lyricCustomLineCountValue() {
-  var raw = fx && fx.lyricCustomLineCount != null
-    ? Number(fx.lyricCustomLineCount)
-    : (fx && fx.lyricCustomLines != null ? Number(fx.lyricCustomLines) : (fxDefaults && (fxDefaults.lyricCustomLineCount != null ? fxDefaults.lyricCustomLineCount : fxDefaults.lyricCustomLines)));
+  // lyricCustomLines 是滑块/持久化/预设档案的唯一真字段；
+  // lyricCustomLineCount 是恒为默认值的旧字段，若优先读它会把滑块值永久遮蔽。
+  var raw = fx && fx.lyricCustomLines != null
+    ? Number(fx.lyricCustomLines)
+    : (fx && fx.lyricCustomLineCount != null ? Number(fx.lyricCustomLineCount) : (fxDefaults && (fxDefaults.lyricCustomLines != null ? fxDefaults.lyricCustomLines : fxDefaults.lyricCustomLineCount)));
   if (!isFinite(raw)) raw = 3;
   return clampRange(Math.round(raw), 1, 10);
 }

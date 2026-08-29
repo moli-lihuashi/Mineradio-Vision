@@ -14,14 +14,16 @@
     }
   } catch (_) {}
 
-  // row-layers：3.2.11 Step D 默开（完成 Hold/A/B/C 后）。一次性 force_3210 清掉 force_326 留下的 '0'。
+  // row-layers：3.2.11 Step D 默开（完成 Hold/A/B/C 后）。一次性 force_3211 清掉历史 fail-open 写死的 '0'
+  // （fail-open 曾把 reveal 超时持久化到 localStorage，导致行层永久关闭、自定行数失效；现 fail-open 只锁会话）。
   // ?lyricRows=0 / localStorage=0 / eco 可退 legacy；legacy 10+10c 始终加载。
   function lyricRowLayersBootEnabled() {
     try {
       if (typeof localStorage !== 'undefined') {
-        if (localStorage.getItem('mineradio_lyric_row_layers_force_3210') !== '1') {
+        if (localStorage.getItem('mineradio_lyric_row_layers_force_3211') !== '1') {
           localStorage.setItem('mineradio_lyric_row_layers', '1');
-          localStorage.setItem('mineradio_lyric_row_layers_force_3210', '1');
+          localStorage.setItem('mineradio_lyric_row_layers_force_3211', '1');
+          localStorage.removeItem('mineradio_lyric_row_layers_force_3210');
           localStorage.removeItem('mineradio_lyric_row_layers_force_326');
           localStorage.removeItem('mineradio_lyric_row_layers_force_325');
           localStorage.removeItem('mineradio_lyric_row_layers_force_322');
@@ -131,6 +133,7 @@
     'js/modules/05-playback/09a-queue-ops.js',
     'js/modules/05-playback/09b-playback-core.js',
     'js/modules/05-playback/11-provider-fallback.js',
+    'js/modules/05-playback/12-local-playlists.js',
     'js/modules/05-playback/09c-control-glass.js',
     'js/modules/05-playback/09d-playback-stall-recovery.js',
     'js/modules/05-playback/10-queue-content-fingerprint.js',
@@ -153,6 +156,7 @@
     'js/modules/07-fx/08-cache-storage-settings.js',
     'js/modules/07-fx/09-lyric-shader-market.js',
     'js/modules/07-fx/11-system-memory-controls.js',
+    'js/modules/07-fx/12-perf-dashboard.js',
     // account
     'js/modules/08-account/00-update-preview.js',
     'js/modules/08-account/02-qishui-login.js',

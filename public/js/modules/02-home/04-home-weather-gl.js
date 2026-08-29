@@ -1324,6 +1324,10 @@
 
   function frame(now) {
     if (!S || !S.running) return;
+    if (document.hidden) { // 后台/最小化：挂起渲染，dt 钳制保证恢复无跳变
+      S.raf = window.requestAnimationFrame(frame);
+      return;
+    }
     var t = now * 0.001;
     var dt = t - S.lastTime;
     if (!(dt > 0) || dt > 0.05) dt = 0.016;

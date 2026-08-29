@@ -150,3 +150,66 @@ Mineradio.wasapiOutput = {
   stop: stopWasapiOutputBridge,
   initFromPref: initWasapiOutputBridgeFromPref
 };
+
+// ============================================================
+//  FX 面板 UI（开关 / 状态 / 开机自恢复）
+// ============================================================
+var wasapiOutputLastError = '';
+var wasapiAutoStartBound = false;
+
+function wasapiOutputStatusText() {
+  if (wasapiOutputActive) return '状态：运行中 · WASAPI 旁路输出（WebAudio 已静音）';
+  if (wasapiOutputLastError) return '状态：未启用 · 上次错误：' + wasapiOutputLastError;
+  if (wasapiOutputEnabled) return '状态：已开启 · 等待播放后自动接管';
+  return '状态：未启用（WebAudio 混音输出）';
+}
+
+function updateWasapiOutputControls() {
+  var toggle = document.getElementById('t-wasapiOutput');
+  if (toggle) toggle.classList.toggle('on', !!wasapiOutputActive);
+  var statusEl = document.getElementById('wasapi-output-status');
+  if (statusEl) {
+    var next = wasapiOutputStatusText();
+    if (statusEl.textContent !== next) statusEl.textContent = next;
+  }
+}
+
+async function toggleWasapiOutput() {
+  var next = !(wasapiOutputEnabled && wasapiOutputActive);
+  if (typeof showToast === 'function') showToast(next ? '正在切换到 WASAPI 输出…' : '正在切回 WebAudio 输出…');
+  var result = null;
+  try { result = await setWasapiOutputEnabled(next); }
+  catch (e) { result = { ok: false, error: (e && e.message) || String(e) }; }
+  wasapiOutputLastError = (result && result.ok) ? '' : ((result && result.error) || '未知错误');
+  if (typeof showToast === 'function') {
+    showToast(result && result.ok
+      ? (next ? 'WASAPI 输出已接管' : '已切回 WebAudio 输出')
+      : ('WASAPI 切换失败：' + wasapiOutputLastError));
+  }
+  updateWasapiOutputControls();
+}
+
+function bindWasapiAutoStart() {
+  if (wasapiAutoStartBound) return;
+  wasapiAutoStartBound = true;
+  // 偏好已开启但音频图尚未解锁时，等第一次真正出声再接管（capture 捕获 audio 元素的非冒泡事件）
+  document.addEventListener('playing', function () {
+    if (!wasapiOutputEnabled || wasapiOutputActive) return;
+    setTimeout(function () {
+      if (!wasapiOutputEnabled || wasapiOutputActive) return;
+      startWasapiOutputBridge().then(function (result) {
+        if (result && result.ok) {
+          console.log('[WASAPI 3A] auto-recovered after play');
+        } else {
+          wasapiOutputLastError = (result && result.error) || '未知错误';
+          wasapiOutputEnabled = false;
+          writeWasapiOutputPref(false);
+        }
+        updateWasapiOutputControls();
+      }).catch(function () {});
+    }, 350);
+  }, true);
+}
+
+initWasapiOutputBridgeFromPref();
+bindWasapiAutoStart();

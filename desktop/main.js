@@ -3296,6 +3296,12 @@ async function createWindow() {
       writeStartupErrorLog('Renderer process gone', 'MR-BOOT-GPU', error);
     } else {
       // 启动完成后崩溃：立即整理内存 + 延迟重载页面恢复（针对 WebGL context loss 场景）
+      // 落盘记录崩溃原因（console.error 重载后即丢失，无法事后诊断）
+      writeStartupErrorLog(
+        'Renderer crashed after startup (auto-reload)',
+        'MR-RENDER-CRASH',
+        new Error(`reason=${reason} exitCode=${exitCode}`)
+      );
       appMemory.trimAppWorkingSets([process.pid]).catch(() => {});
       if (win && !win.isDestroyed()) {
         setTimeout(() => {

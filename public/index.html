@@ -26,6 +26,7 @@
 <script src="js/modules/02-home/04-home-weather-gl.js"></script>
 <script src="js/modules/02-home/03-home-weather-fx.js"></script>
 <script src="js/modules/02-home/05-home-weather-panel.js"></script>
+<script src="js/modules/02-home/06-home-hover-lift.js"></script>
 <script src="js/modules/04-mood/00-mood-audio.js"></script>
 <script src="js/modules/05-cuefield/00-cuefield-automix-core.js"></script>
 <script src="js/modules/05-cuefield/01-cuefield-timeline-executor.js"></script>
@@ -40,12 +41,12 @@ try {
 }
 </script>
 <link rel="stylesheet" href="css/index.css?v=3.0.0-modular">
-<link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.0-modular">
-<link rel="stylesheet" href="css/02-home/home.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.1-hoverfix">
+<link rel="stylesheet" href="css/02-home/home.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
-<link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/06-fx/glass.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-lyrics/lyrics.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-fx/fx-glass.css?v=3.0.0-modular">
@@ -280,6 +281,7 @@ try {
 
 <div id="player-quick-menu-popover" class="player-quick-menu-popover" onclick="event.stopPropagation()">
   <button type="button" id="quick-menu-lyrics-toggle" class="quick-menu-toggle" onclick="toggleLyricsFromQuickMenu()"><span>歌词显示</span><span class="dot"></span></button>
+  <button type="button" id="quick-menu-automix-toggle" class="quick-menu-toggle" onclick="toggleCuefieldAutoMix()" aria-pressed="false"><span>Cuefield AutoMix<small id="quick-menu-automix-status">实验功能 · 默认关闭</small></span><span class="dot"></span></button>
   <div class="quick-menu-divider"></div>
   <div class="quick-menu-section-title">淡入淡出</div>
   <div class="fade-control-row">
@@ -498,6 +500,7 @@ try {
         <div class="fx-toggle" id="t-classicShowCover" onclick="toggleFx('classicShowCover')"><span>专辑封面</span><span class="dot"></span></div>
         <div class="fx-toggle" id="t-classicShowBg" onclick="toggleFx('classicShowBg')"><span>模糊背景</span><span class="dot"></span></div>
         <div class="fx-toggle on" id="t-classicLyricArcTilt" onclick="toggleFx('classicLyricArcTilt')"><span>弧线倾斜</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-aiLyricTranslate" onclick="toggleAiLyricTranslate()" title="歌词缺译文时，用已配置的 LLM 自动逐行翻译（需先在 AI 歌单中配置 API Key）"><span>AI 补译文</span><span class="dot"></span></div>
       </div>
       <div class="fx-actions">
         <button class="fx-mini-btn" type="button" onclick="resetClassicParams()">恢复默认</button>
@@ -864,6 +867,13 @@ try {
       <div class="fx-toggle-grid">
         <div class="fx-toggle" id="t-liveBackgroundKeep" onclick="toggleFx('liveBackgroundKeep')" title="开启后后台或最小化时保持视觉渲染，不进入低占用暂停"><span>直播后台保持</span><span class="dot"></span></div>
       </div>
+      <div class="fx-section-label">音频输出</div>
+      <div class="fx-toggle-grid">
+        <div class="fx-toggle" id="t-wasapiOutput" onclick="toggleWasapiOutput()" title="WASAPI 旁路输出：绕过 Windows 音量合成直接驱动扬声器，延迟更低；异常时自动回退 WebAudio"><span>WASAPI 旁路输出</span><span class="dot"></span></div>
+      </div>
+      <div class="fx-sub" id="wasapi-output-status" style="opacity:.62;margin:4px 0 8px">状态：未启用（WebAudio 混音输出）</div>
+      <div class="fx-section-label">性能仪表盘</div>
+      <div class="fx-sub" id="perf-dashboard-body" style="opacity:.72;margin:4px 0 8px;line-height:1.8">FPS --</div>
       <div class="fx-slider"><label>粒子尺寸</label><input id="fx-point" type="range" min="0.5" max="2.2" step="0.01"><output></output></div>
       <div class="fx-slider"><label>流速</label><input id="fx-speed" type="range" min="0.2" max="2.5" step="0.01"><output></output></div>
       <div class="fx-slider"><label>扭曲</label><input id="fx-twist" type="range" min="0" max="0.6" step="0.01"><output></output></div>
@@ -1166,7 +1176,6 @@ try {
     </div>
     <div class="control-cluster transport">
     <button id="play-mode-btn" class="ctrl-btn" onclick="cyclePlayMode()" title="播放顺序"><svg id="play-mode-icon" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
-    <button id="cuefield-automix-btn" class="ctrl-btn" onclick="toggleCuefieldAutoMix()" title="Cuefield AutoMix（实验功能，默认关闭）" aria-pressed="false"><svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l3 5 3-5h6"/><path d="M4 17h4l3-5 3 5h6"/><path d="M18 4v6M15 7h6"/></svg></button>
     <button id="prev-btn" class="ctrl-btn" onclick="prevTrack()" title="上一首"><svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
     <button id="play-btn" class="ctrl-btn" onclick="togglePlay()" title="播放/暂停"><svg id="play-icon" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
     <button id="next-btn" class="ctrl-btn" onclick="nextTrack()" title="下一首"><svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
@@ -1203,65 +1212,77 @@ try {
 <!-- 登录模态 -->
 <div id="login-modal" class="modal-mask">
   <div class="modal dual-login-modal">
-    <div class="login-panel-head">
-      <div><b>登录</b><small>扫码 / Cookie</small><span id="login-panel-head-status" class="login-panel-head-status" aria-live="polite"></span></div>
-      <button id="login-reset-all-btn" class="login-reset-all-btn" type="button" onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出登录</button>
-      <button class="login-panel-close" type="button" onclick="closeLoginModal()">×</button>
-    </div>
-    <div class="login-intro">
-      <div class="login-intro-kicker">Mineradio</div>
-      <div class="login-intro-title">音乐播放器，也是一座视觉舞台</div>
-      <div class="login-intro-body">搜索或导入一首歌即可播放；登录后会同步歌单、红心和播客，让封面、歌词和粒子跟着音乐动起来。</div>
-    </div>
-    <div id="login-node-graph" class="login-node-graph" data-provider="netease">
-      <svg id="login-workflow-svg" class="workflow-link-layer login-link-layer" aria-hidden="true"></svg>
-      <div class="login-platform-tabs login-node-providers" id="login-platform-tabs">
-        <button id="login-provider-netease" class="netease active workflow-node" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="netease" title="拖到 MR 接入口"></span></button>
-        <button id="login-provider-qq" class="qq workflow-node" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="flow-port out" data-login-provider-output="qq" title="拖到 MR 接入口"></span></button>
-        <button id="login-provider-kugou" class="kugou workflow-node" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="flow-port out" data-login-provider-output="kugou" title="拖到 MR 接入口"></span></button>
-        <button id="login-provider-qishui" class="qishui workflow-node" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><b>汽水音乐</b><small>本机会话 / Token</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 MR 接入口"></span></button>
-        <button id="login-provider-spotify" class="spotify workflow-node" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="flow-port out" data-login-provider-output="spotify" title="拖到 MR 接入口"></span></button>
-      </div>
-      <div class="login-node-hub workflow-node" data-login-node="mr">
-        <span class="flow-port in" data-login-mr-target="mr" title="MR 接入口"></span>
-        <span class="login-node-orb">MR</span>
-        <div class="login-node-copy"><b>MR</b><small>等待接入</small></div>
-        <div class="login-mode-nodes">
-          <button id="login-mode-official" class="login-mode-node active workflow-node" type="button" data-login-mode="official" onclick="selectLoginMode('official')"><span class="provider-logo">QR</span><b>扫码</b><small>官方窗口</small></button>
-          <button id="login-mode-cookie" class="login-mode-node workflow-node" type="button" data-login-mode="cookie" onclick="selectLoginMode('cookie')"><span class="provider-logo">CK</span><b>Cookie</b><small>保存会话</small></button>
+    <!-- 平台渐变背景层 + 光晕 -->
+    <div class="login-bg-layer active" data-login-bg="netease"></div>
+    <div class="login-bg-layer" data-login-bg="qq"></div>
+    <div class="login-bg-layer" data-login-bg="kugou"></div>
+    <div class="login-bg-layer" data-login-bg="qishui"></div>
+    <div class="login-bg-layer" data-login-bg="spotify"></div>
+    <div class="login-glow" id="login-glow"></div>
+    <div class="login-content">
+      <!-- 头部：品牌语 + 退出/关闭 -->
+      <header class="login-head">
+        <div class="login-head-copy">
+          <div class="login-intro-kicker">✦ MINERADIO</div>
+          <h1 class="login-intro-title" id="login-intro-title">音乐播放器，也是一座视觉舞台</h1>
+          <p class="login-intro-body" id="login-intro-body">搜索或导入一首歌即可播放；登录后会同步歌单、红心和播客，让封面、歌词和粒子跟着音乐动起来。</p>
+          <span id="login-panel-head-status" class="login-panel-head-status" aria-live="polite"></span>
         </div>
-      </div>
-    </div>
-    <div id="login-auth-drawer" class="login-auth-drawer">
-      <div class="login-auth-copy">
-        <h2 id="login-modal-title">扫码登录网易云音乐</h2>
-        <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
-        <div id="qr-status">拖动接口到 MR 接入口后开始登录。</div>
-      </div>
-      <div class="login-auth-body">
-        <div id="qr-shell" class="qr-shell">
-          <img id="qr-img" src="" alt="">
-          <button id="qq-web-login-card" class="qq-login-mark" type="button" onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
+        <div class="login-head-actions">
+          <button id="login-reset-all-btn" class="login-reset-all-btn" type="button" onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出登录</button>
+          <button class="login-panel-close" type="button" onclick="closeLoginModal()" aria-label="关闭">✕</button>
         </div>
-        <div id="qq-cookie-panel" class="qq-cookie-panel">
-          <textarea id="qq-cookie-input" class="qq-cookie-input" spellcheck="false" autocomplete="off" placeholder="uin=...; qqmusic_key=...; qm_keyst=..."></textarea>
-          <div class="qq-cookie-actions">
-            <div class="qq-cookie-note">从 y.qq.com 的登录会话导入。</div>
-            <button id="qq-cookie-save-btn" class="modal-btn primary" type="button" onclick="submitQQCookieLogin()">保存</button>
+      </header>
+      <!-- 中部：左平台菜单 + 右登录方式 -->
+      <section class="login-mid">
+        <nav class="login-platform-tabs login-platform-list" id="login-platform-tabs" aria-label="音乐平台选择">
+          <button id="login-provider-netease" class="netease active" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="radio-dot"></span></button>
+          <button id="login-provider-qq" class="qq" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="radio-dot"></span></button>
+          <button id="login-provider-kugou" class="kugou" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="radio-dot"></span></button>
+          <button id="login-provider-qishui" class="qishui" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><b>汽水音乐</b><small>本机会话 / Token</small><span class="radio-dot"></span></button>
+          <button id="login-provider-spotify" class="spotify" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="radio-dot"></span></button>
+        </nav>
+        <aside class="login-method-menu" aria-label="登录方式">
+          <div class="login-method-mr">
+            <span class="login-node-orb">MR</span>
+            <div class="login-method-copy"><b>MR</b><small>等待接入</small></div>
+          </div>
+          <button id="login-mode-official" class="login-mode-node active" type="button" data-login-mode="official" onclick="selectLoginMode('official')"><span class="provider-logo">QR</span><div class="login-method-copy"><b>扫码</b><small>官方窗口</small></div><span class="radio-dot"></span></button>
+          <button id="login-mode-cookie" class="login-mode-node" type="button" data-login-mode="cookie" onclick="selectLoginMode('cookie')"><span class="provider-logo">CK</span><div class="login-method-copy"><b>Cookie</b><small>保存会话</small></div><span class="radio-dot"></span></button>
+        </aside>
+      </section>
+      <!-- 底部：登录文案 + 二维码/Cookie + 操作 -->
+      <footer id="login-auth-drawer" class="login-auth-drawer">
+        <div class="login-auth-copy">
+          <h2 id="login-modal-title">扫码登录网易云音乐</h2>
+          <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
+          <div id="qr-status">选择平台与登录方式后开始登录。</div>
+        </div>
+        <div class="login-auth-body">
+          <div id="qr-shell" class="qr-shell">
+            <img id="qr-img" src="" alt="">
+            <button id="qq-web-login-card" class="qq-login-mark" type="button" onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
+          </div>
+          <div id="qq-cookie-panel" class="qq-cookie-panel">
+            <textarea id="qq-cookie-input" class="qq-cookie-input" spellcheck="false" autocomplete="off" placeholder="uin=...; qqmusic_key=...; qm_keyst=..."></textarea>
+            <div class="qq-cookie-actions">
+              <div class="qq-cookie-note">从 y.qq.com 的登录会话导入。</div>
+              <button id="qq-cookie-save-btn" class="modal-btn primary" type="button" onclick="submitQQCookieLogin()">保存</button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="btn-row login-auth-actions">
-        <button class="modal-btn" onclick="skipLoginAndFocusSearch()">先搜索一首歌</button>
-        <button id="qq-cookie-toggle-btn" class="modal-btn" type="button" onclick="toggleQQCookiePanel()">手动导入</button>
-        <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
-      </div>
-    </div>
-    <div id="login-account-card" class="login-account-card">
-      <img id="login-account-avatar" src="" alt="">
-      <div class="login-account-copy">
-        <div id="login-account-name" class="login-account-name"></div>
-        <div id="login-account-meta" class="login-account-meta"></div>
+        <div class="btn-row login-auth-actions">
+          <button class="modal-btn" onclick="skipLoginAndFocusSearch()">先搜索一首歌</button>
+          <button id="qq-cookie-toggle-btn" class="modal-btn" type="button" onclick="toggleQQCookiePanel()">手动导入</button>
+          <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
+        </div>
+      </footer>
+      <div id="login-account-card" class="login-account-card">
+        <img id="login-account-avatar" src="" alt="">
+        <div class="login-account-copy">
+          <div id="login-account-name" class="login-account-name"></div>
+          <div id="login-account-meta" class="login-account-meta"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1417,7 +1438,7 @@ try {
         <input id="ai-playlist-apikey" type="password" placeholder="sk-..." autocomplete="off">
       </div>
       <button class="modal-btn primary" type="button" onclick="saveAiPlaylistConfig()">保存配置</button>
-      <small class="ai-playlist-config-hint">支持 OpenAI 兼容接口：豆包 / DeepSeek / Qwen / OpenAI 等。Key 用 DPAPI 加密存储，不入版本控制。</small>
+      <small class="ai-playlist-config-hint">不配置也能用：默认走本地智能推荐（基于听歌历史 + 场景关键词，无需任何账号）。配置 OpenAI 兼容接口（豆包 / DeepSeek / Qwen / OpenAI 等）后由 LLM 生成更个性化的歌单；Key 用 DPAPI 加密存储，不入版本控制。</small>
     </div>
     <div class="ai-playlist-input-area">
       <textarea id="ai-playlist-prompt" class="ai-playlist-prompt" placeholder="描述你想听的场景或心情，例如：适合深夜学习的轻音乐 / 想听 90 年代经典摇滚 / 运动时的节奏感电子乐..." rows="2" autocomplete="off"></textarea>
@@ -1429,6 +1450,11 @@ try {
         <button type="button" onclick="_fillAiPrompt('适合通勤的轻松爵士')">通勤爵士</button>
       </div>
       <button id="ai-playlist-generate-btn" class="modal-btn primary ai-playlist-generate-btn" type="button" onclick="generateAiPlaylist()">生成歌单</button>
+      <input id="ai-playlist-save-name" type="text" placeholder="歌单名（默认取自你的描述）" maxlength="40" autocomplete="off" style="width:100%;margin-top:8px;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.10);color:#fff;font-size:12px;outline:none">
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="ai-playlist-queue-btn" class="modal-btn ai-playlist-queue-btn" type="button" onclick="queueAllAiPlaylistSongs()" style="flex:1" title="逐首搜索解析后全部加入播放队列">全部加入队列</button>
+        <button id="ai-playlist-save-btn" class="modal-btn ai-playlist-queue-btn" type="button" onclick="saveAiPlaylistToLocal()" style="flex:1" title="解析为可播放曲目，保存到左侧歌单面板的「本地歌单」">存为歌单</button>
+      </div>
     </div>
     <div id="ai-playlist-results" class="ai-playlist-results"></div>
     <div class="btn-row">

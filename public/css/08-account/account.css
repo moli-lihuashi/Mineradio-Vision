@@ -252,6 +252,177 @@ body.login-guide-active #login-guide-canvas{opacity:1}
 .visual-guide-hint{margin-top:11px;padding:8px 10px;border-radius:9px;border:1px solid rgba(255,255,255,.075);background:rgba(255,255,255,.038);font-size:11px;color:rgba(244,210,138,.72)}
 .visual-guide-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}
 .visual-guide-progress{font-size:10.5px;color:rgba(255,255,255,.38);font-variant-numeric:tabular-nums}
+
+/* ===== 登录页 · 沉浸式平台切换（参考稿暗色适配版） ===== */
+/* 宽版玻璃卡 + 平台渐变背景层 + 光晕 + 左平台菜单 / 右登录方式 / 底部二维码 */
+#login-modal .dual-login-modal{
+  width:min(880px,calc(100vw - 40px));
+  min-width:0;
+  max-width:min(880px,calc(100vw - 40px));
+  max-height:min(700px,calc(100vh - 36px));
+  padding:26px 30px 24px;
+  overflow:hidden;
+  text-align:left;
+  display:flex;
+  flex-direction:column;
+  border-radius:26px;
+  border-color:rgba(255,255,255,.085);
+  background:radial-gradient(circle at 18% 8%,rgba(255,255,255,.05),transparent 30%),rgba(10,11,15,.62);
+  box-shadow:0 30px 96px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.075);
+  backdrop-filter:blur(30px) saturate(1.2);
+  -webkit-backdrop-filter:blur(30px) saturate(1.2);
+  transition:box-shadow .6s ease,background .8s ease
+}
+/* ---- 平台渐变背景层（切换淡入淡出） ---- */
+#login-modal .login-bg-layer{
+  position:absolute;
+  inset:0;
+  z-index:0;
+  border-radius:inherit;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity 1s cubic-bezier(.4,0,.2,1)
+}
+#login-modal .login-bg-layer.active{opacity:1}
+#login-modal .login-bg-layer[data-login-bg="netease"]{background:linear-gradient(145deg,rgba(230,90,105,.17),rgba(255,214,200,.045) 42%,transparent 72%)}
+#login-modal .login-bg-layer[data-login-bg="qq"]{background:linear-gradient(145deg,rgba(191,214,107,.13),rgba(240,248,210,.04) 42%,transparent 72%)}
+#login-modal .login-bg-layer[data-login-bg="kugou"]{background:linear-gradient(145deg,rgba(68,199,255,.15),rgba(200,230,255,.045) 42%,transparent 72%)}
+#login-modal .login-bg-layer[data-login-bg="qishui"]{background:linear-gradient(145deg,rgba(29,185,84,.14),rgba(24,32,27,.28) 52%,transparent 76%)}
+#login-modal .login-bg-layer[data-login-bg="spotify"]{background:linear-gradient(145deg,rgba(29,185,84,.13),rgba(24,22,22,.30) 55%,transparent 78%)}
+/* ---- 中心光晕 ---- */
+#login-modal .login-glow{
+  position:absolute;
+  z-index:0;
+  width:560px;
+  height:560px;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  filter:blur(110px);
+  pointer-events:none;
+  background:radial-gradient(circle,rgba(230,90,105,.11) 0%,transparent 70%);
+  transition:background 1.2s ease
+}
+/* ---- 内容层 ---- */
+#login-modal .login-content{position:relative;z-index:1;display:flex;flex-direction:column;gap:20px;min-height:0;overflow:auto;scrollbar-width:thin}
+#login-modal .login-content::-webkit-scrollbar{width:3px}
+#login-modal .login-content::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:3px}
+/* ---- 头部 ---- */
+#login-modal .login-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap}
+#login-modal .login-head-copy{flex:1;min-width:220px;display:flex;flex-direction:column;gap:7px;padding:16px 20px;border-radius:18px;border:1px solid rgba(255,255,255,.075);background:linear-gradient(135deg,rgba(255,255,255,.05),rgba(255,255,255,.018));box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+#login-modal .login-intro-kicker{font-size:11px;font-weight:800;letter-spacing:.32em;color:rgba(244,210,138,.78);text-transform:uppercase;margin:0}
+#login-modal .login-intro-title{margin:0;font-size:clamp(19px,2.6vw,26px);font-weight:800;line-height:1.2;color:rgba(255,255,255,.95);letter-spacing:.02em}
+#login-modal .login-intro-body{margin:0;font-size:12.5px;line-height:1.62;color:rgba(255,255,255,.56);max-width:470px}
+#login-modal .login-panel-head-status{display:block;min-height:0;font-size:11px;color:rgba(244,210,138,.72)}
+#login-modal .login-head-actions{display:flex;align-items:center;gap:9px;padding-top:3px}
+#login-modal .login-panel-close{width:32px;height:32px;font-size:17px}
+#login-modal .login-panel-close:hover{transform:rotate(90deg)}
+/* ---- 中部：左平台纵列 + 右登录方式胶囊 ---- */
+#login-modal .login-mid{display:flex;gap:24px;flex:1;min-height:0;align-items:stretch}
+#login-modal .login-platform-list{flex:1;display:flex;flex-direction:column;gap:9px;justify-content:center;margin:0;padding:0;border:0;background:transparent;border-radius:0}
+#login-modal .login-platform-list button{
+  flex:0 0 auto;display:grid;
+  grid-template-columns:38px minmax(0,1fr) auto;
+  align-items:center;gap:13px;
+  min-height:50px;padding:8px 16px 8px 12px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.07);
+  background:rgba(255,255,255,.038);
+  color:rgba(255,255,255,.88);
+  font-family:inherit;font-size:14.5px;font-weight:700;letter-spacing:.02em;
+  text-align:left;cursor:pointer;position:relative;
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  box-shadow:0 2px 12px rgba(0,0,0,.10),inset 0 1px 0 rgba(255,255,255,.045);
+  transition:transform .32s cubic-bezier(.22,1,.36,1),background .32s,border-color .32s,box-shadow .32s
+}
+#login-modal .login-platform-list button:hover{transform:translateY(-2px);background:rgba(255,255,255,.085);border-color:rgba(255,255,255,.14)}
+#login-modal .login-platform-list button:active{transform:translateY(1px) scale(.985)}
+#login-modal .login-platform-list button b{min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14.5px;color:rgba(255,255,255,.92)}
+#login-modal .login-platform-list button small{display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:rgba(255,255,255,.40);letter-spacing:.02em}
+#login-modal .login-platform-list button .provider-logo{width:38px;height:38px;border-radius:11px;font-size:11px}
+#login-modal .login-platform-list button.active{transform:translateY(-2px);border-color:rgba(255,255,255,.20);background:rgba(0,0,0,.32);box-shadow:0 10px 30px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.08)}
+#login-modal .login-platform-list button.active .provider-logo{background:rgba(255,255,255,.22);box-shadow:0 0 16px rgba(255,255,255,.10),inset 0 0 0 1px rgba(255,255,255,.28);animation:loginPulseGlow 2.4s ease-in-out infinite}
+#login-modal .login-platform-list button.active b{color:#fff}
+/* radio 圆点 */
+#login-modal .login-platform-list .radio-dot,#login-modal .login-method-menu .radio-dot{
+  position:absolute;right:17px;top:50%;width:9px;height:9px;
+  border-radius:50%;border:2px solid rgba(255,255,255,.55);
+  transform:translateY(-50%);opacity:.38;
+  transition:all .35s cubic-bezier(.34,1.56,.64,1)
+}
+#login-modal .login-platform-list button.active .radio-dot,#login-modal .login-method-menu button.active .radio-dot{
+  opacity:1;background:#fff;border-color:#fff;transform:translateY(-50%) scale(1.2);box-shadow:0 0 12px rgba(255,255,255,.55)
+}
+/* ---- 右侧登录方式菜单 ---- */
+#login-modal .login-method-menu{
+  flex:none;align-self:center;
+  display:flex;flex-direction:column;gap:9px;
+  padding:15px 13px;border-radius:24px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(0,0,0,.20);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)
+}
+#login-modal .login-method-mr{display:grid;grid-template-columns:36px minmax(0,1fr);align-items:center;gap:12px;padding:4px 6px 4px 10px;border-radius:18px;cursor:default}
+#login-modal .login-method-mr .login-node-orb{width:36px;height:36px;border-radius:11px;font-size:11px}
+#login-modal .login-method-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+#login-modal .login-method-copy b{font-size:16px;font-weight:800;color:rgba(255,255,255,.94);line-height:1.15}
+#login-modal .login-method-copy small{font-size:11px;color:rgba(255,255,255,.40)}
+#login-modal .login-method-menu button{
+  display:grid;grid-template-columns:34px minmax(0,1fr) auto;
+  align-items:center;gap:11px;
+  min-height:46px;padding:7px 26px 7px 9px;
+  border-radius:17px;
+  border:1px solid transparent;
+  background:rgba(255,255,255,.04);
+  color:rgba(255,255,255,.88);
+  font-family:inherit;text-align:left;cursor:pointer;position:relative;
+  transition:all .3s cubic-bezier(.22,1,.36,1)
+}
+#login-modal .login-method-menu button:hover{background:rgba(255,255,255,.10)}
+#login-modal .login-method-menu button.active{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.09);box-shadow:0 0 20px rgba(255,255,255,.06),inset 0 0 12px rgba(255,255,255,.04)}
+#login-modal .login-method-menu button .provider-logo{width:34px;height:34px;border-radius:10px;font-size:10px}
+@keyframes loginPulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}50%{box-shadow:0 0 16px 4px rgba(255,255,255,.10)}}
+/* ---- 底部登录区（常显 footer） ---- */
+#login-modal .login-auth-drawer{
+  display:flex;align-items:center;gap:20px;
+  margin-top:0;padding:18px 22px;
+  max-height:none;overflow:visible;
+  opacity:1;visibility:visible;pointer-events:auto;
+  transform:none;filter:none;
+  border-radius:20px;
+  border:1px solid rgba(255,255,255,.075);
+  background:linear-gradient(135deg,rgba(255,255,255,.045),rgba(255,255,255,.016));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+  transition:background .6s,border-color .6s
+}
+#login-modal .login-auth-copy{flex:1;min-width:180px}
+#login-modal .login-auth-copy h2{margin:0 0 8px;font-size:clamp(16px,2vw,20px);font-weight:800;color:rgba(255,255,255,.95);line-height:1.25}
+#login-modal .login-auth-copy .desc{margin:0 0 9px;font-size:12px;color:rgba(255,255,255,.58);line-height:1.6}
+#login-modal .login-auth-copy #qr-status{margin:0;font-size:11.5px;color:rgba(244,210,138,.75);letter-spacing:.3px}
+#login-modal .login-auth-body{flex:none;display:grid;justify-items:center;gap:8px}
+#login-modal .login-auth-drawer .qr-shell{width:128px;height:128px}
+#login-modal .login-auth-drawer #qr-img{width:128px;height:128px;padding:8px}
+#login-modal .login-auth-actions{display:flex;flex-wrap:wrap;gap:9px;justify-content:flex-start;margin:14px 0 0}
+#login-modal .login-auth-actions .modal-btn{border-radius:999px;padding:8px 20px}
+/* 已登录账号卡 */
+#login-modal .login-account-card{margin:0}
+/* ---- 响应式 ---- */
+@media (max-width:760px){
+  #login-modal .dual-login-modal{width:calc(100vw - 28px);padding:16px 16px 15px;max-height:calc(100vh - 28px)}
+  #login-modal .login-mid{flex-direction:column;gap:14px}
+  #login-modal .login-platform-list{gap:7px}
+  #login-modal .login-platform-list button{min-height:44px;padding:6px 14px 6px 10px}
+  #login-modal .login-method-menu{flex-direction:row;flex-wrap:wrap;justify-content:center;align-self:stretch;padding:11px 12px;border-radius:20px;gap:7px}
+  #login-modal .login-method-menu button{flex:1 1 auto;min-width:130px}
+  #login-modal .login-method-menu .radio-dot{display:none}
+  #login-modal .login-method-mr{display:none}
+  #login-modal .login-platform-list .radio-dot{display:none}
+  #login-modal .login-auth-drawer{flex-direction:column;align-items:stretch;padding:15px 16px}
+  #login-modal .login-auth-actions{justify-content:center}
+  #login-modal .login-glow{width:340px;height:340px}
+}
 .visual-guide-actions button{height:32px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:rgba(255,255,255,.70);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:0 12px;transition:background .18s,border-color .18s,color .18s,transform .18s}
 .visual-guide-actions button:hover{background:rgba(255,255,255,.085);border-color:rgba(255,255,255,.20);color:#fff;transform:translateY(-1px)}
 .visual-guide-actions .primary{border-color:rgba(255,83,103,.42);background:rgba(255,83,103,.14);color:#fff}

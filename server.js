@@ -49,6 +49,9 @@ const {
 const {
   getKugouLoginInfo: getKugouLoginInfoFromApi,
   handleKugouGuessLike,
+  handleKugouLikeCheck,
+  handleKugouLikeToggle,
+  handleKugouPlaylistAddSong,
 } = require('./kugou-api');
 const {
   getSpotifyConfig,
@@ -322,6 +325,7 @@ let userCookie = readCookieFile(COOKIE_FILE);
 function saveCookie(c) {
   userCookie = normalizeCookieHeader(c) || rawCookieFallback(c);
   writeCookieFile(COOKIE_FILE, userCookie);
+  invalidateNeteaseLoginInfoCache();
 }
 
 let qqCookie = readCookieFile(QQ_COOKIE_FILE);
@@ -749,20 +753,33 @@ function compactBeatMapCachePayload(body) {
     map,
   };
 }
-function readBeatMapCache(key) {
+async function readBeatMapCache(key) {
   const file = safeBeatMapCacheFile(key);
-  if (!file || !fs.existsSync(file)) return null;
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return raw && raw.map ? raw : null;
+  if (!file) return null;
+  let raw;
+  try {
+    raw = await fs.promises.readFile(file, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    fs.promises.unlink(file).catch(() => {}); // 读失败（权限/损坏）：删掉避免每次读盘后失败
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.map ? parsed : null;
+  } catch (_) {
+    fs.promises.unlink(file).catch(() => {}); // JSON 损坏：删掉，下次正常回源
+    return null;
+  }
 }
-function writeBeatMapCache(body) {
+async function writeBeatMapCache(body) {
   const payload = compactBeatMapCachePayload(body);
   if (!payload) return { ok: false, error: 'INVALID_BEATMAP_CACHE_PAYLOAD' };
   const file = safeBeatMapCacheFile(payload.key);
   if (!file) return { ok: false, error: 'INVALID_BEATMAP_CACHE_KEY' };
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(payload));
-  fs.renameSync(tmp, file);
+  await fs.promises.writeFile(tmp, JSON.stringify(payload));
+  await fs.promises.rename(tmp, file);
   return { ok: true, key: payload.key, savedAt: payload.savedAt, dir: path.dirname(file) };
 }
 function localUpdateFallback(reason, opts) {
@@ -1132,8 +1149,37 @@ function verifyUpdateBuffer(buffer, job) {
     }
   }
 }
-function verifyUpdateFile(filePath, job) {
-  verifyUpdateBuffer(fs.readFileSync(filePath), job);
+async function verifyUpdateFile(filePath, job) {
+  // 流式校验：安装包可达上百 MB，同步读入 + 同步哈希会阻塞事件循环（下载完成时播放会卡顿数秒）
+  const fh = await fs.promises.open(filePath, 'r');
+  try {
+    const stat = await fh.stat();
+    const expectedSize = Number(job.expectedSize || job.total || 0) || 0;
+    if (expectedSize > 0 && stat.size !== expectedSize) {
+      throw updateError('UPDATE_SIZE_MISMATCH', `Expected ${expectedSize} bytes, got ${stat.size}`);
+    }
+    const hash256 = crypto.createHash('sha256');
+    const hash512 = crypto.createHash('sha512');
+    const reader = fh.createReadStream();
+    for await (const chunk of reader) {
+      hash256.update(chunk);
+      hash512.update(chunk);
+    }
+    const expectedSha256 = normalizeDigest(job.sha256 || '', 'sha256').toLowerCase();
+    if (expectedSha256 && hash256.digest('hex') !== expectedSha256) {
+      throw updateError('UPDATE_SHA256_MISMATCH', 'Downloaded sha256 mismatch');
+    }
+    const expectedSha512 = normalizeDigest(job.sha512 || '', 'sha512');
+    if (expectedSha512) {
+      const actualHex = hash512.digest('hex');
+      const actualBase64 = Buffer.from(actualHex, 'hex').toString('base64');
+      if (actualBase64 !== expectedSha512 && actualHex !== expectedSha512.toLowerCase()) {
+        throw updateError('UPDATE_SHA512_MISMATCH', 'Downloaded sha512 mismatch');
+      }
+    }
+  } finally {
+    await fh.close().catch(() => {});
+  }
 }
 function moveInvalidUpdateFile(filePath, reason) {
   try {
@@ -1148,7 +1194,7 @@ function moveInvalidUpdateFile(filePath, reason) {
     console.warn('[UpdateDownload] failed to move invalid cached installer:', e.message);
   }
 }
-function reuseVerifiedInstallerJob(opts) {
+async function reuseVerifiedInstallerJob(opts) {
   if (!opts || !opts.filePath || !fs.existsSync(opts.filePath)) return null;
   if (!opts.expectedSize && !opts.sha256 && !opts.sha512) return null;
   const now = Date.now();
@@ -1182,7 +1228,7 @@ function reuseVerifiedInstallerJob(opts) {
     error: '',
   };
   try {
-    verifyUpdateFile(opts.filePath, job);
+    await verifyUpdateFile(opts.filePath, job);
     updateDownloadJobs.set(job.id, job);
     trimUpdateJobs();
     return job;
@@ -1276,7 +1322,7 @@ async function downloadUpdateAssetWithMirrors(job) {
         await once(writer, 'finish').catch(() => {});
       }
 
-      verifyUpdateFile(tmpPath, job);
+      await verifyUpdateFile(tmpPath, job);
       if (fs.existsSync(job.filePath)) fs.unlinkSync(job.filePath);
       fs.renameSync(tmpPath, job.filePath);
       job.status = 'ready';
@@ -1296,7 +1342,7 @@ async function downloadUpdateAssetWithMirrors(job) {
     }
   }
 }
-function startUpdateDownloadJob(info) {
+async function startUpdateDownloadJob(info) {
   const release = info && info.release ? info.release : {};
   const asset = release.asset || {};
   const downloadUrl = release.downloadUrl || asset.downloadUrl || '';
@@ -1314,7 +1360,7 @@ function startUpdateDownloadJob(info) {
   const expectedSize = asset.size || 0;
   const sha256 = normalizeDigest(asset.sha256 || '', 'sha256').toLowerCase();
   const sha512 = normalizeDigest(asset.sha512 || '', 'sha512');
-  const cached = reuseVerifiedInstallerJob({
+  const cached = await reuseVerifiedInstallerJob({
     fileName,
     filePath,
     version,
@@ -3494,6 +3540,24 @@ function rememberQishuiDecryptedAudio(key, payload) {
   }
 }
 
+// 汽水加密音频解密：并发上限 + 大小防御；同一首歌并发请求合并为一次下载解密
+const QISHUI_DECRYPT_MAX_CONCURRENT = 2;
+const QISHUI_ENCRYPTED_AUDIO_MAX_BYTES = 128 * 1024 * 1024;
+const qishuiDecryptInflight = new Map();
+let qishuiDecryptActive = 0;
+const qishuiDecryptWaiters = [];
+function qishuiDecryptAcquire() {
+  if (qishuiDecryptActive < QISHUI_DECRYPT_MAX_CONCURRENT) {
+    qishuiDecryptActive += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => qishuiDecryptWaiters.push(resolve));
+}
+function qishuiDecryptRelease() {
+  const next = qishuiDecryptWaiters.shift();
+  if (next) next();
+  else qishuiDecryptActive -= 1;
+}
 async function getQishuiDecryptedAudio(audioUrl) {
   const parsed = qishuiAudioAuthFromUrl(audioUrl);
   if (!parsed.auth) return null;
@@ -3503,17 +3567,41 @@ async function getQishuiDecryptedAudio(audioUrl) {
     cached.at = Date.now();
     return cached;
   }
-  const up = await fetchProxiedMedia(parsed.cleanUrl, audioProxyHeadersFor(parsed.cleanUrl, ''));
-  if (!up.ok) throw new Error('Qishui encrypted audio fetch failed: HTTP ' + up.status);
-  const encryptedBuffer = Buffer.from(await up.arrayBuffer());
-  const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
-  const payload = {
-    buffer: result.buffer,
-    contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
-    extension: result.extension,
-  };
-  rememberQishuiDecryptedAudio(key, payload);
-  return payload;
+  const inflight = qishuiDecryptInflight.get(key);
+  if (inflight) return inflight;
+  const task = (async () => {
+    await qishuiDecryptAcquire();
+    try {
+      const cachedAfterWait = qishuiAudioDecryptCache.get(key);
+      if (cachedAfterWait) {
+        cachedAfterWait.at = Date.now();
+        return cachedAfterWait;
+      }
+      const up = await fetchProxiedMedia(parsed.cleanUrl, audioProxyHeadersFor(parsed.cleanUrl, ''));
+      if (!up.ok) throw new Error('Qishui encrypted audio fetch failed: HTTP ' + up.status);
+      const declared = Number(up.headers.get('content-length')) || 0;
+      if (declared > QISHUI_ENCRYPTED_AUDIO_MAX_BYTES) {
+        throw new Error('Qishui encrypted audio too large: ' + declared + ' bytes');
+      }
+      const encryptedBuffer = Buffer.from(await up.arrayBuffer());
+      if (encryptedBuffer.length > QISHUI_ENCRYPTED_AUDIO_MAX_BYTES) {
+        throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
+      }
+      const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
+      const payload = {
+        buffer: result.buffer,
+        contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
+        extension: result.extension,
+      };
+      rememberQishuiDecryptedAudio(key, payload);
+      return payload;
+    } finally {
+      qishuiDecryptRelease();
+      qishuiDecryptInflight.delete(key);
+    }
+  })();
+  qishuiDecryptInflight.set(key, task);
+  return task;
 }
 
 function sendAudioBuffer(res, buffer, contentType, range) {
@@ -5440,7 +5528,32 @@ function isNeteaseAuthInvalidPayload(payload) {
   const msg = normalizeApiMessage(payload);
   return /未登录|需要登录|请先登录|login/i.test(msg) && code >= 300;
 }
+// 登录信息缓存：每次取播放地址都会调用 getLoginInfo，缓存避免每首歌多打 1-2 次上游登录接口
+const NETEASE_LOGIN_INFO_TTL_MS = 30000;
+let neteaseLoginInfoCache = { at: 0, value: null, promise: null };
+function invalidateNeteaseLoginInfoCache() {
+  neteaseLoginInfoCache.at = 0;
+  neteaseLoginInfoCache.value = null;
+}
 async function getLoginInfo() {
+  const now = Date.now();
+  if (neteaseLoginInfoCache.promise) return neteaseLoginInfoCache.promise; // in-flight 合并
+  if (neteaseLoginInfoCache.value && now - neteaseLoginInfoCache.at < NETEASE_LOGIN_INFO_TTL_MS) {
+    return neteaseLoginInfoCache.value;
+  }
+  neteaseLoginInfoCache.promise = (async () => {
+    try {
+      const info = await getLoginInfoUncached();
+      neteaseLoginInfoCache.value = info;
+      neteaseLoginInfoCache.at = Date.now();
+      return info;
+    } finally {
+      neteaseLoginInfoCache.promise = null;
+    }
+  })();
+  return neteaseLoginInfoCache.promise;
+}
+async function getLoginInfoUncached() {
   if (!userCookie) return { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
 
   // login_status 对二维码 cookie 的资料刷新通常更及时；失败时再降级到 user_account。
@@ -5505,6 +5618,7 @@ const routeCtx = {
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,
   normalizeKugouCookieInput, saveKugouCookie,
   handleKugouUserPlaylists, handleKugouPlaylistTracks, handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
+  handleKugouLikeCheck, handleKugouLikeToggle, handleKugouPlaylistAddSong,
   // ---- qishui ----
   handleQishuiStatus, saveQishuiAccessToken, getQishuiStatus, clearQishuiAccessToken,
   normalizeQishuiCookieInput, qishuiCookieHasLogin, saveQishuiCookie,

@@ -4,6 +4,7 @@
 //  - /api/kugou/login/cookie, /api/kugou/logout
 //  - /api/kugou/user/playlists, /api/kugou/playlist/tracks
 //  - /api/kugou/song/url, /api/kugou/lyric
+//  - /api/kugou/song/like(/check), /api/kugou/playlist/add-song
 // ====================================================================
 module.exports = function register(ctx) {
   const {
@@ -13,6 +14,7 @@ module.exports = function register(ctx) {
     normalizeKugouCookieInput, saveKugouCookie,
     handleKugouUserPlaylists, handleKugouPlaylistTracks,
     handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
+    handleKugouLikeCheck, handleKugouLikeToggle, handleKugouPlaylistAddSong,
   } = ctx;
 
   return async function(req, res, url, pn) {
@@ -103,6 +105,65 @@ module.exports = function register(ctx) {
       } catch (err) {
         console.error('[KugouPlaylistTracks]', err);
         sendJSON(res, { provider: 'kugou', error: err.message, tracks: [] }, 500);
+      }
+      return;
+    }
+
+    if (pn === '/api/kugou/song/like/check') {
+      try {
+        const hashes = url.searchParams.get('hashes') || url.searchParams.get('hash') || url.searchParams.get('ids') || '';
+        const data = await handleKugouLikeCheck({ hashes }, ctx.kugouCookie);
+        const status = data && data.error === 'KUGOU_AUTH_REQUIRED' ? 401 : 200;
+        sendJSON(res, data, status);
+      } catch (err) {
+        console.error('[KugouLikeCheck]', err);
+        sendJSON(res, { provider: 'kugou', liked: {}, error: err.message }, 500);
+      }
+      return;
+    }
+
+    if (pn === '/api/kugou/song/like') {
+      try {
+        if (req.method !== 'POST') {
+          sendJSON(res, { provider: 'kugou', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
+          return;
+        }
+        const body = await readRequestBody(req);
+        const song = body.song || { hash: body.id || body.hash };
+        const like = String(body.like != null ? body.like : 'true') !== 'false';
+        const data = await handleKugouLikeToggle(song, like, ctx.kugouCookie);
+        if (data && data.success === false) {
+          const authFail = /KUGOU_AUTH_REQUIRED/i.test(String(data.error || ''));
+          sendJSON(res, data, authFail ? 401 : 400);
+          return;
+        }
+        sendJSON(res, data);
+      } catch (err) {
+        console.error('[KugouLike]', err);
+        sendJSON(res, { provider: 'kugou', success: false, error: err.message }, /KUGOU_AUTH_REQUIRED|login/i.test(String(err.message)) ? 401 : 500);
+      }
+      return;
+    }
+
+    if (pn === '/api/kugou/playlist/add-song') {
+      try {
+        if (req.method !== 'POST') {
+          sendJSON(res, { provider: 'kugou', success: false, error: 'METHOD_NOT_ALLOWED' }, 405);
+          return;
+        }
+        const body = await readRequestBody(req);
+        const pid = body.pid || body.playlistId || body.listid || '';
+        const song = body.song || { hash: body.id || body.hash };
+        const data = await handleKugouPlaylistAddSong(pid, song, ctx.kugouCookie);
+        if (data && data.success === false) {
+          const authFail = /KUGOU_AUTH_REQUIRED/i.test(String(data.error || ''));
+          sendJSON(res, data, authFail ? 401 : 400);
+          return;
+        }
+        sendJSON(res, data);
+      } catch (err) {
+        console.error('[KugouPlaylistAddSong]', err);
+        sendJSON(res, { provider: 'kugou', success: false, error: err.message }, /KUGOU_AUTH_REQUIRED|login/i.test(String(err.message)) ? 401 : 500);
       }
       return;
     }

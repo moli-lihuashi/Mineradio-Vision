@@ -50,7 +50,7 @@ module.exports = function register(ctx) {
     if (pn === '/api/update/download') {
       try {
         const info = await fetchLatestUpdateInfo();
-        const job = startUpdateDownloadJob(info);
+        const job = await startUpdateDownloadJob(info);
         sendJSON(res, job, job.ok ? 200 : 400);
       } catch (err) {
         console.error('[UpdateDownload]', err);
@@ -105,7 +105,7 @@ module.exports = function register(ctx) {
       if (req.method === 'GET') {
         const key = url.searchParams.get('key') || '';
         try {
-          const entry = readBeatMapCache(key);
+          const entry = await readBeatMapCache(key);
           sendJSON(res, entry
             ? { ok: true, hit: true, key: entry.key || key, map: entry.map, meta: entry.meta || {}, savedAt: entry.savedAt || 0 }
             : { ok: true, hit: false, key });
@@ -127,7 +127,7 @@ module.exports = function register(ctx) {
       if (req.method === 'POST') {
         try {
           const body = await readRequestBody(req);
-          sendJSON(res, writeBeatMapCache(body));
+          sendJSON(res, await writeBeatMapCache(body));
         } catch (err) {
           const info = err.info || beatCacheRootInfo();
           sendJSON(res, {

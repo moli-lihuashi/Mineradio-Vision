@@ -247,10 +247,12 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
 .spotify-guide-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;color:rgba(255,255,255,.48)}
 .spotify-guide-link{background:rgba(30,215,96,.12);color:rgba(30,215,96,.88);border:1px solid rgba(30,215,96,.26);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;transition:background .2s,color .2s}
 .spotify-guide-link:hover{background:rgba(30,215,96,.2);color:rgba(30,215,96,1)}
-/* ===== Cuefield AutoMix ===== */
-#cuefield-automix-btn.cuefield-automix-on{color:rgba(255,221,150,.98);text-shadow:0 0 14px rgba(255,191,100,.42)}
-#cuefield-automix-btn.cuefield-automix-ready{color:rgba(153,241,211,1);text-shadow:0 0 16px rgba(86,255,189,.52);animation:cuefield-ready-pulse 1.8s ease-in-out infinite}
-@keyframes cuefield-ready-pulse{50%{transform:translateY(-1px) scale(1.08)}}
+/* ===== Cuefield AutoMix（播放选项内） ===== */
+#quick-menu-automix-toggle span:first-child{display:flex;flex-direction:column;gap:2px}
+#quick-menu-automix-toggle small{font-size:9.5px;color:rgba(255,255,255,.38);letter-spacing:.2px;transition:color .25s}
+#quick-menu-automix-toggle.on small{color:rgba(255,221,150,.78)}
+#quick-menu-automix-toggle.cuefield-automix-ready small{color:rgba(153,241,211,.95);text-shadow:0 0 12px rgba(86,255,189,.42);animation:cuefield-ready-pulse 1.8s ease-in-out infinite}
+@keyframes cuefield-ready-pulse{50%{opacity:.62}}
 /* ===== Fade Controls ===== */
 .volume-main-row{display:flex;align-items:center;gap:6px}
 .fade-control-row{display:grid;grid-template-columns:30px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:22px;margin-top:5px}

@@ -530,6 +530,25 @@ function readPlaybackSession() {
     return null;
   }
 }
+// 队列序列化缓存：内容指纹未变时复用上次结果，避免每 4.5s 全量序列化 120 首造成的写盘尖峰
+var _playbackSessionQueueCache = { fingerprint: '', json: '' };
+function playbackSessionQueueFingerprint() {
+  var parts = [];
+  var cap = Math.min(playQueue.length, 120);
+  for (var i = 0; i < cap; i++) parts.push(queueItemKey(playQueue[i]));
+  return parts.join('|');
+}
+function playbackSessionQueueJson() {
+  var fp = playbackSessionQueueFingerprint();
+  if (_playbackSessionQueueCache.fingerprint === fp && _playbackSessionQueueCache.json) {
+    return _playbackSessionQueueCache.json;
+  }
+  _playbackSessionQueueCache.fingerprint = fp;
+  _playbackSessionQueueCache.json = JSON.stringify(
+    playQueue.slice(0, 120).map(serializeSongForSession).filter(Boolean)
+  );
+  return _playbackSessionQueueCache.json;
+}
 function savePlaybackSession(force) {
   if (!force) {
     var now = Date.now();
@@ -541,17 +560,17 @@ function savePlaybackSession(force) {
   var currentTime = audio && isFinite(audio.currentTime) ? Number(audio.currentTime) : 0;
   if (currentTime < 0.2 && !force) return;
   try {
-    localStorage.setItem(PLAYBACK_SESSION_STORE_KEY, JSON.stringify({
+    var head = JSON.stringify({
       version: 2,
       song: serializeSongForSession(song),
       currentIdx: currentIdx,
       currentTime: currentTime,
       duration: getPlaybackDurationSeconds() || normalizePlaybackDurationSeconds(song.duration || 0),
-      queue: playQueue.slice(0, 120).map(serializeSongForSession).filter(Boolean),
       playMode: playMode,
       visualPreset: typeof fx !== 'undefined' && fx ? fx.preset : 0,
       updatedAt: Date.now()
-    }));
+    });
+    localStorage.setItem(PLAYBACK_SESSION_STORE_KEY, head.slice(0, -1) + ',"queue":' + playbackSessionQueueJson() + '}');
   } catch (e) {}
 }
 async function applyPlaybackSession(session, opts) {

@@ -49,16 +49,22 @@ function cuefieldAutoMixStatusText(status) {
 }
 
 function updateCuefieldAutoMixUi(status) {
-  var button = document.getElementById('cuefield-automix-btn');
-  if (!button) return;
+  var toggle = document.getElementById('quick-menu-automix-toggle');
+  if (!toggle) return;
+  var statusEl = document.getElementById('quick-menu-automix-status');
   var snapshot = cuefieldAutoMix && cuefieldAutoMix.snapshot ? cuefieldAutoMix.snapshot() : null;
   var ready = !!(snapshot && snapshot.pending);
-  button.classList.toggle('cuefield-automix-on', !!cuefieldAutoMixEnabled);
-  button.classList.toggle('cuefield-automix-ready', !!cuefieldAutoMixEnabled && ready);
-  button.setAttribute('aria-pressed', cuefieldAutoMixEnabled ? 'true' : 'false');
-  button.title = cuefieldAutoMixEnabled
+  toggle.classList.toggle('on', !!cuefieldAutoMixEnabled);
+  toggle.classList.toggle('cuefield-automix-ready', !!cuefieldAutoMixEnabled && ready);
+  toggle.setAttribute('aria-pressed', cuefieldAutoMixEnabled ? 'true' : 'false');
+  toggle.title = cuefieldAutoMixEnabled
     ? ('Cuefield AutoMix · ' + (ready ? '过渡已准备' : cuefieldAutoMixStatusText(status || (snapshot && snapshot.lastStatus))))
     : 'Cuefield AutoMix（实验功能，默认关闭）';
+  if (statusEl) {
+    statusEl.textContent = cuefieldAutoMixEnabled
+      ? ('自动过渡 · ' + (ready ? '已就绪' : cuefieldAutoMixStatusText(status || (snapshot && snapshot.lastStatus))))
+      : '实验功能 · 默认关闭';
+  }
 }
 
 function cuefieldAutoMixAudioDescriptor(song) {
@@ -678,7 +684,7 @@ function recoverCuefieldAutoMixEndedOutgoing(pending, context, reason) {
   setTimeout(function () {
     if (trackSwitchToken !== token || currentIdx !== index || audio !== outgoing) return;
     if (playMode === 'single') {
-      playQueueAt(index, { autoRepeat: true, suppressPlayFailureNotice: true });
+      playQueueAt(index, { autoRepeat: true, suppressPlayFailureNotice: true, preserveHomeState: true });
     } else if (typeof nextTrack === 'function') {
       nextTrack(false);
     } else if (pending && isFinite(Number(pending.nextIndex))) {

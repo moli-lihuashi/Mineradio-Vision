@@ -337,8 +337,10 @@ function updateLyricMeshProgress(mesh, progress, opts) {
   mesh.userData.lastLyricProgress = progress;
 }
 
-/** P0：track 超时未露字 → 拆掉回落 legacy，并会话锁死 row-layers，避免切行再空白 */
-var STAGE_LYRIC_REVEAL_FAILOPEN_MS = 450;
+/** P0：track 超时未露字 → 拆掉回落 legacy，并会话锁死 row-layers，避免切行再空白
+ * 注意：只锁本会话（重负载/GPU 抖动导致的一次超时不应永久关掉行层——
+ * 行层永久关闭会让自定行数彻底失效，legacy 路径不读行数）。 */
+var STAGE_LYRIC_REVEAL_FAILOPEN_MS = 900;
 function stageLyricFailOpenLegacyFromTrack(trackMesh, reason) {
   if (typeof cancelStageLyricResidentBuild === 'function') {
     try { cancelStageLyricResidentBuild(); } catch (_) {}
@@ -346,7 +348,7 @@ function stageLyricFailOpenLegacyFromTrack(trackMesh, reason) {
   try { STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = true; } catch (_) {}
   try {
     if (typeof ENABLE_LYRIC_ROW_LAYERS !== 'undefined') ENABLE_LYRIC_ROW_LAYERS = false;
-    if (typeof localStorage !== 'undefined') localStorage.setItem('mineradio_lyric_row_layers', '0');
+    // 不再写 localStorage '0'：一次性 reveal 超时只降级本会话，下次启动重试行层
   } catch (_) {}
   var idx = stageLyrics && stageLyrics.currentIdx;
   var text = '';
@@ -715,12 +717,27 @@ function updateInterludeWave(dt) {
   // 平滑淡入淡出（淡入快、淡出慢，收束更柔）
   var ease = interludeWave.target > interludeWave.opacity ? 0.14 : 0.07;
   interludeWave.opacity += (interludeWave.target - interludeWave.opacity) * Math.min(1, ease * Math.max(1, dt * 60));
-  interludeWave.canvas.style.opacity = (interludeWave.opacity * 0.42).toFixed(3);
+  var opStr = (interludeWave.opacity * 0.42).toFixed(3);
+  if (opStr !== interludeWave._lastOpStr) {
+    interludeWave.canvas.style.opacity = opStr;
+    interludeWave._lastOpStr = opStr;
+  }
   if (interludeWave.opacity < 0.01) return;
-  // 用 timeDomainData 绘制极简波形线
+  // 用 timeDomainData 绘制极简波形线；画布尺寸约每 90 帧对齐一次，
+  // 不再每帧读 offsetWidth 并重赋 width（写读交错触发布局 + 重置 2D 上下文）
   var ctx = interludeWave.ctx;
-  var w = interludeWave.canvas.width = interludeWave.canvas.offsetWidth || 640;
-  var h = interludeWave.canvas.height = interludeWave.canvas.offsetHeight || 96;
+  if (interludeWave._sizeTick === undefined) interludeWave._sizeTick = 0;
+  if ((interludeWave._sizeTick++ % 90) === 0 || !interludeWave._w) {
+    var nw = interludeWave.canvas.offsetWidth || 640;
+    var nh = interludeWave.canvas.offsetHeight || 96;
+    if (nw !== interludeWave._w || nh !== interludeWave._h) {
+      interludeWave._w = nw; interludeWave._h = nh;
+      interludeWave.canvas.width = nw;
+      interludeWave.canvas.height = nh;
+    }
+  }
+  var w = interludeWave._w || 640;
+  var h = interludeWave._h || 96;
   ctx.clearRect(0, 0, w, h);
   if (!timeDomainData || !timeDomainData.length) return;
   var samples = timeDomainData.length;
