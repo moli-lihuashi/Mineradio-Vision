@@ -149,5 +149,15 @@ module.exports = function register(ctx) {
       }
       return;
     }
+
+    if (pn === '/api/qq/recommendations') {
+      // QQ 音乐推荐接口尚未接入（面板显示友好空态，不使用关键词搜索替代）
+      sendJSON(res, {
+        provider: 'qq',
+        songs: [],
+        message: '当前版本没有可验证的 QQ 音乐推荐接口，未使用关键词搜索替代',
+      });
+      return;
+    }
   };
 };

@@ -215,5 +215,18 @@ module.exports = function register(ctx) {
       }
       return;
     }
+
+    if (pn === '/api/kugou/recommendations') {
+      // 平台推荐面板的酷狗源：与猜你喜欢同一推荐链路
+      try {
+        const limit = parseInt(url.searchParams.get('limit') || '12', 10) || 12;
+        const result = await handleKugouGuessLike(ctx.kugouCookie, limit);
+        sendJSON(res, result);
+      } catch (err) {
+        console.error('[KugouRecommendations]', err);
+        sendJSON(res, { provider: 'kugou', loggedIn: false, songs: [], error: err.message }, 500);
+      }
+      return;
+    }
   };
 };

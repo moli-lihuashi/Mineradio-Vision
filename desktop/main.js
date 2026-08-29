@@ -3101,6 +3101,11 @@ async function ensureLocalServerStarted() {
       const _cookieDebugLogPath = path.join(_stableUserData, 'cookie-debug.log');
       const _cookieLog = (msg) => {
         try {
+          // 限幅：超过 512KB 清空重写，防止无限增长
+          try {
+            const st = fs.statSync(_cookieDebugLogPath);
+            if (st.size > 512 * 1024) fs.writeFileSync(_cookieDebugLogPath, '');
+          } catch (_) {}
           fs.appendFileSync(_cookieDebugLogPath, '[' + new Date().toISOString() + '] [main] ' + msg + '\n', 'utf8');
         } catch (_) {}
       };
@@ -3198,6 +3203,8 @@ async function loadMainWindowWithRetry(win) {
       writeStartupState('navigation-retry', { navigationAttempt: attempt, retryAt: Date.now(), lastNavigationError: String(error && error.message || error) });
       console.warn(`[StartupWindow] navigation attempt ${attempt} failed:`, error.message || error);
       try { win.webContents.stop(); } catch (_) {}
+      // stop() 会清掉当前帧，透明窗口立刻变白窗——回填启动页保住深色首屏
+      try { win.loadFile(path.join(__dirname, 'startup.html')).catch(() => {}); } catch (_) {}
       if (attempt < 2) await startupDelay(500);
     }
   }
@@ -3276,13 +3283,18 @@ async function createWindow() {
     try { ensureUserPluginDir(); } catch (_) {}
   });
 
-  mainWindow.webContents.on('dom-ready', () => {
-    if (!startupCompleted) showMainWindowSafely(win, 'dom-ready');
+  // 首帧合成完成后才显示：透明窗口在未绘制状态下 show 会白屏（dom-ready 早于首帧）
+  mainWindow.webContents.once('ready-to-show', () => {
+    if (!startupCompleted) showMainWindowSafely(win, 'ready-to-show');
   });
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     if (!startupCompleted) {
-      console.warn('[StartupWindow] did-fail-load:', errorCode, errorDescription);
+      console.warn('[StartupWindow] did-fail-load:', errorCode, errorDescription, validatedURL || '');
+      // 主页面导航失败会清掉当前帧（白窗），立即回填启动页保持深色
+      if (String(errorCode).toUpperCase() !== 'ERR_ABORTED') {
+        try { win.loadFile(startupShell).catch(() => {}); } catch (_) {}
+      }
     }
   });
 

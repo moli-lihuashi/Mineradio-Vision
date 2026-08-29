@@ -28,10 +28,10 @@ const KUGOU_SKIP_TESTS = new Set([
   'qq-vip-entitlement.test.js',              // ENOENT 08-account/02-login-status.js
   'search-frontend-pagination.test.js',      // 期望 emptySearchHistoryState/searchProviderCanSearch 等，酷狗版未拆出
   'ui-default-theme-shelf-layer.test.js',    // ENOENT 00-state/04-fx-defaults.js + 04-shelf/01-manager-core.js
-  'home-hero-mp4-platform-recommend.test.js', // 期望 home-platform-recommend-mask 元素，平台推荐遮罩未实现
-  'home-daily-recommendation-virtualization.test.js', // 期望 home-discovery-strip / 8-song slice 等未实现
-  'home-dashboard-update.test.js',           // 期望 home-discovery-strip DOM 元素 + discovery CSS 作用域，未实现
-  'home-daily-recommendations-backend.test.js', // 同 quick-check runHomeDailyRecommendationRegressionCheck，handleDiscoverHome 行为差异
+  'home-hero-mp4-platform-recommend.test.js', // 期望 home-platform-recommend-mask/MP4 入口 —— 用户裁定重复（FX 面板已有视频背景），Home 界面保持原样
+  // home-daily-recommendation-virtualization.test.js — 虚拟化日推窗口已落地，已解绑
+  'home-dashboard-update.test.js',           // 期望 home-discovery-strip DOM/CSS —— 用户裁定回滚发现条，保持原 Home 布局
+  // home-daily-recommendations-backend.test.js — handleDiscoverHome 全量日推 + mapDailyRecommendationSongs 已落地，已解绑
 ]);
 
 function collectTestFiles() {

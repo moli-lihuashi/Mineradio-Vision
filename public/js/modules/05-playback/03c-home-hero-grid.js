@@ -66,8 +66,18 @@ function setHomeHeroMp4(url) {
 }
 
 // Quick-grid 拖拽重排
+// v2：卡片按唯一 data-card-id 识别（旧版按 data-home-tone，重复 tone 会键冲突导致排序错乱）
 var HOME_GRID_LAYOUT_STORAGE = 'homeGridLayout';
+var HOME_GRID_LAYOUT_V2_FLAG = 'mineradio-home-grid-layout-v2';
 var homeGridState = { dragging: null, draggedOver: null };
+
+function homeGridLayoutV2Ready() {
+  try { return localStorage.getItem(HOME_GRID_LAYOUT_V2_FLAG) === '1'; } catch (_error) { return false; }
+}
+
+function markHomeGridLayoutV2() {
+  try { localStorage.setItem(HOME_GRID_LAYOUT_V2_FLAG, '1'); } catch (_error) { }
+}
 
 function getHomeGridLayout() {
   try {
@@ -81,16 +91,24 @@ function saveHomeGridLayout(order) {
   try { localStorage.setItem(HOME_GRID_LAYOUT_STORAGE, JSON.stringify(order)); } catch (_) {}
 }
 
+function homeGridCardId(card, index) {
+  return card.getAttribute('data-card-id') || card.getAttribute('data-home-tone') || ('card-' + index);
+}
+
 function applyHomeGridLayout() {
   var grid = document.querySelector('.home-grid');
   if (!grid) return;
+  // v2 迁移：旧序列按 tone 记录，与新 ID 体系不兼容，首次升级作废（恢复 DOM 默认序，用户可重新拖排）
+  if (!homeGridLayoutV2Ready()) {
+    markHomeGridLayoutV2();
+    return;
+  }
   var order = getHomeGridLayout();
   if (!order) return;
-  var cards = Array.prototype.slice.call(grid.querySelectorAll('.home-card'));
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('.home-card, .home-pet-card'));
   var cardMap = {};
   cards.forEach(function (card, i) {
-    var id = card.getAttribute('data-home-tone') || ('card-' + i);
-    cardMap[id] = card;
+    cardMap[homeGridCardId(card, i)] = card;
   });
   var reordered = [];
   order.forEach(function (id) { if (cardMap[id]) { reordered.push(cardMap[id]); delete cardMap[id]; } });
@@ -104,19 +122,19 @@ function bindHomeGridDragReorder() {
   if (!grid || grid._homeGridDragBound) return;
   grid._homeGridDragBound = true;
 
-  grid.querySelectorAll('.home-card').forEach(function (card) {
+  grid.querySelectorAll('.home-card, .home-pet-card').forEach(function (card) {
     card.setAttribute('draggable', 'true');
     card.addEventListener('dragstart', function (e) {
       homeGridState.dragging = card;
       card.classList.add('home-card-dragging');
-      if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', card.getAttribute('data-home-tone') || ''); } catch (_) {} }
+      if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', homeGridCardId(card, 0)); } catch (_) {} }
     });
     card.addEventListener('dragend', function () {
       card.classList.remove('home-card-dragging');
       if (homeGridState.draggedOver) homeGridState.draggedOver.classList.remove('home-card-drag-over');
       homeGridState.dragging = null;
       homeGridState.draggedOver = null;
-      var order = Array.prototype.slice.call(grid.querySelectorAll('.home-card')).map(function (c) { return c.getAttribute('data-home-tone') || ''; }).filter(Boolean);
+      var order = Array.prototype.slice.call(grid.querySelectorAll('.home-card, .home-pet-card')).map(function (c) { return c.getAttribute('data-card-id') || c.getAttribute('data-home-tone') || ''; }).filter(Boolean);
       saveHomeGridLayout(order);
     });
     card.addEventListener('dragover', function (e) {
@@ -133,7 +151,7 @@ function bindHomeGridDragReorder() {
       if (!homeGridState.dragging || homeGridState.dragging === card) return;
       var gridEl = card.parentNode;
       var dragging = homeGridState.dragging;
-      var cards = Array.prototype.slice.call(gridEl.querySelectorAll('.home-card'));
+      var cards = Array.prototype.slice.call(gridEl.querySelectorAll('.home-card, .home-pet-card'));
       var dragIdx = cards.indexOf(dragging);
       var dropIdx = cards.indexOf(card);
       if (dragIdx < 0 || dropIdx < 0) return;

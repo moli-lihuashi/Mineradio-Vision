@@ -38,6 +38,10 @@ function shouldUseIdleWallpaperPreview(ignoreSplash) {
 }
 function setHomeControlsLocked(locked) {
   document.body.classList.toggle('home-controls-locked', !!locked);
+  // 解锁 = 用户明确要控制条，退出 Home 的 forced-clean 模式，避免 showHome 重入再次上锁
+  if (!locked) {
+    try { homeForcedOpen = false; } catch (_error) { }
+  }
   var bottom = document.getElementById('bottom-bar');
   if (bottom && locked && !hasActivePlaybackControls()) bottom.classList.add('soft-hidden');
   if (bottom && !locked) bottom.classList.remove('soft-hidden');
@@ -213,7 +217,8 @@ function showHome(opts) {
   }
   if (alreadyVisible && !opts.forceLoad && !opts.closePanels) {
     ensurePresetLayersHiddenForHome();
-    setHomeControlsLocked(!!homeForcedOpen);
+    // 只在 forced 模式下上锁；用户经把手解锁后，重入 showHome 不再重复上锁
+    if (homeForcedOpen) setHomeControlsLocked(true);
     if (homeDiscoverState.loaded || homeWeatherRadioState.loaded) {
       renderHomeDiscover();
       refreshContinueCardLive();
@@ -224,7 +229,7 @@ function showHome(opts) {
   if (opts.closePanels) closePanelsForHomeEntry();
   else setPeek(document.getElementById('search-area'), true, 'search');
   activateHomeWallpaperPreview({ instant: true });
-  setHomeControlsLocked(!!homeForcedOpen);
+  if (homeForcedOpen) setHomeControlsLocked(true);
   emptyHomeActive = true;
   var shell = document.getElementById('empty-home');
   if (shell) void shell.offsetHeight;
@@ -263,4 +268,42 @@ function updateEmptyHomeVisibility(opts) {
     return showHome({ forceLoad: !!opts.forceLoad, closePanels: false });
   }
   return hideHome({ suppress: homeSuppressed });
+}
+// playHomeDaily / playHomeSong 归位到 home 空场模块（与 playHomeDashboardDiscoverySong 同域），
+// 每日推荐卡片播放全量入队，不做切片
+async function playHomeDaily() {
+  prepareLeaveHomeForPlayback();
+  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
+    showLoginModal({ source: 'home-daily' });
+    return;
+  }
+  await waitForHomeDiscoverIdle();
+  if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
+    await loadHomeDiscover(true);
+  }
+  if (!homeDiscoverState.songs.length) {
+    runHomeSearch('每日推荐');
+    return;
+  }
+  playQueue = homeDiscoverState.songs.map(cloneSong);
+  currentIdx = 0;
+  safeRenderQueuePanel('home-daily');
+  safeShelfRebuild('home-daily', true);
+  forcePlaybackControlsInteractive();
+  playQueueAt(0).catch(function(e){ console.warn('[HomeDailyPlay]', e); });
+}
+function playHomeSong(index) {
+  prepareLeaveHomeForPlayback();
+  var song = homeDiscoverState.songs[index];
+  if (!song) {
+    if (index > 0) playHomePrivateRadio();
+    else playHomeDaily();
+    return;
+  }
+  playQueue = homeDiscoverState.songs.map(cloneSong);
+  currentIdx = Math.max(0, Math.min(playQueue.length - 1, index));
+  safeRenderQueuePanel('home-song-card');
+  safeShelfRebuild('home-song-card', true);
+  forcePlaybackControlsInteractive();
+  playQueueAt(currentIdx).catch(function(e){ console.warn('[HomeSongPlay]', e); });
 }

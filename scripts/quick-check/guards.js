@@ -2394,6 +2394,34 @@ function checkAudioOutputWorkflowPanelGuard() {
   console.log('[OK] Audio output workflow opens as a dedicated wiring panel and leaves settings compact.');
 }
 
+function checkKugouCloudlistIdentityGuard() {
+  // 2026-08-29 20017 事故守卫：cloudlist 必须走 lite 客户端身份专用通道 + dfid 注册，
+  // server.js 侧不得再出现标准版身份常量。详见 docs/PROJECT_MEMORY.md 同日条目。
+  logStep('Kugou cloudlist identity guard');
+  const kugouApiText = fs.readFileSync(path.join(appRoot, 'kugou-api.js'), 'utf8');
+  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
+  const endpoints = ['v7/get_all_list', 'v4/get_list_all_file', 'v6/add_song', 'v4/delete_songs'];
+  endpoints.forEach((endpoint) => {
+    if (!new RegExp("kugouCloudlistRequest\\('/" + endpoint + "'").test(kugouApiText)) {
+      fail('/' + endpoint + ' must be called via kugouCloudlistRequest (lite identity channel)');
+    }
+    if (new RegExp("kugou(?:H5Gateway|Gateway)Request\\('/" + endpoint + "'").test(kugouApiText)) {
+      fail('/' + endpoint + ' must not bypass kugouCloudlistRequest (standard identity returns 20017)');
+    }
+  });
+  if (!/const KUGOU_LITE_APPID = '3116'/.test(kugouApiText)) fail('kugou-api.js must pin the lite appid 3116 (session signing identity)');
+  if (!/const KUGOU_LITE_CLIENTVER = '11440'/.test(kugouApiText)) fail('kugou-api.js must pin the lite clientver 11440');
+  if (!/LnT6xpN3khm36zse0QzvmgTZ3waWdRSA/.test(kugouApiText)) fail('lite android salt missing from kugou-api.js');
+  if (!/QDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27/.test(kugouApiText)) {
+    fail('device registration must use the lite RSA public key (standard key yields 20010 rsa failure)');
+  }
+  if (/OIlwieks28dk2k092lksi2UIkp/.test(serverText)) fail('standard android salt must not reappear in server.js (identity drift)');
+  if (/DIAG7QOELSYoIJvTFJhMpe1s/.test(serverText)) fail('standard RSA key must not reappear in server.js (identity drift)');
+  if (!/KUGOU_LITE_APPID: KUGOU_APPID/.test(serverText)) fail('server.js must alias the lite identity constants from kugou-api.js');
+  if (!/setKugouDfidPersistHook\(/.test(serverText)) fail('server.js must register the dfid persist hook (avoid per-launch device registration)');
+  console.log('[OK] Cloudlist stays on the lite identity channel with dfid registration.');
+}
+
 function checkVolumeWheelStepGuard() {
   logStep('Volume wheel step guard');
   const audioText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '08-audio-graph-controls.js'), 'utf8');
@@ -3050,5 +3078,5 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
 }
 
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkNonCurrentAudioPrefetchGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
 };

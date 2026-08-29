@@ -159,14 +159,16 @@ html.lg-controls-webgl #bottom-bar.visible.lg-active {
    避免透明落回下层黑色。降级时由 body.lg-degraded .home-card.lg-active 接管。 */
 .home-card.lg-active,
 .home-tile.lg-active,
-.home-mosaic-cell.lg-active{
+.home-mosaic-cell.lg-active,
+.listening-today-card.lg-active{
   background:linear-gradient(142deg,rgba(18,21,26,.58),rgba(8,9,13,.70));
   backdrop-filter:blur(20px) saturate(1.2);
   -webkit-backdrop-filter:blur(20px) saturate(1.2);
 }
 .home-card.lg-active canvas,
 .home-tile.lg-active canvas,
-.home-mosaic-cell.lg-active canvas{
+.home-mosaic-cell.lg-active canvas,
+.listening-today-card.lg-active canvas{
   border-radius:inherit;
   pointer-events:none;
 }
@@ -176,8 +178,14 @@ html.lg-controls-webgl #bottom-bar.visible.lg-active {
 body.lg-degraded #fx-panel.lg-active canvas,
 body.lg-degraded #search-box.lg-active canvas,
 body.lg-degraded #bottom-bar.lg-active canvas,
-body.lg-degraded .home-card.lg-active canvas{
+body.lg-degraded .home-card.lg-active canvas,
+body.lg-degraded .listening-today-card.lg-active canvas{
   visibility:hidden!important;
+}
+body.lg-degraded .listening-today-card.lg-active{
+  background:rgba(20,22,28,.42)!important;
+  backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.4) brightness(1.08)!important;
 }
 body.lg-degraded #fx-panel.lg-active{
   background:rgba(20,22,28,.42)!important;

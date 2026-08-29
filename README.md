@@ -38,6 +38,8 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 - **Sonic Topography 音域回响预设**：歌曲频谱驱动的声学地形视觉。
 - **桌面歌词**：保持软件内歌词质感的独立桌面歌词窗口，支持锁定穿透与白底可读性优化。
 - **天气雨滴与 Wallpaper 集成**：天气雨滴视觉、Wallpaper Engine 库浏览与视频 / 图片背景。
+- **Home 布局升级**：首页 Hero 网格与卡片体系重设计，信息层级与视觉节奏更清晰。
+- **卡片宠物「像素伙伴」**：Home 桌宠卡片，支持上传照片像素化为自定义专属伙伴（基于 [Lew1sWong/claude-pet](https://github.com/Lew1sWong/claude-pet) MIT 许可集成）。
 - 继承原项目的歌词舞台、粒子舞台、电影镜头、3D 歌单架等核心视觉体验。
 
 ### 架构与工程

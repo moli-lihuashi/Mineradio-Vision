@@ -321,6 +321,7 @@ function renderHomeDiscover(opts) {
     setHomeArt('home-library-art', librarySongCover || (daily && daily.cover) || '', 280);
   }
   renderHomeTiles();
+  if (typeof renderListeningToday === 'function') renderListeningToday();
   if (typeof renderHomeDashboardDiscovery === 'function') renderHomeDashboardDiscovery();
   syncContinueCard();
   if (typeof syncHomeWeatherFx === 'function') syncHomeWeatherFx();

@@ -169,3 +169,49 @@ body.empty-home-active.controls-visible:not(.home-controls-locked) #empty-home{b
 @media (max-width:620px){#empty-home{top:146px;bottom:44px;width:calc(100vw - 24px)}.home-hero{padding:20px;border-radius:22px}.home-hero-inner:not(.home-construction-inner){display:flex;flex-direction:column}.home-visual{display:none}.home-mosaic{display:none}.home-grid{grid-template-columns:1fr}.home-tile-row{grid-template-columns:repeat(2,minmax(0,1fr))}.home-tile-cover{height:auto;aspect-ratio:1}.home-tile-sub{display:block}.home-card-art{width:88px;height:88px}.home-card-title,.home-card-sub{max-width:68%}}
 .home-visual.generated{height:74px!important;max-width:300px!important;align-self:center!important}
 @media (max-height:760px){.home-visual.generated{height:64px!important;max-width:260px!important}}
+
+/* ===== Home 今日聆听卡（右下 Rail · 替代最近听过磁贴 · LiquidGlass） ===== */
+#empty-home .listening-today-card { position:relative; display:flex; flex-direction:column; gap:12px; min-width:0; padding:14px 18px 16px; border-radius:18px; border:1px solid color-mix(in srgb,var(--home-accent,#00f5d4) 12%,rgba(255,255,255,.085)); background:linear-gradient(142deg,rgba(18,21,26,.66),rgba(8,9,13,.78)); box-shadow:0 20px 64px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.06); backdrop-filter:blur(20px) saturate(1.1); -webkit-backdrop-filter:blur(20px) saturate(1.1); overflow:hidden; }
+#empty-home .listening-today-card > * { position:relative; z-index:3; }
+#empty-home .lt-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+#empty-home .lt-kicker { font-size:10px; font-weight:800; letter-spacing:.18em; text-transform:uppercase; color:color-mix(in srgb,var(--home-accent,#00f5d4) 62%,rgba(255,255,255,.9)); }
+#empty-home .lt-preference { padding:3px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.04); color:rgba(255,255,255,.6); font-size:10.5px; cursor:pointer; transition:border-color .18s, color .18s, background .18s; }
+#empty-home .lt-preference:hover { border-color:rgba(255,255,255,.26); color:rgba(255,255,255,.9); background:rgba(255,255,255,.07); }
+#empty-home .lt-stats { display:flex; align-items:stretch; gap:10px; min-height:64px; }
+#empty-home .lt-stat { display:flex; flex-direction:column; justify-content:center; gap:4px; padding:9px 14px; border-radius:12px; border:1px solid rgba(255,255,255,.06); background:rgba(255,255,255,.03); color:#fff; text-align:left; min-width:0; }
+#empty-home .lt-stat strong { font-size:19px; font-weight:780; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#empty-home .lt-stat span { font-size:10px; color:rgba(255,255,255,.5); letter-spacing:.06em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#empty-home .lt-side { flex:1 1 0; transition:flex .22s ease, padding .22s ease; }
+#empty-home .lt-middle { flex:1.15 1 auto; min-width:0; display:flex; }
+#empty-home .lt-today { width:100%; cursor:pointer; border-color:color-mix(in srgb,var(--home-accent,#00f5d4) 24%,rgba(255,255,255,.08)); transition:border-color .2s, background .2s, transform .2s; }
+#empty-home .lt-today:hover { border-color:color-mix(in srgb,var(--home-accent,#00f5d4) 48%,rgba(255,255,255,.2)); background:rgba(0,245,212,.07); transform:translateY(-1px); }
+#empty-home .lt-today span { color:color-mix(in srgb,var(--home-accent,#00f5d4) 55%,rgba(255,255,255,.55)); }
+#empty-home .lt-strip { display:none; flex:1 1 auto; min-width:0; gap:8px; overflow-x:auto; padding:2px; scrollbar-width:none; -ms-overflow-style:none; cursor:grab; user-select:none; -webkit-user-select:none; }
+#empty-home .lt-strip::-webkit-scrollbar { display:none; }
+#empty-home .lt-strip.dragging { cursor:grabbing; }
+#empty-home .lt-strip.dragging .lt-strip-item { pointer-events:none; }
+#empty-home .listening-today-card.expanded .lt-today { display:none; }
+#empty-home .listening-today-card.expanded .lt-strip { display:flex; animation:lt-strip-in .22s ease; }
+#empty-home .listening-today-card.expanded .lt-side { flex:0 0 auto; width:0; min-width:0; padding:0; border-color:transparent; background:transparent; opacity:0; }
+#empty-home .listening-today-card.expanded .lt-side strong { font-size:15px; max-width:104px; }
+@keyframes lt-strip-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+#empty-home .lt-strip-item { flex:0 0 auto; width:172px; display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:12px; border:1px solid rgba(255,255,255,.07); background:rgba(255,255,255,.035); color:#fff; cursor:pointer; text-align:left; transition:border-color .18s, background .18s; }
+#empty-home .lt-strip-item:hover { border-color:color-mix(in srgb,var(--home-accent,#00f5d4) 42%,rgba(255,255,255,.16)); background:rgba(255,255,255,.06); }
+#empty-home .lt-strip-cover { width:38px; height:38px; border-radius:9px; flex:0 0 auto; background:linear-gradient(135deg,rgba(0,245,212,.22),rgba(36,66,255,.26)); background-size:cover; background-position:center; }
+#empty-home .lt-strip-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+#empty-home .lt-strip-name { font-size:11.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#empty-home .lt-strip-artist { font-size:10px; color:rgba(255,255,255,.5); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#empty-home .lt-strip-empty { flex:1; display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,.4); font-size:11px; padding:10px; }
+
+/* ===== Home 桌宠卡「Mino」（白色磨砂 · CSS 玻璃 · 独立于 LiquidGlass 管线） ===== */
+#empty-home .home-pet-card { --pet-accent:#00a884; position:relative; min-height:152px; padding:17px; border-radius:22px; border:1px solid rgba(255,255,255,.55); background:linear-gradient(142deg,rgba(255,255,255,.66),rgba(255,255,255,.38)); box-shadow:0 20px 64px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.55); backdrop-filter:blur(24px) saturate(1.3); -webkit-backdrop-filter:blur(24px) saturate(1.3); overflow:hidden; color:#1c222b; text-align:left; font-family:inherit; cursor:pointer; transition:border-color .22s, background .22s, box-shadow .22s; }
+#empty-home .home-pet-card:hover { border-color:rgba(255,255,255,.78); background:linear-gradient(142deg,rgba(255,255,255,.76),rgba(255,255,255,.5)); box-shadow:0 28px 84px rgba(0,0,0,.2), 0 0 34px rgba(0,168,132,.12), inset 0 1px 0 rgba(255,255,255,.7); }
+#empty-home .home-pet-card > * { position:relative; z-index:3; }
+#empty-home .home-pet-card .home-card-label { font-size:10px; font-weight:760; letter-spacing:.14em; text-transform:uppercase; color:#5b6570; margin-bottom:8px; }
+#empty-home .home-pet-card .home-card-sub { margin-top:8px; font-size:11.5px; line-height:1.45; color:rgba(28,34,43,.66); max-width:70%; }
+#empty-home .home-pet-card:focus-visible { border-color:rgba(0,168,132,.5); outline:none; }
+#empty-home .home-pet-canvas { position:absolute; left:6px; top:30px; width:calc(100% - 12px); height:calc(100% - 64px); display:block; z-index:2; pointer-events:none; }
+#empty-home .home-pet-canvas { image-rendering: pixelated; }
+#empty-home .home-pet-swap { position:absolute; top:8px; right:10px; z-index:4; padding:2px 8px; border-radius:999px; border:1px solid rgba(28,34,43,.12); background:rgba(28,34,43,.06); color:#4a5560; font-size:10px; cursor:pointer; transition:border-color .18s, color .18s, background .18s; }
+#empty-home .home-pet-swap:hover { border-color:rgba(28,34,43,.28); color:#1c222b; background:rgba(28,34,43,.1); }
+#empty-home .home-pet-card.home-card-drag-over { border-color:rgba(0,168,132,.6); background:linear-gradient(142deg,rgba(255,255,255,.82),rgba(255,255,255,.55)); }

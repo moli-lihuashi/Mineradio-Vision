@@ -46,7 +46,12 @@ function scheduleControlsHide(delay) {
 }
 
 function revealBottomControls(delay) {
-  if (document.body.classList.contains('home-controls-locked')) return;
+  // 把手/底边交互 = 用户显式要求控制条：解除 Home 锁定态而不是拒绝升起
+  // （修复：homeForcedOpen 卡死时锁定类常驻，控制条自己隐藏后永远无法升起）
+  if (document.body.classList.contains('home-controls-locked')) {
+    if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+    else document.body.classList.remove('home-controls-locked');
+  }
   var bar = document.getElementById('bottom-bar');
   if (isBottomControlsSuppressedForShelf()) return;
   if (bar) bar.classList.add('visible');
@@ -98,14 +103,16 @@ function forcePlaybackControlsInteractive() {
 }
 
 function toggleBottomControlsFromHandle() {
-  var bar = document.getElementById('bottom-bar');
-  if (!bar || document.body.classList.contains('home-controls-locked')) return;
+  if (document.body.classList.contains('home-controls-locked')) {
+    if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+    else document.body.classList.remove('home-controls-locked');
+  }
   if (isBottomControlsSuppressedForShelf()) return;
   revealBottomControls(900);
 }
 
 function updateControlsAutoHideFromPointer(x, y) {
-  if (document.body.classList.contains('home-controls-locked')) return;
+  // 锁定态不再在此拦截：指针进入底边区域时会经 revealBottomControls 显式解锁
   if (isBottomControlsSuppressedForShelf()) return;
   var bar = document.getElementById('bottom-bar');
   if (!bar || !bar.classList.contains('visible')) return;

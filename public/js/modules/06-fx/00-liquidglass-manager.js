@@ -34,6 +34,26 @@
       rootSelector: '.home-grid',
       glassSelector: '.home-grid > .home-card'
     },
+    // 首页右下「今日聆听」卡：同款玻璃参数，root=.home-rail
+    listeningToday: {
+      blurAmount: 0.70,
+      refraction: 0.18,
+      chromAberration: 0.0,
+      edgeHighlight: 0.12,
+      specular: 0.05,
+      fresnel: 1.0,
+      cornerRadius: 18,
+      zRadius: 10,
+      shadowOpacity: 0.42,
+      shadowSpread: 22,
+      shadowOffsetY: 4,
+      saturation: 0.34,
+      brightness: 0.04,
+      tintStrength: 0.0,
+      bevelMode: 0,
+      rootSelector: '.home-rail',
+      glassSelector: '.home-rail > .listening-today-card'
+    },
     // 搜索框：偏透明；双折射 + 弱白边（对齐 tisc：先折射背景再少量高光）
     searchBox: {
       blurAmount: 0.58,

@@ -146,7 +146,9 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
     ? '<button class="fx-mini-btn ghost pl-detail-collection-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
     : '';
   var localDeleteButton = provider === 'local'
-    ? '<button class="fx-mini-btn ghost" type="button" data-pl-detail-delete="' + escAttr(key) + '">删除歌单</button>'
+    ? '<button class="fx-mini-btn ghost" type="button" data-pl-detail-rename="1">重命名</button>' +
+      '<button class="fx-mini-btn ghost" type="button" data-pl-detail-export="1">导出</button>' +
+      '<button class="fx-mini-btn ghost" type="button" data-pl-detail-delete="' + escAttr(key) + '">删除歌单</button>'
     : '';
   return '<div class="pl-inline-detail" data-pl-detail="' + escAttr(key) + '">' +
     '<div class="pl-detail-sticky">' +
@@ -405,7 +407,9 @@ function renderUserPlaylistsList(opts) {
   $pl.innerHTML = groups.map(function(group){
     var items = visibleGroupItems(group.items);
     if (!items.length) return '';
-    return '<div class="pl-section-label">' + group.label + '</div>' + items.map(playlistCardHtml).join('');
+    return '<div class="pl-section-label">' + group.label + (group.key === 'local'
+      ? '<button class="fx-mini-btn ghost" type="button" data-pl-local-import="1" style="margin-left:8px">导入歌单</button>'
+      : '') + '</div>' + items.map(playlistCardHtml).join('');
   }).join('') || '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
   if (userPlaylists.length > renderedCount) {
     $pl.insertAdjacentHTML('beforeend', '<button type="button" class="fx-mini-btn ghost pl-load-more" data-pl-load-more="1">加载更多 ' + renderedCount + '/' + userPlaylists.length + '</button>');
@@ -484,6 +488,27 @@ document.getElementById('pl-list').addEventListener('click', function(e){
     e.preventDefault();
     e.stopPropagation();
     playPlaylistPanelDetailTrack(Number(row.getAttribute('data-pl-detail-row')));
+    return;
+  }
+  var renameLocalBtn = e.target && e.target.closest ? e.target.closest('[data-pl-detail-rename]') : null;
+  if (renameLocalBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    startLocalPlaylistRename(playlistPanelDetailState.key);
+    return;
+  }
+  var exportLocalBtn = e.target && e.target.closest ? e.target.closest('[data-pl-detail-export]') : null;
+  if (exportLocalBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    exportLocalPlaylistFile(String(playlistPanelDetailState.key || '').replace(/^local:/, ''));
+    return;
+  }
+  var importLocalBtn = e.target && e.target.closest ? e.target.closest('[data-pl-local-import]') : null;
+  if (importLocalBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    pickLocalPlaylistImportFile();
     return;
   }
   var deleteLocalBtn = e.target && e.target.closest ? e.target.closest('[data-pl-detail-delete]') : null;

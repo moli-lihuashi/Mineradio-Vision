@@ -52,6 +52,15 @@ const {
   handleKugouLikeCheck,
   handleKugouLikeToggle,
   handleKugouPlaylistAddSong,
+  registerKugouCloudDevice,
+  setKugouDfidPersistHook,
+  signatureAndroidParams: kugouSignatureAndroidParams,
+  // 酷狗 lite 客户端身份常量：单一来源在 kugou-api.js（登录/注册/cloudlist 全部一致）
+  KUGOU_LITE_APPID: KUGOU_APPID,
+  KUGOU_LITE_CLIENTVER: KUGOU_CLIENTVER,
+  KUGOU_LITE_ANDROID_SALT: KUGOU_ANDROID_SIGN_KEY,
+  KUGOU_LITE_GATEWAY_UA: KUGOU_ANDROID_UA,
+  KUGOU_H5_SALT: KUGOU_WEB_SIGN_KEY,
 } = require('./kugou-api');
 const {
   getSpotifyConfig,
@@ -1707,6 +1716,11 @@ function readRequestBody(req) {
 }
 function enqueueDjAnalyze(task) {
   return new Promise((resolve, reject) => {
+    // 上限防御：每个任务都要下载整条播客流做节奏分析，排队过多会堆积 IO/CPU
+    if (djAnalyzeQueue.length >= 4) {
+      reject(new Error('DJ_ANALYZE_BUSY'));
+      return;
+    }
     djAnalyzeQueue.push({ task, resolve, reject });
     pumpDjAnalyzeQueue();
   });
@@ -2333,6 +2347,13 @@ async function findNeteaseSameTrackCandidates(id, hints, lookupDeadline) {
 }
 
 
+// 每日推荐映射：全量保序，过滤无效项；截断交给前端虚拟化渲染
+function mapDailyRecommendationSongs(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .map(song => mapSongRecord(song))
+    .filter(Boolean);
+}
+
 async function handleDiscoverHome() {
   const info = await getLoginInfo();
   const loggedIn = !!(info && info.loggedIn);
@@ -2343,13 +2364,15 @@ async function handleDiscoverHome() {
       dailySongs: [],
       playlists: [],
       podcasts: [],
+      dailySongTotal: 0,
+      dailySongsComplete: true,
       mode: 'starter',
       updatedAt: Date.now(),
     };
   }
+  // 播客推荐已下线（前端按需走 /api/podcast/hot）；日推全量返回，前端虚拟化负责窗口化
   const tasks = [
     personalized({ limit: 8, cookie: userCookie, timestamp: Date.now() }),
-    dj_hot({ limit: 6, offset: 0, cookie: userCookie, timestamp: Date.now() }),
     recommend_resource({ cookie: userCookie, timestamp: Date.now() }),
     recommend_songs({ cookie: userCookie, timestamp: Date.now() }),
   ];
@@ -2361,16 +2384,9 @@ async function handleDiscoverHome() {
     .filter(pl => pl.id && pl.name)
     .slice(0, 8);
 
-  const podcastBody = result[1].status === 'fulfilled' && result[1].value && result[1].value.body || {};
-  const podcastRaw = podcastBody.djRadios || podcastBody.djradios || podcastBody.radios || podcastBody.data || [];
-  const podcasts = (Array.isArray(podcastRaw) ? podcastRaw : [])
-    .map(mapPodcastRadio)
-    .filter(p => p.id && !isLowSignalPodcastItem(p))
-    .slice(0, 6);
-
   let privatePlaylists = [];
-  if (result[2].status === 'fulfilled' && result[2].value) {
-    const body = result[2].value.body || {};
+  if (result[1].status === 'fulfilled' && result[1].value) {
+    const body = result[1].value.body || {};
     const raw = body.recommend || body.data || [];
     privatePlaylists = (Array.isArray(raw) ? raw : [])
       .map(pl => mapDiscoverPlaylist(pl, '私人推荐'))
@@ -2379,21 +2395,20 @@ async function handleDiscoverHome() {
   }
 
   let dailySongs = [];
-  if (result[3].status === 'fulfilled' && result[3].value) {
-    const body = result[3].value.body || {};
+  if (result[2].status === 'fulfilled' && result[2].value) {
+    const body = result[2].value.body || {};
     const raw = body.data && (body.data.dailySongs || body.data.recommend) || body.recommend || [];
-    dailySongs = (Array.isArray(raw) ? raw : [])
-      .map(mapSongRecord)
-      .filter(song => song.id && song.name)
-      .slice(0, 12);
+    dailySongs = mapDailyRecommendationSongs(raw);
   }
 
   return {
     loggedIn,
     user: loggedIn ? { userId: info.userId, nickname: info.nickname || '', avatar: info.avatar || '' } : null,
     dailySongs,
+    dailySongTotal: dailySongs.length,
+    dailySongsComplete: true,
     playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
-    podcasts,
+    podcasts: [],
     updatedAt: Date.now(),
   };
 }
@@ -2407,19 +2422,9 @@ const QQ_HEADERS = {
 const KUGOU_GATEWAY_URL = 'https://gateway.kugou.com';
 const KUGOU_LOGIN_BASE_URL = 'https://login-user.kugou.com';
 const KUGOU_USER_SERVICE_URL = 'https://userservice.kugou.com';
-const KUGOU_APPID = '3116';
-const KUGOU_CLIENTVER = '11440';
 const KUGOU_QR_APPID = '1001';
 const KUGOU_QR_SRC_APPID = '2919';
-const KUGOU_ANDROID_SIGN_KEY = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA';
-const KUGOU_WEB_SIGN_KEY = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
 const KUGOU_PLAY_KEY_SALT = 'kgcloudv2';
-const KUGOU_RSA_PUBLIC_KEY = [
-  '-----BEGIN PUBLIC KEY-----',
-  'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27+0+4kBzTBTBOZ/WWU0WryL1JSXRTXLgFVxtzIY41Pe7lPOgsfTCn5kZcvKhYKJesKnnJDNr5/abvTGf+rHG3YRwsCHcQ08/q6ifSioBszvb3QiwIDAQAB',
-  '-----END PUBLIC KEY-----',
-].join('\n');
-const KUGOU_ANDROID_UA = 'Android15-1070-11440-46-0-DiscoveryDRADProtocol-wifi';
 const KUGOU_DEFAULT_MID = crypto.createHash('md5').update((process.env.COMPUTERNAME || 'mineradio') + ':kugou').digest('hex');
 let kugouVipProbeCache = { userId: '', checkedAt: 0, info: null };
 
@@ -3758,18 +3763,9 @@ function kugouMd5(text) {
   return crypto.createHash('md5').update(String(text || '')).digest('hex');
 }
 
-function kugouSigVal(value) {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  return JSON.stringify(value);
-}
-
 function kugouAndroidSignature(params, dataString) {
-  const body = Object.keys(params || {})
-    .sort()
-    .map(k => k + '=' + kugouSigVal(params[k]))
-    .join('');
-  return kugouMd5(KUGOU_ANDROID_SIGN_KEY + body + (dataString || '') + KUGOU_ANDROID_SIGN_KEY);
+  // 签名算法单一来源在 kugou-api.js；此处仅传 lite 盐
+  return kugouSignatureAndroidParams(params, dataString, KUGOU_ANDROID_SIGN_KEY);
 }
 
 function kugouWebSignature(params) {
@@ -3812,6 +3808,12 @@ function saveKugouAuth(obj) {
   saveKugouCookie(serializeCookieObject(auth));
   return auth;
 }
+
+// cloudlist 设备注册（含收藏链路内部触发）拿到新 dfid 后持久化进 cookie 存档，
+// 避免每次启动都向风控接口重复注册
+setKugouDfidPersistHook(function (dfid) {
+  try { saveKugouAuth(Object.assign(kugouCookieObject(), { dfid })); } catch (_) {}
+});
 
 function kugouCookieMid(obj) {
   obj = obj || kugouCookieObject();
@@ -4019,74 +4021,11 @@ async function handleKugouLoginQrKey() {
 
 async function kugouRegisterDevice(auth) {
   auth = kugouInitDevice(auth || kugouCookieObject());
-  const dataMap = {
-    availableRamSize: 4983533568,
-    availableRomSize: 48114719,
-    availableSDSize: 48114717,
-    basebandVer: '',
-    batteryLevel: 100,
-    batteryStatus: 3,
-    brand: 'Redmi',
-    buildSerial: 'unknown',
-    device: 'marble',
-    imei: auth.KUGOU_API_GUID,
-    imsi: '',
-    manufacturer: 'Xiaomi',
-    uuid: auth.KUGOU_API_GUID,
-    accelerometerValue: '',
-    gravity: false,
-    gravityValue: '',
-    gyroscope: false,
-    gyroscopeValue: '',
-    light: false,
-    lightValue: '',
-    magnetic: false,
-    magneticValue: '',
-    orientation: false,
-    orientationValue: '',
-    pressure: false,
-    pressureValue: '',
-    step_counter: false,
-    step_counterValue: '',
-    temperature: false,
-    temperatureValue: '',
-    accelerometer: false,
-  };
-  const aesKey = kugouRandomString(6, true);
-  const digest = kugouMd5(aesKey);
-  const key = Buffer.from(digest.slice(0, 16), 'utf8');
-  const iv = Buffer.from(digest.slice(16, 32), 'utf8');
-  const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
-  const encrypted = Buffer.concat([cipher.update(JSON.stringify(dataMap), 'utf8'), cipher.final()]).toString('base64');
-  const pRaw = JSON.stringify({ aes: aesKey, uid: auth.userid || 0, token: auth.token || '' });
-  const p = crypto.publicEncrypt({
-    key: KUGOU_RSA_PUBLIC_KEY,
-    padding: crypto.constants.RSA_PKCS1_PADDING,
-  }, Buffer.from(pRaw)).toString('hex');
-  const buf = await kugouGatewayRequest('/risk/v2/r_register_dev', {
-    baseURL: KUGOU_USER_SERVICE_URL,
-    method: 'POST',
-    encryptType: 'android',
-    responseType: 'buffer',
-    params: { part: 1, platid: 1, p },
-    data: encrypted,
-    headers: { 'x-router': 'userservice.kugou.com' },
-  });
-  let result = null;
-  const plain = buf.toString('utf8');
-  try {
-    result = plain.trim().startsWith('{') ? JSON.parse(plain) : null;
-  } catch (_) {
-    result = null;
-  }
-  if (!result) {
-    const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
-    const decrypted = Buffer.concat([decipher.update(buf), decipher.final()]).toString('utf8');
-    result = JSON.parse(decrypted);
-  }
-  const dfid = kugouSafeGet(result, ['data', 'dfid'], '');
-  if (dfid) auth.dfid = dfid;
-  return result;
+  // 归口到 kugou-api.js 的单一实现（lite 身份 + lite RSA 公钥）；成功后把 dfid 写回 cookie 存档
+  const dfid = await registerKugouCloudDevice(serializeCookieObject(auth));
+  auth.dfid = dfid;
+  saveKugouAuth(Object.assign(kugouCookieObject(), { dfid }));
+  return { status: 1, data: { dfid } };
 }
 
 async function handleKugouLoginQrCheck(key) {

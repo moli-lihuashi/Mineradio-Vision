@@ -38,27 +38,6 @@ async function waitForHomeDiscoverIdle(timeout) {
     await new Promise(function(resolve){ setTimeout(resolve, 80); });
   }
 }
-async function playHomeDaily() {
-  prepareLeaveHomeForPlayback();
-  if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
-    showLoginModal({ source: 'home-daily' });
-    return;
-  }
-  await waitForHomeDiscoverIdle();
-  if (!homeDiscoverState.loaded || (!homeDiscoverState.songs.length && !homeDiscoverState.loading)) {
-    await loadHomeDiscover(true);
-  }
-  if (!homeDiscoverState.songs.length) {
-    runHomeSearch('每日推荐');
-    return;
-  }
-  playQueue = homeDiscoverState.songs.map(cloneSong);
-  currentIdx = 0;
-  safeRenderQueuePanel('home-daily');
-  safeShelfRebuild('home-daily', true);
-  forcePlaybackControlsInteractive();
-  playQueueAt(0).catch(function(e){ console.warn('[HomeDailyPlay]', e); });
-}
 async function playHomePrivateRadio() {
   prepareLeaveHomeForPlayback();
   if (!hasAnyPlatformLogin() && !homeDiscoverState.loggedIn) {
@@ -89,7 +68,7 @@ async function playHomeKugouGuessLike() {
   prepareLeaveHomeForPlayback();
   if (typeof showToast === 'function') showToast('正在生成猜你喜欢…');
   try {
-    var data = await apiJson('/api/home/recommend?limit=12', { timeoutMs: 25000 });
+    var data = await apiJson('/api/home/recommend', { timeoutMs: 25000 });
     var songs = (data && data.songs) || [];
     if (!songs.length) {
       var msg = (data && data.error === 'NO_PLATFORM_LOGIN')
@@ -115,21 +94,6 @@ async function playHomeKugouGuessLike() {
     if (typeof showToast === 'function') showToast('猜你喜欢加载失败，已切换到私人电台');
     playHomePrivateRadio();
   }
-}
-function playHomeSong(index) {
-  prepareLeaveHomeForPlayback();
-  var song = homeDiscoverState.songs[index];
-  if (!song) {
-    if (index > 0) playHomePrivateRadio();
-    else playHomeDaily();
-    return;
-  }
-  playQueue = homeDiscoverState.songs.map(cloneSong);
-  currentIdx = Math.max(0, Math.min(playQueue.length - 1, index));
-  safeRenderQueuePanel('home-song-card');
-  safeShelfRebuild('home-song-card', true);
-  forcePlaybackControlsInteractive();
-  playQueueAt(currentIdx).catch(function(e){ console.warn('[HomeSongPlay]', e); });
 }
 function openHomePlaylist(index) {
   prepareLeaveHomeForPlayback();

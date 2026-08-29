@@ -27,7 +27,10 @@ module.exports = function register(ctx) {
     // 9.18: 猜你喜欢 — 真推荐聚合（网易云日推 > 汽水 feed > 酷狗真推荐 fallback）
     if (pn === '/api/home/recommend') {
       try {
-        const limit = Math.max(1, Math.min(20, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
+        // limit 缺省 = 不限制：上游给多少返多少；显式传 limit 才截断（上限 200）
+        const limitParam = parseInt(url.searchParams.get('limit') || '0', 10) || 0;
+        const limit = limitParam > 0 ? Math.min(200, limitParam) : 0;
+        const cut = (songs) => (limit > 0 ? songs.slice(0, limit) : songs);
         const tried = [];
         // 1. 网易云每日推荐（真推荐算法，基于听歌历史）
         if (userCookie) {
@@ -36,7 +39,7 @@ module.exports = function register(ctx) {
             const disc = await handleDiscoverHome();
             const songs = (disc && disc.dailySongs) || [];
             if (songs.length) {
-              sendJSON(res, { provider: 'recommend', source: 'netease-daily', loggedIn: true, songs: songs.slice(0, limit), updatedAt: Date.now() });
+              sendJSON(res, { provider: 'recommend', source: 'netease-daily', loggedIn: true, songs: cut(songs), total: songs.length, updatedAt: Date.now() });
               return;
             }
           } catch (e) { console.warn('[HomeRecommend] netease:', e.message); }
@@ -45,10 +48,10 @@ module.exports = function register(ctx) {
         if (qishuiCookie) {
           tried.push('qishui');
           try {
-            const data = await handleQishuiFeed(limit);
+            const data = await handleQishuiFeed(limit > 0 ? limit : 200);
             const songs = (data && data.songs) || [];
             if (songs.length) {
-              sendJSON(res, { provider: 'recommend', source: 'qishui-feed', loggedIn: true, songs: songs.slice(0, limit), updatedAt: Date.now() });
+              sendJSON(res, { provider: 'recommend', source: 'qishui-feed', loggedIn: true, songs: cut(songs), total: songs.length, updatedAt: Date.now() });
               return;
             }
           } catch (e) { console.warn('[HomeRecommend] qishui:', e.message); }
@@ -57,11 +60,11 @@ module.exports = function register(ctx) {
         if (kugouCookie) {
           tried.push('kugou');
           try {
-            const kgResult = await handleKugouGuessLike(ctx.kugouCookie, limit);
+            const kgResult = await handleKugouGuessLike(ctx.kugouCookie, limit > 0 ? limit : 20);
             const songs = (kgResult && kgResult.songs) || [];
             if (songs.length) {
               const source = kgResult.source || 'kugou-fm';
-              sendJSON(res, { provider: 'recommend', source: source, loggedIn: true, songs: songs.slice(0, limit), updatedAt: Date.now() });
+              sendJSON(res, { provider: 'recommend', source: source, loggedIn: true, songs: cut(songs), total: songs.length, updatedAt: Date.now() });
               return;
             }
           } catch (e) { console.warn('[HomeRecommend] kugou:', e.message); }

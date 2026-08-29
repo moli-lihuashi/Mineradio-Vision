@@ -42,7 +42,7 @@ try {
 </script>
 <link rel="stylesheet" href="css/index.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.1-hoverfix">
-<link rel="stylesheet" href="css/02-home/home.css?v=3.0.1-hoverfix">
+<link rel="stylesheet" href="css/02-home/home.css?v=3.0.2-petwhite">
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
@@ -190,25 +190,25 @@ try {
     </div>
 
     <div class="home-grid">
-      <button class="home-card" data-home-tone="library" type="button" onclick="openHomeLibrary()">
+      <button class="home-card" data-home-tone="library" data-card-id="library" type="button" onclick="openHomeLibrary()">
         <div class="home-card-label">Library</div>
         <div class="home-card-title" id="home-weather-card-title">我的歌单</div>
         <div class="home-card-sub" id="home-weather-card-sub">打开左侧歌单库</div>
         <div class="home-card-art" id="home-weather-art"></div>
       </button>
-      <button class="home-card" data-home-tone="mix" type="button" onclick="playHomeSong(0)">
+      <button class="home-card" data-home-tone="mix" data-card-id="daily" type="button" onclick="playHomeSong(0)">
         <div class="home-card-label">Daily</div>
         <div class="home-card-title" id="home-daily-title">每日推荐</div>
         <div class="home-card-sub" id="home-daily-sub">登录后同步你的今日歌曲</div>
         <div class="home-card-art" id="home-daily-art"></div>
       </button>
-      <button class="home-card" data-home-tone="playlist" type="button" onclick="playHomeKugouGuessLike()">
+      <button class="home-card" data-home-tone="playlist" data-card-id="foryou" type="button" onclick="playHomeKugouGuessLike()">
         <div class="home-card-label">For You</div>
         <div class="home-card-title" id="home-private-title">猜你喜欢</div>
         <div class="home-card-sub" id="home-private-sub">基于听歌历史的智能推荐</div>
         <div class="home-card-art" id="home-private-art"></div>
       </button>
-      <button class="home-card" id="home-continue-card" data-home-tone="mix" type="button" onclick="playHomeRecent()">
+      <button class="home-card" id="home-continue-card" data-home-tone="mix" data-card-id="continue" type="button" onclick="playHomeRecent()">
         <div class="home-card-label" id="home-continue-label">Continue</div>
         <div class="home-card-title" id="home-continue-title">继续听</div>
         <div class="home-card-sub" id="home-continue-sub">最近播放会出现在这里</div>
@@ -218,26 +218,38 @@ try {
           <div class="home-continue-progress" id="home-continue-progress" aria-hidden="true"><div class="home-continue-progress-fill" id="home-continue-progress-fill"></div></div>
         </div>
       </button>
-      <button class="home-card" data-home-tone="local" type="button" onclick="openHomeInsight()">
-        <div class="home-card-label">Profile</div>
-        <div class="home-card-title" id="home-profile-title">听歌画像</div>
-        <div class="home-card-sub" id="home-profile-sub">播放几首后生成偏好</div>
-        <div class="home-card-art" id="home-profile-art"></div>
-      </button>
-      <button class="home-card" data-home-tone="local" type="button" onclick="openHomePlatformRecommendations()">
+      <button class="home-card" data-home-tone="local" data-card-id="discover" type="button" onclick="openHomePlatformRecommendations()">
         <div class="home-card-label">Discover</div>
         <div class="home-card-title" id="home-library-title">平台推荐</div>
         <div class="home-card-sub" id="home-library-sub">网易云 / 汽水 / 酷狗 / Spotify 热门与个性化</div>
         <div class="home-card-art" id="home-library-art"></div>
       </button>
+      <div class="home-pet-card" data-home-tone="pet" data-card-id="pet" role="button" tabindex="0" onclick="homePetInteract()" title="戳戳它">
+        <div class="home-card-label" id="home-pet-label">Companion</div>
+        <canvas class="home-pet-canvas" id="home-pet-canvas" width="192" height="96"></canvas>
+        <button class="home-pet-swap" type="button" onclick="event.stopPropagation(); homePetCycleCharacter()" title="换一只伙伴">⇄</button>
+        <button class="home-pet-swap" type="button" onclick="event.stopPropagation(); homePetPickPhoto()" title="上传照片生成像素伙伴" style="right:44px">📷</button>
+        <div class="home-card-sub" id="home-pet-status">醒来 · 陪着你</div>
+      </div>
     </div>
 
     <div class="home-rail">
-      <div class="home-section-head">
-        <div class="home-section-title" id="home-rail-title">为你准备</div>
-        <div class="home-section-note" id="home-rail-note">正在整理推荐</div>
+      <div class="listening-today-card" id="listening-today-card">
+        <div class="lt-head">
+          <div class="lt-kicker">LISTENING TODAY · 今日聆听</div>
+          <button class="lt-preference" type="button" onclick="openHomeInsight()">查看偏好</button>
+        </div>
+        <div class="lt-stats">
+          <div class="lt-stat lt-side" id="lt-stat-duration"><strong id="lt-duration-value">0 分钟</strong><span>聆听时长</span></div>
+          <div class="lt-middle">
+            <button class="lt-stat lt-today" id="lt-stat-today" type="button" onclick="toggleListeningTodayExpand()" title="展开最近听过的 20 首">
+              <strong id="lt-today-count">0 首</strong><span>今日歌曲 · 点击展开</span>
+            </button>
+            <div class="lt-strip" id="lt-strip"></div>
+          </div>
+          <div class="lt-stat lt-side" id="lt-stat-streak"><strong id="lt-streak-value">—</strong><span id="lt-streak-label">连续聆听</span></div>
+        </div>
       </div>
-      <div id="home-tile-row" class="home-tile-row"></div>
     </div>
   </div>
 </section>

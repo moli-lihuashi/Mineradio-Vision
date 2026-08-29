@@ -13,9 +13,11 @@ var homePlatformRecommendationState = {
   neteaseLoading: false,
   feeds: {
     qishui: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
+    qq: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
     kugou: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
     spotify: { loading: false, loaded: false, songs: [], error: '', message: '', mode: '', source: '', fallback: false, provenance: '' },
   },
+  likedAffinitySongs: [],
 };
 
 var homeDashboardDiscoveryCache = [];
@@ -202,6 +204,71 @@ function homeDashboardSongCover(song, size) {
   return typeof coverUrlWithSize === 'function' ? coverUrlWithSize(cover, size || 180) : cover;
 }
 
+// 红心亲和推荐：从当前可见的歌曲池里取已标红心的歌（首页首页签名 = liked-affinity）
+function homePlatformLikedAffinitySongs() {
+  var pool = [];
+  if (homeDiscoverState && Array.isArray(homeDiscoverState.songs)) pool = pool.concat(homeDiscoverState.songs);
+  if (Array.isArray(playQueue)) pool = pool.concat(playQueue);
+  if (Array.isArray(playlist)) pool = pool.concat(playlist);
+  var seen = Object.create(null);
+  var picked = [];
+  for (var i = 0; i < pool.length && picked.length < 6; i++) {
+    var song = pool[i];
+    if (!song || typeof isSongLiked !== 'function' || !isSongLiked(song)) continue;
+    var key = homeDashboardSongKey(song);
+    if (!key || seen[key]) continue;
+    seen[key] = true;
+    picked.push(song);
+  }
+  return picked;
+}
+
+function playHomePlatformLikedAffinitySong(index) {
+  var songs = homePlatformRecommendationState.likedAffinitySongs || [];
+  if (!songs.length) return;
+  playQueue = songs.map(function (song) { return typeof cloneSong === 'function' ? cloneSong(song) : song; });
+  currentIdx = Math.max(0, Math.min(playQueue.length - 1, Number(index) || 0));
+  homeForcedOpen = false;
+  homeSuppressed = false;
+  if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+  if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('home-liked-affinity', { scrollCurrent: true });
+  if (typeof safeShelfRebuild === 'function') safeShelfRebuild('home-liked-affinity', true);
+  if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
+  Promise.resolve(playQueueAt(currentIdx, {
+    manual: true,
+    context: { type: 'home-liked-affinity', playlistName: '红心亲和推荐' },
+  })).catch(function (error) { console.warn('[HomeLikedAffinityPlay]', error); });
+}
+
+// ===== 稳定封面：先 Image 预加载再上背景，避免封面切换闪烁；同一元素同源请求去重 =====
+var homeDashboardStableCoverRequests = new Map();
+function homeDashboardSetStableBackgroundImage(element, source) {
+  if (!element) return;
+  var requested = String(source || '');
+  var current = element.getAttribute('data-stable-cover-key') || '';
+  var painted = element.style.backgroundImage || '';
+  if (requested === current && painted) return;
+  element.setAttribute('data-stable-cover-key', requested);
+  if (!requested) {
+    element.style.backgroundImage = '';
+    return;
+  }
+  var image = new Image();
+  image.onload = function () {
+    if (element.getAttribute('data-stable-cover-key') !== requested) return;
+    element.style.backgroundImage = 'url("' + requested + '")';
+  };
+  image.src = requested;
+}
+
+function applyHomeDashboardStableCovers(root) {
+  if (!root || !root.querySelectorAll) return;
+  var nodes = root.querySelectorAll('[data-cover-src]');
+  for (var i = 0; i < nodes.length; i++) {
+    homeDashboardSetStableBackgroundImage(nodes[i], nodes[i].getAttribute('data-cover-src'));
+  }
+}
+
 function compactHomeCount(value) {
   var n = Number(value) || 0;
   if (n >= 100000000) return (n / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
@@ -228,8 +295,15 @@ function homePlatformRecommendationFeedConfig(source) {
       readyText: '来自汽水推荐 Feed',
       playlistName: '汽水推荐 Feed',
     },
+    qq: {
+      endpoint: '/api/qq/recommendations?limit=12',
+      sectionTitle: 'QQ 推荐',
+      cardLabel: 'QQ 音乐推荐',
+      readyText: '来自 QQ 音乐推荐',
+      playlistName: 'QQ 音乐推荐',
+    },
     kugou: {
-      endpoint: '/api/kugou/recommend?limit=12',
+      endpoint: '/api/kugou/recommendations?limit=12',
       sectionTitle: '猜你喜欢',
       cardLabel: '酷狗私人FM推荐',
       readyText: '来自酷狗私人FM推荐',
@@ -261,10 +335,10 @@ function homePlatformRecommendationCard(kind, index, item, label) {
     sub = homeDashboardSubtitle(item) || label;
   }
   var cover = item.cover || item.picUrl || homeDashboardSongCover(item, 180) || '';
-  var coverStyle = cover ? ' style="background-image:url(&quot;' + escHtml(cssImageUrl(cover)) + '&quot;)"' : '';
+  var coverAttr = cover ? ' data-cover-src="' + escHtml(cssImageUrl(cover)) + '"' : '';
   return '<button class="home-platform-recommend-card" type="button" data-home-recommend-kind="' + kind +
     '" data-home-recommend-index="' + index + '">' +
-    '<span class="home-platform-recommend-cover"' + coverStyle + '></span>' +
+    '<span class="home-platform-recommend-cover"' + coverAttr + '></span>' +
     '<span class="home-platform-recommend-copy"><span class="home-platform-recommend-label">' + escHtml(label) +
     '</span><strong>' + escHtml(title) + '</strong><small>' + escHtml(sub) + '</small></span>' +
     '<span class="home-platform-recommend-arrow" aria-hidden="true">›</span></button>';
@@ -308,6 +382,14 @@ function homePlatformRecommendationSpacer(rows, position) {
     '" aria-hidden="true" style="grid-column:1/-1;height:' + height + 'px"></span>';
 }
 
+function paintHomePlatformCovers(root) {
+  if (!root || !root.querySelectorAll) return;
+  var nodes = root.querySelectorAll('.home-platform-recommend-cover[data-cover-src]');
+  for (var i = 0; i < nodes.length; i++) {
+    homeDashboardSetStableBackgroundImage(nodes[i], nodes[i].getAttribute('data-cover-src'));
+  }
+}
+
 function renderHomePlatformDailyWindow(force) {
   if (homePlatformRecommendationState.source !== 'netease') return;
   var list = document.getElementById('home-platform-recommend-list');
@@ -330,6 +412,7 @@ function renderHomePlatformDailyWindow(force) {
   }
   html.push(homePlatformRecommendationSpacer(range.bottomRows, 'bottom'));
   grid.innerHTML = html.join('');
+  paintHomePlatformCovers(grid);
   grid.setAttribute('data-render-window', signature);
   var count = document.getElementById('home-platform-daily-count');
   if (count) count.textContent = songs.length ? ' · ' + songs.length + ' 首' : '';
@@ -365,14 +448,21 @@ function renderHomePlatformRecommendations() {
     }
     var sections = [];
     var playlists = homeDiscoverState && Array.isArray(homeDiscoverState.playlists) ? homeDiscoverState.playlists.slice(0, 6) : [];
-    var songs = homeDiscoverState && Array.isArray(homeDiscoverState.songs) ? homeDiscoverState.songs : [];
+    var songs = Array.isArray(homeDiscoverState.songs) ? homeDiscoverState.songs : [];
+    var likedAffinitySongs = homePlatformLikedAffinitySongs();
+    if (likedAffinitySongs.length) {
+      sections.push('<section data-recommend-block="liked-affinity"><h3>红心亲和推荐</h3><div class="home-platform-recommend-grid">' +
+        likedAffinitySongs.map(function (item, index) {
+          return homePlatformRecommendationCard('liked-affinity-song', index, item, '红心亲和');
+        }).join('') + '</div></section>');
+    }
     if (playlists.length) {
       sections.push('<section><h3>推荐歌单</h3><div class="home-platform-recommend-grid">' + playlists.map(function (item, index) {
         return homePlatformRecommendationCard('netease-playlist', index, item, '网易云推荐歌单');
       }).join('') + '</div></section>');
     }
     if (songs.length) {
-      sections.push('<section><h3>每日推荐<span id="home-platform-daily-count"></span></h3>' +
+      sections.push('<section data-recommend-block="personal-top"><h3>每日推荐<span id="home-platform-daily-count"></span></h3>' +
         '<div id="home-platform-daily-grid" class="home-platform-recommend-grid" role="list" aria-label="全部每日推荐"></div></section>');
     }
     if (sections.length) {
@@ -381,6 +471,7 @@ function renderHomePlatformRecommendations() {
         : '来自网易云推荐歌单';
       list.innerHTML = sections.join('');
       if (songs.length) renderHomePlatformDailyWindow(true);
+      paintHomePlatformCovers(list);
     } else {
       status.textContent = homeDiscoverState && homeDiscoverState.error ? '网易云推荐读取失败' : '网易云暂未返回推荐内容';
       status.classList.toggle('is-error', !!(homeDiscoverState && homeDiscoverState.error));
@@ -389,12 +480,14 @@ function renderHomePlatformRecommendations() {
           ? '平台本次没有返回推荐内容。'
           : '登录网易云后可读取推荐歌单与每日推荐。');
     }
+    homePlatformRecommendationState.likedAffinitySongs = likedAffinitySongs;
+    paintHomePlatformCovers(list);
     return;
   }
 
   if (source === 'qq') {
     status.textContent = homePlatformRecommendationSourceLabel(source) + '推荐接口尚未接入本构建';
-    list.innerHTML = homePlatformRecommendationEmptyHtml(source, '当前版本优先接入网易云 / 汽水 / 酷狗 / Spotify 推荐。');
+    list.innerHTML = homePlatformRecommendationEmptyHtml(source, '当前版本没有可验证的平台推荐接口，未使用关键词搜索替代。');
     return;
   }
 
@@ -412,6 +505,7 @@ function renderHomePlatformRecommendations() {
         feedState.songs.map(function (item, index) {
           return homePlatformRecommendationCard(source + '-song', index, item, feedConfig.cardLabel);
         }).join('') + '</div></section>';
+      paintHomePlatformCovers(list);
       return;
     }
     status.textContent = feedState.error ? (homePlatformRecommendationSourceLabel(source) + '推荐读取失败') : (homePlatformRecommendationSourceLabel(source) + '暂无推荐');
@@ -432,6 +526,14 @@ async function loadHomePlatformNeteaseRecommendations(force) {
       await loadHomeDiscover(!!force);
     } else if (typeof renderHomeDiscover === 'function') {
       renderHomeDiscover(force ? { forceRefresh: true } : undefined);
+    }
+    // 播客推荐已从 /api/discover-home 下线，这里按需单独拉取热门播客供首页 Rail 展示
+    if (typeof loginStatus !== 'undefined' && loginStatus && loginStatus.loggedIn && typeof apiJson === 'function') {
+      apiJson('/api/podcast/hot?limit=4', { timeoutMs: 9000 }).then(function (data) {
+        if (!homeDiscoverState) return;
+        homeDiscoverState.podcasts = (data && (data.podcasts || data.djRadios)) || [];
+        if (typeof renderHomeDiscover === 'function') renderHomeDiscover();
+      }).catch(function () { });
     }
   } catch (error) {
     console.warn('[HomePlatformNetease]', error);
@@ -548,7 +650,8 @@ function bindHomePlatformRecommendationControls() {
     closeHomePlatformRecommendations();
     if (kind === 'netease-playlist' && typeof openHomePlaylist === 'function') openHomePlaylist(index);
     else if (kind === 'netease-song' && typeof playHomeSong === 'function') playHomeSong(index);
-    else if (/^(qishui|spotify)-song$/.test(kind)) playHomePlatformFeedSong(kind.replace(/-song$/, ''), index);
+    else if (kind === 'liked-affinity-song') playHomePlatformLikedAffinitySong(index);
+    else if (/^(qishui|qq|spotify)-song$/.test(kind)) playHomePlatformFeedSong(kind.replace(/-song$/, ''), index);
   });
   if (list) list.addEventListener('scroll', scheduleHomePlatformDailyWindowRender, { passive: true });
   window.addEventListener('resize', scheduleHomePlatformDailyWindowRender, { passive: true });
@@ -596,5 +699,3 @@ function openHomeDashboardCharts() {
 function openHomeDashboardRadio() {
   openHomePlatformRecommendations();
 }
-
-bindHomePlatformRecommendationControls();

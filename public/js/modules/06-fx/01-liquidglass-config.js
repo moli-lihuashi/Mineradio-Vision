@@ -108,7 +108,7 @@ function applyHomeLiquidGlassConfig() {
   var bri = (0.94 + cfg.brightness).toFixed(2);
   var filter = 'blur(' + blurPx + 'px) saturate(' + sat + ') brightness(' + bri + ')';
   var boxShadow = '0 16px 48px rgba(0,0,0,.34),0 0 0 1px rgba(255,255,255,.06),inset 0 1px 0 rgba(255,255,255,.10),inset 0 -12px 28px rgba(0,0,0,.18)';
-  var els = document.querySelectorAll('.home-card, .home-tile, .home-mosaic-cell');
+  var els = document.querySelectorAll('.home-card, .home-tile, .home-mosaic-cell, .listening-today-card');
   // 注意：不使用 inline !important，否则会盖住 fx-glass.css 里 body.lg-degraded .home-card.lg-active
   // 的 !important 降级磨砂背景，导致 WebGL 失败时卡片透明落回黑色。
   // background 不在这里写死 transparent：lg-active 时由 activateHomeGlass 写普通 inline，
@@ -608,6 +608,180 @@ function bootstrapLiquidGlass() {
       requestIdleCallback(warmupHomeGlass, { timeout: 3500 });
     } else {
       setTimeout(warmupHomeGlass, 2200);
+    }
+  }
+
+  // === 首页右下「今日聆听」卡：root=.home-rail，glass 必须是其直接子节点（库硬约束）===
+  var ltRail = document.querySelector('.home-rail');
+  function collectLtGlassElements(root) {
+    if (!root) return [];
+    return Array.prototype.filter.call(root.children || [], function (el) {
+      return el && el.classList && el.classList.contains('listening-today-card');
+    });
+  }
+  var ltCards = collectLtGlassElements(ltRail);
+  if (ltRail && ltCards.length) {
+    var ltState = 'idle';
+    var ltInstance = null;
+    var ltCfg = null;
+
+    function buildLtCfg() {
+      var preset = window.LiquidGlassPresets && window.LiquidGlassPresets.listeningToday
+        ? window.LiquidGlassPresets.listeningToday : {};
+      var cfg = Object.assign({}, preset);
+      var fx = window.fx || {};
+      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
+      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
+      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
+      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
+      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
+      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
+      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
+      return applyLiquidGlassProfile(cfg, 'home');
+    }
+
+    function warmupLtGlass() {
+      if (ltState !== 'idle') return;
+      ltCards = collectLtGlassElements(ltRail);
+      if (!ltCards.length) return;
+      ltState = 'warming';
+      ltCfg = buildLtCfg();
+      LiquidGlass.init({
+        root: ltRail,
+        glassElements: ltCards.slice(),
+        defaults: {
+          cornerRadius: ltCfg.cornerRadius || 18,
+          zRadius: ltCfg.zRadius || 10,
+          opacity: 1,
+          distortion: 0
+        }
+      }).then(function (instance) {
+        ltInstance = instance;
+        ltCards.forEach(function (el) {
+          el.dataset.config = JSON.stringify(ltCfg);
+        });
+        ltState = 'ready';
+        console.log('[LiquidGlass] ListeningToday card pre-warmed');
+        activateLtGlass();
+      }).catch(function (e) {
+        console.warn('[LiquidGlass] ListeningToday warmup failed:', e);
+        ltState = 'idle';
+      });
+    }
+
+    function activateLtGlass() {
+      if (document.body.classList.contains('splash-active')) return;
+      if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) {
+        // 降级交给 CSS 回退；勿 destroy 实例，否则恢复后卡片透明失效
+        if (ltInstance) {
+          ltInstance._running = false;
+          if (ltInstance._rafId) {
+            try { cancelAnimationFrame(ltInstance._rafId); } catch (_) {}
+            ltInstance._rafId = null;
+          }
+        }
+        return;
+      }
+      if (ltState === 'active' && ltInstance) {
+        ensureLiquidGlassRunning(ltInstance);
+        return;
+      }
+      if (ltState === 'ready' && ltInstance) {
+        if (!liquidGlassInstanceAlive(ltInstance, ltCards)) {
+          ltInstance = null;
+          ltState = 'idle';
+          warmupLtGlass();
+          return;
+        }
+        ltCards.forEach(function (el) {
+          el.style.background = 'transparent';
+          el.style.backdropFilter = 'none';
+          el.style.webkitBackdropFilter = 'none';
+          el.classList.add('lg-active');
+          ltInstance.markChanged(el);
+        });
+        ltState = 'active';
+        ensureLiquidGlassRunning(ltInstance);
+        mgr.register('listeningToday', {
+          instance: ltInstance,
+          elements: ltCards.slice(),
+          config: ltCfg,
+          root: ltRail,
+          presetName: 'listeningToday'
+        });
+      } else if (ltState === 'idle') {
+        warmupLtGlass();
+      }
+    }
+
+    function deactivateLtGlass() {
+      if (ltState !== 'active') return;
+      ltCards.forEach(function (el) {
+        el.style.background = '';
+        el.style.backdropFilter = '';
+        el.style.webkitBackdropFilter = '';
+        el.classList.remove('lg-active');
+      });
+      // 只 detach，勿 unregister/destroy：否则降级恢复后会拿死实例把卡片刷成透明
+      if (typeof mgr.detach === 'function') mgr.detach('listeningToday');
+      else delete mgr._instances.listeningToday;
+      if (ltInstance) {
+        ltInstance._running = false;
+        if (ltInstance._rafId) {
+          try { cancelAnimationFrame(ltInstance._rafId); } catch (_) {}
+          ltInstance._rafId = null;
+        }
+      }
+      ltState = ltInstance ? 'ready' : 'idle';
+    }
+
+    var ltObserver = new MutationObserver(function () {
+      if (document.body.classList.contains('splash-active')) {
+        deactivateLtGlass();
+        return;
+      }
+      // lg-degraded：保留实例与 lg-active，靠 CSS 藏 canvas；恢复时 restart rAF
+      if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) {
+        if (ltInstance) {
+          ltInstance._running = false;
+          if (ltInstance._rafId) {
+            try { cancelAnimationFrame(ltInstance._rafId); } catch (_) {}
+            ltInstance._rafId = null;
+          }
+        }
+        return;
+      }
+      var ltVisible = document.body.classList.contains('empty-home-active')
+        || document.body.classList.contains('show-home')
+        || document.body.classList.contains('home-ready');
+      if (ltVisible) activateLtGlass();
+      else deactivateLtGlass();
+    });
+    ltObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    // FX 面板滑杆 / 性能档位变化时同步本实例
+    var prevApplyHomeCardConfig = window.applyHomeLiquidGlassCardConfig;
+    window.applyHomeLiquidGlassCardConfig = function () {
+      if (typeof prevApplyHomeCardConfig === 'function') prevApplyHomeCardConfig();
+      if (ltInstance) {
+        ltCfg = buildLtCfg();
+        ltCards.forEach(function (el) {
+          el.dataset.config = JSON.stringify(ltCfg);
+          ltInstance.markChanged(el);
+        });
+        if (ltInstance._globalDirty !== undefined) ltInstance._globalDirty = true;
+      }
+    };
+    var prevPerfRefresh = window.refreshHomeLiquidGlassAfterPerf;
+    window.refreshHomeLiquidGlassAfterPerf = function () {
+      if (typeof prevPerfRefresh === 'function') prevPerfRefresh();
+      if (ltState === 'active' || ltState === 'ready') activateLtGlass();
+    };
+
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(warmupLtGlass, { timeout: 4200 });
+    } else {
+      setTimeout(warmupLtGlass, 2600);
     }
   }
 
