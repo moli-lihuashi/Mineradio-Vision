@@ -790,10 +790,20 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
       if (contentList) contentList.update(dt);
     },
     onCoverChange: function() {
-      if (group && mode !== 'off' && uniforms.uTime.value - lastUpdate > 0.2) {
-        lastUpdate = uniforms.uTime.value;
+      if (!group || mode === 'off') return;
+      if (uniforms.uTime.value - lastUpdate <= 0.2) return;
+      lastUpdate = uniforms.uTime.value;
+      var nextSig = sig();
+      if (nextSig !== lastSig) {
         rebuild();
+        return;
       }
+      // 签名未变：只重绘已有卡面，避免整架 dispose/重建纹理
+      cards.forEach(function(c){
+        c.item = allItems[c.index] || c.item;
+        c.isCenter = Math.abs(c.index - centerSmooth) < 0.5;
+        drawCard(c, c.item);
+      });
     },
     rebuild: rebuild,
     refreshTheme: function() {

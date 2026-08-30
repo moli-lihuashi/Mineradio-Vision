@@ -256,12 +256,18 @@ function togglePlaylistPanelPinned() {
 function scrollPlaylistPanelToCurrent() {
   var panel = document.getElementById('playlist-panel');
   var list = document.getElementById('queue-list');
-  if (!panel || !list || queueViewTab !== 'queue') return;
+  if (!panel || !list || queueViewTab !== 'queue' || !playQueue.length || currentIdx < 0) return;
   var now = performance.now();
   if (panel.__lastCurrentScrollAt && now - panel.__lastCurrentScrollAt < 650) return;
   panel.__lastCurrentScrollAt = now;
+  // 虚拟列表：先跳到估算位置再渲窗口，否则 .now 可能不在 DOM
+  var listTop = Math.max(0, Number(list.offsetTop) || 0);
+  var approx = listTop + currentIdx * QUEUE_ROW_STEP - Math.max(0, (panel.clientHeight - QUEUE_ROW_STEP) * 0.34);
+  panel.scrollTop = Math.max(0, Math.min(approx, Math.max(0, panel.scrollHeight - panel.clientHeight)));
+  renderQueuePanelRows();
   requestAnimationFrame(function(){
-    smoothScrollToItem(panel, list.querySelector('.queue-item.now'), { duration: 0.28, align: 0.34 });
+    var item = list.querySelector('.queue-item.now');
+    if (item) smoothScrollToItem(panel, item, { duration: 0.28, align: 0.34 });
   });
 }
 function switchPlaylistTab(tab) {
@@ -329,6 +335,117 @@ function openPlaylistPanelTab(tab, preserve) {
   switchPlaylistTab(tab);
   setPeek(panel, true, 'pl');
 }
+function queuePanelWindowOptions() {
+  var panel = document.getElementById('playlist-panel');
+  var list = document.getElementById('queue-list');
+  var viewport = Math.max(280, Number(panel && panel.clientHeight) || Math.min(620, Math.round((window.innerHeight || 800) * 0.72)));
+  var scrollTop = 0;
+  if (panel && list && list.getBoundingClientRect && panel.getBoundingClientRect) {
+    var panelRect = panel.getBoundingClientRect();
+    var listRect = list.getBoundingClientRect();
+    scrollTop = Math.max(0, panelRect.top - listRect.top);
+  } else if (panel && list) {
+    scrollTop = Math.max(0, (Number(panel.scrollTop) || 0) - (Number(list.offsetTop) || 0));
+  }
+  return { scrollTop: scrollTop, viewport: viewport };
+}
+function miniQueueWindowOptions() {
+  var list = document.getElementById('mini-queue-list');
+  var viewport = Math.max(180, Number(list && list.clientHeight) || 260);
+  var scrollTop = Math.max(0, Number(list && list.scrollTop) || 0);
+  return { scrollTop: scrollTop, viewport: viewport };
+}
+function queueVirtualRange(total, options, rowStep, overscan) {
+  rowStep = rowStep || QUEUE_ROW_STEP;
+  overscan = overscan == null ? QUEUE_VIRTUAL_OVERSCAN : overscan;
+  var viewport = Math.max(180, Number(options && options.viewport) || 400);
+  var scrollTop = Math.max(0, Number(options && options.scrollTop) || 0);
+  var maxRows = Math.ceil(viewport / rowStep) + overscan * 2;
+  var start = Math.max(0, Math.floor(scrollTop / rowStep) - overscan);
+  var end = Math.min(total, start + maxRows);
+  start = Math.max(0, Math.min(start, Math.max(0, total - maxRows)));
+  end = Math.min(total, Math.max(end, start + maxRows));
+  return { start: start, end: end };
+}
+function queueItemHtml(song, i) {
+  var thumb = songCoverSrc(song, 60);
+  var imgTag = thumb
+    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"')
+    : '<div style="width:38px;height:38px;border-radius:6px;background:rgba(255,255,255,.06);flex-shrink:0"></div>';
+  return '<div class="queue-item' + (i === currentIdx ? ' now' : '') + '" data-queue-index="' + i + '" onclick="playQueueAt(' + i + ')">' +
+    imgTag +
+    '<div class="qi-info"><div class="qi-name">' + escHtml(song.name) + '</div><div class="qi-sub"><button class="queue-artist-link" type="button" onclick="event.stopPropagation();openQueueArtist(' + i + ')">' + escHtml(song.artist || '未知歌手') + '</button></div></div>' +
+    '<div class="qi-act">' +
+      '<button class="' + (isSongLiked(song) ? 'liked' : '') + '" onclick="event.stopPropagation();toggleLikeQueueIndex(' + i + ')" title="' + (isSongLiked(song) ? '取消红心' : '红心喜欢') + '">' + heartIconSvg() + '</button>' +
+      '<button class="queue-next" onclick="event.stopPropagation();queueIndexNext(' + i + ')" title="下一首播放">下</button>' +
+      '<button onclick="event.stopPropagation();collectQueueIndex(' + i + ')" title="收藏到歌单">' + playlistPlusIconSvg() + '</button>' +
+      '<button onclick="event.stopPropagation();removeFromQueue(' + i + ')" title="移除">×</button>' +
+    '</div>' +
+  '</div>';
+}
+function miniQueueItemHtml(song, i) {
+  var thumb = songCoverSrc(song, 60);
+  var imgTag = thumb
+    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"')
+    : '<div class="mini-queue-cover"></div>';
+  return '<div class="mini-queue-item' + (i === currentIdx ? ' now' : '') + '" data-queue-index="' + i + '" onclick="playQueueAt(' + i + ')">' +
+    imgTag +
+    '<div class="mini-queue-info"><div class="mini-queue-name">' + escHtml(song.name) + '</div><div class="mini-queue-sub">' + escHtml(song.artist || '') + '</div></div>' +
+    '<button class="mini-queue-remove mini-queue-next" onclick="event.stopPropagation();queueIndexNext(' + i + ')" title="下一首播放">下</button>' +
+    '<button class="mini-queue-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')" title="移除">×</button>' +
+  '</div>';
+}
+function queueRowsHtml(options) {
+  var total = playQueue.length;
+  if (!total) {
+    return '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">队列为空，搜索后点 + 设为下一首</div>';
+  }
+  var range = queueVirtualRange(total, options || queuePanelWindowOptions(), QUEUE_ROW_STEP, QUEUE_VIRTUAL_OVERSCAN);
+  queueVirtualState.start = range.start;
+  queueVirtualState.end = range.end;
+  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (range.start * QUEUE_ROW_STEP) + 'px"></div>';
+  html += playQueue.slice(range.start, range.end).map(function(song, localIndex){
+    return queueItemHtml(song, range.start + localIndex);
+  }).join('');
+  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, total - range.end) * QUEUE_ROW_STEP) + 'px"></div>';
+  return html;
+}
+function miniQueueRowsHtml(options) {
+  var total = playQueue.length;
+  if (!total) return '<div class="mini-queue-empty">队列为空，先搜索或打开歌单</div>';
+  var range = queueVirtualRange(total, options || miniQueueWindowOptions(), MINI_QUEUE_ROW_STEP, MINI_QUEUE_VIRTUAL_OVERSCAN);
+  miniQueueVirtualState.start = range.start;
+  miniQueueVirtualState.end = range.end;
+  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (range.start * MINI_QUEUE_ROW_STEP) + 'px"></div>';
+  html += playQueue.slice(range.start, range.end).map(function(song, localIndex){
+    return miniQueueItemHtml(song, range.start + localIndex);
+  }).join('');
+  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, total - range.end) * MINI_QUEUE_ROW_STEP) + 'px"></div>';
+  return html;
+}
+function renderQueuePanelRows() {
+  var $ql = document.getElementById('queue-list');
+  if (!$ql || !playQueue.length) return;
+  $ql.innerHTML = queueRowsHtml(queuePanelWindowOptions());
+}
+function scheduleQueuePanelVirtualRender() {
+  if (queueVirtualState.raf) return;
+  queueVirtualState.raf = requestAnimationFrame(function(){
+    queueVirtualState.raf = 0;
+    if (queueViewTab !== 'queue' || !playQueue.length) return;
+    renderQueuePanelRows();
+  });
+}
+function scheduleMiniQueueVirtualRender() {
+  if (miniQueueVirtualState.raf) return;
+  miniQueueVirtualState.raf = requestAnimationFrame(function(){
+    miniQueueVirtualState.raf = 0;
+    if (!miniQueueOpen || !playQueue.length) return;
+    var $list = document.getElementById('mini-queue-list');
+    if (!$list) return;
+    $list.innerHTML = miniQueueRowsHtml(miniQueueWindowOptions());
+  });
+}
 function renderMiniQueuePanel(opts) {
   opts = opts || {};
   var $list = document.getElementById('mini-queue-list');
@@ -341,20 +458,18 @@ function renderMiniQueuePanel(opts) {
     $list.innerHTML = '<div class="mini-queue-empty">队列为空，先搜索或打开歌单</div>';
     return;
   }
-  $list.innerHTML = playQueue.map(function(song, i){
-    var thumb = songCoverSrc(song, 60);
-    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"') : '<div class="mini-queue-cover"></div>';
-    return '<div class="mini-queue-item' + (i === currentIdx ? ' now' : '') + '" onclick="playQueueAt(' + i + ')">' +
-      imgTag +
-      '<div class="mini-queue-info"><div class="mini-queue-name">' + escHtml(song.name) + '</div><div class="mini-queue-sub">' + escHtml(song.artist || '') + '</div></div>' +
-      '<button class="mini-queue-remove mini-queue-next" onclick="event.stopPropagation();queueIndexNext(' + i + ')" title="下一首播放">下</button>' +
-      '<button class="mini-queue-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')" title="移除">×</button>' +
-    '</div>';
-  }).join('');
+  if (opts.scrollCurrent && currentIdx >= 0) {
+    var approx = currentIdx * MINI_QUEUE_ROW_STEP - Math.max(0, ($list.clientHeight - MINI_QUEUE_ROW_STEP) * 0.42);
+    $list.scrollTop = Math.max(0, Math.min(approx, Math.max(0, $list.scrollHeight - $list.clientHeight)));
+  }
+  $list.innerHTML = miniQueueRowsHtml(miniQueueWindowOptions());
   if (opts.animate || opts.scrollCurrent) {
     requestAnimationFrame(function(){
       if (opts.animate) animateListItems($list, '.mini-queue-item', { x: 0, y: 6, stagger: 0.01, duration: 0.20, limit: 16 });
-      if (opts.scrollCurrent) smoothScrollToItem($list, $list.querySelector('.mini-queue-item.now'), { duration: 0.30, align: 0.42 });
+      if (opts.scrollCurrent) {
+        var nowItem = $list.querySelector('.mini-queue-item.now');
+        if (nowItem) smoothScrollToItem($list, nowItem, { duration: 0.30, align: 0.42 });
+      }
     });
   }
 }
@@ -364,31 +479,44 @@ document.addEventListener('click', function(e){
 bindSmoothQueueScrolling();
 bindPlaylistPanelLazyRender();
 bindModalBackdropClose();
+(function bindMiniQueueVirtualScroll(){
+  var list = document.getElementById('mini-queue-list');
+  if (!list || list.__queueVirtualBound) return;
+  list.__queueVirtualBound = true;
+  list.addEventListener('scroll', throttle(function(){
+    if (!miniQueueOpen) return;
+    scheduleMiniQueueVirtualRender();
+  }, 16), { passive: true });
+})();
 function renderQueuePanel(opts) {
   opts = opts || {};
   var $ql = document.getElementById('queue-list');
   var seq = ++queueRenderSeq;
   if (!playQueue.length) {
     $ql.innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">队列为空，搜索后点 + 设为下一首</div>';
+    queueVirtualState.start = -1;
+    queueVirtualState.end = -1;
     renderMiniQueuePanel();
     var panel = document.getElementById('playlist-panel');
     if (panel && (panel.classList.contains('show') || panel.classList.contains('peek')) && queueViewTab === 'queue') switchPlaylistTab('playlists');
     return;
   }
-  $ql.innerHTML = playQueue.map(function(song, i){
-    var thumb = songCoverSrc(song, 60);
-    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"') : '<div style="width:38px;height:38px;border-radius:6px;background:rgba(255,255,255,.06);flex-shrink:0"></div>';
-    return '<div class="queue-item' + (i === currentIdx ? ' now' : '') + '" onclick="playQueueAt(' + i + ')">' +
-      imgTag +
-      '<div class="qi-info"><div class="qi-name">' + escHtml(song.name) + '</div><div class="qi-sub"><button class="queue-artist-link" type="button" onclick="event.stopPropagation();openQueueArtist(' + i + ')">' + escHtml(song.artist || '未知歌手') + '</button></div></div>' +
-      '<div class="qi-act">' +
-        '<button class="' + (isSongLiked(song) ? 'liked' : '') + '" onclick="event.stopPropagation();toggleLikeQueueIndex(' + i + ')" title="' + (isSongLiked(song) ? '取消红心' : '红心喜欢') + '">' + heartIconSvg() + '</button>' +
-        '<button class="queue-next" onclick="event.stopPropagation();queueIndexNext(' + i + ')" title="下一首播放">下</button>' +
-        '<button onclick="event.stopPropagation();collectQueueIndex(' + i + ')" title="收藏到歌单">' + playlistPlusIconSvg() + '</button>' +
-        '<button onclick="event.stopPropagation();removeFromQueue(' + i + ')" title="移除">×</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
+  if (opts.scrollCurrent && currentIdx >= 0) {
+    var panelEl = document.getElementById('playlist-panel');
+    if (panelEl) {
+      var listTop = Math.max(0, Number($ql.offsetTop) || 0);
+      var approx = listTop + currentIdx * QUEUE_ROW_STEP - Math.max(0, (panelEl.clientHeight - QUEUE_ROW_STEP) * 0.34);
+      panelEl.scrollTop = Math.max(0, Math.min(approx, Math.max(0, panelEl.scrollHeight - panelEl.clientHeight)));
+    }
+  }
+  $ql.innerHTML = queueRowsHtml(queuePanelWindowOptions());
   if (opts.animate && seq === queueRenderSeq) animateVisiblePanelList($ql, '.queue-item', document.getElementById('playlist-panel'), '.queue-item.now');
+  else if (opts.scrollCurrent && seq === queueRenderSeq) {
+    requestAnimationFrame(function(){
+      var panelEl = document.getElementById('playlist-panel');
+      var nowItem = $ql.querySelector('.queue-item.now');
+      if (panelEl && nowItem) smoothScrollToItem(panelEl, nowItem, { duration: 0.28, align: 0.34 });
+    });
+  }
   renderMiniQueuePanel({ scrollCurrent: miniQueueOpen });
 }

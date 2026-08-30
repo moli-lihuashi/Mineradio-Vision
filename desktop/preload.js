@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   trimAppMemory: (pids) => ipcRenderer.invoke('mineradio-memory-trim-app', pids),
   purgeSystemMemory: (options) => ipcRenderer.invoke('mineradio-memory-purge-system', options || {}),
   configureMemoryAuto: (config) => ipcRenderer.invoke('mineradio-memory-configure-auto', config || {}),
+  setBackgroundThrottling: (enabled) => ipcRenderer.invoke('mineradio-set-background-throttling', !!enabled),
   // 缓存目录可配置
   getCacheSettings: () => ipcRenderer.invoke('mineradio-cache-get-settings'),
   chooseCacheDirectory: () => ipcRenderer.invoke('mineradio-cache-choose-directory'),

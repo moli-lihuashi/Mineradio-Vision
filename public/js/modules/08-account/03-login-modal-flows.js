@@ -274,6 +274,7 @@ function syncLoginPlatformScenery(provider, withCopy) {
 }
 function updateLoginProviderUi() {
   syncLoginPlatformScenery(loginProvider, false);
+  if (typeof syncLoginModeUi === 'function') syncLoginModeUi();
   var meta = platformMeta(loginProvider);
   var isQQ = loginProvider === 'qq';
   var isKugou = loginProvider === 'kugou';
@@ -302,6 +303,10 @@ function updateLoginProviderUi() {
   var canOpenSpotifyOAuth = !!(window.desktopWindow && typeof window.desktopWindow.openSpotifyMusicLogin === 'function');
   var spotifyBusy = !!(spotifyConfigBusy || spotifyOAuthBusy);
   var qishuiBusy = !!(qishuiOAuthBusy || qishuiTokenBusy);
+  if (modal) modal.classList.toggle('login-provider-spotify', isSpotify);
+  if (shell && !isSpotify) shell.style.display = '';
+  if (qqCookieSaveBtn && !isSpotify) qqCookieSaveBtn.style.display = '';
+  if (qqCookieInput && !isSpotify && !isQishui) qqCookieInput.rows = 3;
 
   /* ===== Qishui Branch ===== */
   if (isQishui) {
@@ -362,52 +367,49 @@ function updateLoginProviderUi() {
     if (kugouBtn) kugouBtn.classList.toggle('active', false);
     if (qishuiBtn) qishuiBtn.classList.toggle('active', false);
     if (spotifyBtn) spotifyBtn.classList.toggle('active', true);
-    if (title) title.textContent = '连接 Spotify';
+    if (title) title.textContent = spotifyLoginStatus.oauthConfigured ? '授权 Spotify' : '接入 Spotify';
     if (desc) desc.innerHTML = canOpenSpotifyOAuth
-      ? '粘贴 <b>Spotify Client ID</b> 后保存并授权，用于同步 Premium/Free 状态、歌单和 Liked Songs；播放仍按匹配源自动换源。'
-      : '当前环境不支持桌面授权桥；请在 Mineradio 桌面版中连接 Spotify。';
+      ? '用 Client ID 完成 OAuth，同步歌单与 Liked Songs；播放仍按匹配源换源。'
+      : '当前环境不支持桌面授权，请在 Mineradio 桌面版连接。';
     if (shell) {
-      shell.classList.add('web-login-preview');
-      shell.classList.remove('qq-preview', 'netease-preview');
+      shell.classList.remove('web-login-preview', 'qq-preview', 'netease-preview');
+      shell.style.display = 'none';
     }
     if (qqPanel) {
       qqPanel.classList.add('show', 'spotify-guide-panel');
+      qqPanel.style.display = '';
     }
     if (qqCookieToggle) qqCookieToggle.classList.remove('show');
-    if (qqCookieInput) qqCookieInput.placeholder = spotifyLoginStatus.oauthConfigured
-      ? '已保存 Client ID；可粘贴新的 Client ID 覆盖'
-      : '粘贴 Spotify Client ID';
+    if (qqCookieInput) {
+      qqCookieInput.rows = 1;
+      qqCookieInput.placeholder = spotifyLoginStatus.oauthConfigured
+        ? '已保存 Client ID，可粘贴新的覆盖'
+        : '粘贴 Spotify Client ID';
+    }
     if (qqCookieNote) qqCookieNote.innerHTML =
-      '<div class="spotify-guide-title">Spotify 玩家接入三步</div>' +
+      '<div class="spotify-guide-title">三步接入</div>' +
       '<div class="spotify-guide-steps">' +
-        '<span>1. 打开网页，创建 App</span>' +
-        '<span>2. 回调填 <code>' + SPOTIFY_REDIRECT_URI + '</code></span>' +
-        '<span>3. 复制 Client ID，粘到这里</span>' +
+        '<span><i>1</i>打开开发者页，创建 App</span>' +
+        '<span><i>2</i>回调填 <code title="' + SPOTIFY_REDIRECT_URI + '">' + SPOTIFY_REDIRECT_URI + '</code></span>' +
+        '<span><i>3</i>复制 Client ID，粘贴到上方</span>' +
       '</div>' +
       '<div class="spotify-guide-actions">' +
         '<button type="button" class="spotify-guide-link" onclick="openSpotifyDeveloperDashboard()">打开网页</button>' +
         '<button type="button" class="spotify-guide-link" onclick="copySpotifyRedirectUri()">复制回调</button>' +
-        '<span>PKCE 不用填 Client Secret</span>' +
+        '<em>PKCE · 不用 Client Secret</em>' +
       '</div>';
     if (qqCookieSaveBtn) {
-      qqCookieSaveBtn.disabled = spotifyBusy;
-      qqCookieSaveBtn.textContent = spotifyConfigBusy ? '保存中…' : (spotifyOAuthBusy ? '等待授权…' : '保存并授权');
+      qqCookieSaveBtn.style.display = 'none';
+      qqCookieSaveBtn.disabled = true;
     }
-    if (qqCard) {
-      qqCard.style.display = '';
-      qqCard.disabled = spotifyBusy || !canOpenSpotifyOAuth || !spotifyLoginStatus.oauthConfigured;
-      var spCardMark = qqCard.querySelector('b');
-      var spCardLabel = qqCard.querySelector('span');
-      if (spCardMark) spCardMark.textContent = 'SP';
-      if (spCardLabel) spCardLabel.textContent = spotifyOAuthBusy ? '等待 Spotify 授权' : (spotifyLoginStatus.oauthConfigured ? '打开 Spotify 授权' : '先保存 Client ID');
-    }
+    if (qqCard) qqCard.style.display = 'none';
     if (st) {
       st.className = 'preview';
       st.textContent = spotifyLoginStatusText();
     }
     if (refreshBtn) {
       refreshBtn.disabled = spotifyBusy || !canOpenSpotifyOAuth;
-      refreshBtn.textContent = spotifyConfigBusy ? '保存中…' : (spotifyOAuthBusy ? '等待授权…' : (spotifyLoginStatus.oauthConfigured ? '连接 Spotify' : '保存并授权'));
+      refreshBtn.textContent = spotifyConfigBusy ? '保存中…' : (spotifyOAuthBusy ? '等待授权…' : (spotifyLoginStatus.oauthConfigured ? '打开授权' : '保存并授权'));
       refreshBtn.onclick = spotifyLoginStatus.oauthConfigured ? openSpotifyWebLogin : submitSpotifyConfigLogin;
     }
     return;

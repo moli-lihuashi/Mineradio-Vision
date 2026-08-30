@@ -679,6 +679,7 @@ function applyRendererPowerMode() {
   var height = deep ? 4 : Math.max(1, innerHeight);
   var pixelRatio = getRenderPixelRatio();
   var mode = deep ? 'sleep' : 'active';
+  syncChromiumBackgroundThrottling(deep);
   if (renderPowerState.mode === mode && renderPowerState.width === width && renderPowerState.height === height && Math.abs(renderPowerState.pixelRatio - pixelRatio) < 0.001) return;
   renderPowerState = { mode: mode, width: width, height: height, pixelRatio: pixelRatio };
   renderer.setPixelRatio(pixelRatio);
@@ -692,6 +693,17 @@ function applyRendererPowerMode() {
     scheduleBackgroundCacheTrim();
     requestBackgroundAppMemoryTrim('renderer-deep-sleep', isBackgroundReleaseMode() ? 900 : 2200);
   }
+}
+var _chromiumThrottleDesired = null;
+function syncChromiumBackgroundThrottling(deep) {
+  if (!window.desktopWindow || typeof window.desktopWindow.setBackgroundThrottling !== 'function') return;
+  var keepAlive = !!(fx && (fx.liveBackgroundKeep || fx.desktopLyrics || fx.wallpaperMode));
+  var shouldThrottle = !!deep && !keepAlive;
+  if (_chromiumThrottleDesired === shouldThrottle) return;
+  _chromiumThrottleDesired = shouldThrottle;
+  try {
+    window.desktopWindow.setBackgroundThrottling(shouldThrottle);
+  } catch (_) {}
 }
 function updateDesktopRuntimeState(state) {
   state = state || {};

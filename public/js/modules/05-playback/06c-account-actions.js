@@ -438,14 +438,40 @@ function renderCollectModal() {
     list.innerHTML = '<div class="collect-empty">还没有可写入的歌单</div>';
     return;
   }
-  list.innerHTML = mine.map(function (pl) {
+  collectModalPlaylists = mine;
+  list.innerHTML = collectModalRowsHtml(mine);
+  if (!list.__collectVirtualBound) {
+    list.__collectVirtualBound = true;
+    list.addEventListener('scroll', throttle(function(){
+      if (!collectModalPlaylists.length) return;
+      list.innerHTML = collectModalRowsHtml(collectModalPlaylists);
+    }, 16), { passive: true });
+  }
+  if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 12 });
+}
+var collectModalPlaylists = [];
+var COLLECT_ROW_STEP = 60;
+var COLLECT_VIRTUAL_OVERSCAN = 5;
+function collectModalRowsHtml(mine) {
+  mine = mine || [];
+  var list = document.getElementById('collect-list');
+  var viewport = Math.max(160, Number(list && list.clientHeight) || 260);
+  var scrollTop = Math.max(0, Number(list && list.scrollTop) || 0);
+  var start = Math.max(0, Math.floor(scrollTop / COLLECT_ROW_STEP) - COLLECT_VIRTUAL_OVERSCAN);
+  var maxRows = Math.ceil(viewport / COLLECT_ROW_STEP) + COLLECT_VIRTUAL_OVERSCAN * 2;
+  var end = Math.min(mine.length, start + maxRows);
+  start = Math.max(0, Math.min(start, Math.max(0, mine.length - maxRows)));
+  end = Math.min(mine.length, Math.max(end, start + maxRows));
+  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (start * COLLECT_ROW_STEP) + 'px"></div>';
+  html += mine.slice(start, end).map(function (pl) {
     var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
     return '<div class="collect-item" data-collect-pid="' + escAttr(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
       (thumb ? imgTagFromSrc(thumb) : '<div class="cover-placeholder"></div>') +
       '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (pl.trackCount || 0) + ' 首</div></div>' +
     '</div>';
   }).join('');
-  if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
+  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, mine.length - end) * COLLECT_ROW_STEP) + 'px"></div>';
+  return html;
 }
 function setCollectBusyPid(pid, busy) {
   var list = document.getElementById('collect-list');

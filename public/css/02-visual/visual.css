@@ -61,6 +61,15 @@ body.empty-home-active.diy-mode #search-area:not(.has-results) #search-mode-tabs
 .podcast-back-btn:hover{color:#fff0bf;border-color:rgba(244,210,138,.35);background:rgba(244,210,138,.10)}
 .search-result .add-btn{width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:rgba(255,255,255,.55);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s}
 .search-result .add-btn:hover{background:rgba(0,245,212,.12);color:#eafffb;border-color:rgba(0,245,212,.34)}
+.search-empty{padding:18px 16px 20px;text-align:center;color:rgba(255,255,255,.38);font-size:12px;letter-spacing:.2px}
+.search-empty-loading{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:14px 14px 16px}
+.search-empty-shimmer{height:12px;border-radius:8px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));background-size:220% 100%;animation:searchEmptyShimmer 1.35s ease-in-out infinite}
+.search-empty-shimmer:nth-child(1){width:78%}
+.search-empty-shimmer:nth-child(2){width:62%;animation-delay:.12s}
+.search-empty-shimmer:nth-child(3){width:48%;animation-delay:.24s}
+.search-empty-text{margin-top:4px;color:rgba(255,255,255,.42);font-size:11.5px}
+@keyframes searchEmptyShimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
+.podcast-program-virtual{display:flex;flex-direction:column}
 
 html.simple-mode-preload #search-mode-tabs,
 html.simple-mode-preload #upload-actions,

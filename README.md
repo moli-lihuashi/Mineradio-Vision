@@ -40,6 +40,8 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 - **天气雨滴与 Wallpaper 集成**：天气雨滴视觉、Wallpaper Engine 库浏览与视频 / 图片背景。
 - **Home 布局升级**：首页 Hero 网格与卡片体系重设计，信息层级与视觉节奏更清晰。
 - **卡片宠物「像素伙伴」**：Home 桌宠卡片，支持上传照片像素化为自定义专属伙伴（基于 [Lew1sWong/claude-pet](https://github.com/Lew1sWong/claude-pet) MIT 许可集成）。
+- **玻璃控件体系**：FX / 登录滑动玻璃选中胶囊、音量玻璃滑块，按下放大、松开弹簧缩回的质感交互。
+- **登录页单页布局**：「平台 → 方式 → 操作」流程化设计，多平台统一登录管理。
 - 继承原项目的歌词舞台、粒子舞台、电影镜头、3D 歌单架等核心视觉体验。
 
 ### 架构与工程

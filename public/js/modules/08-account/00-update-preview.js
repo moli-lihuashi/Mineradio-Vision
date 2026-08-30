@@ -60,7 +60,11 @@ async function checkLatestUpdate() {
   } catch (e) {
     updatePreviewState.preview = true;
     updatePreviewState.updateAvailable = false;
-    updatePreviewState.hero = '当前版本，更新检测已就绪。';
+    updatePreviewState.status = 'check-failed';
+    updatePreviewState.errorReason = 'CHECK_FAILED';
+    updatePreviewState.errorDetail = String((e && e.message) || e || '');
+    updatePreviewState.hero = '更新检测失败，请检查网络后重试。';
+    updatePreviewState.notes = ['点击下方可重新检测', updatePreviewState.errorDetail ? ('详情：' + updatePreviewState.errorDetail.slice(0, 80)) : '网络或镜像暂时不可用'];
     renderUpdatePreviewPanel();
     setUpdatePreviewVisible(true);
   }
@@ -69,6 +73,9 @@ async function checkLatestUpdate() {
 function applyLatestUpdateInfo(data) {
   data = data || {};
   var release = data.release || {};
+  updatePreviewState.status = 'idle';
+  updatePreviewState.errorReason = '';
+  updatePreviewState.errorDetail = '';
   updatePreviewState.currentVersion = data.currentVersion || updatePreviewState.currentVersion;
   updatePreviewState.version = data.latestVersion || release.version || updatePreviewState.currentVersion;
   updatePreviewState.configured = !!data.configured;
@@ -135,7 +142,7 @@ function syncUpdatePreviewStateClass() {
   var modal = document.querySelector('#update-modal .update-modal');
   var isDownloading = updatePreviewState.status === 'downloading';
   var isReady = updatePreviewState.status === 'ready';
-  var isError = updatePreviewState.status === 'error';
+  var isError = updatePreviewState.status === 'error' || updatePreviewState.status === 'check-failed';
   var isOpening = updatePreviewState.status === 'opening';
   var isPatch = updatePreviewState.mode === 'patch';
   if (entry) {
@@ -151,7 +158,8 @@ function syncUpdatePreviewStateClass() {
   var canDownloadUpdate = updatePreviewState.configured && updatePreviewState.updateAvailable && updatePreviewState.downloadUrl;
   var canOpenRelease = updatePreviewState.configured && updatePreviewState.updateAvailable && !updatePreviewState.downloadUrl && updatePreviewState.releaseUrl;
   if (label) {
-    if (isDownloading) label.textContent = (isPatch ? '快速补丁 ' : '正在下载 ') + Math.round(updatePreviewState.progress) + '%';
+    if (updatePreviewState.status === 'check-failed') label.textContent = '重新检测更新';
+    else if (isDownloading) label.textContent = (isPatch ? '快速补丁 ' : '正在下载 ') + Math.round(updatePreviewState.progress) + '%';
     else if (isOpening) label.textContent = '正在打开安装包';
     else if (isError && updatePreviewState.mode === 'patch' && updatePreviewState.downloadUrl) label.textContent = '下载完整安装包';
     else if (isError) label.textContent = updatePreviewState.mode === 'installer' ? '重试下载' : '重试更新';
@@ -165,7 +173,8 @@ function syncUpdatePreviewStateClass() {
   if (btn) btn.disabled = false;
   var foot = document.getElementById('update-footnote');
   if (foot) {
-    if (isDownloading) foot.textContent = (updatePreviewState.message || (isPatch ? '正在下载快速补丁' : '正在下载完整安装包')) + (updateProgressDetailText() ? ' · ' + updateProgressDetailText() : '');
+    if (updatePreviewState.status === 'check-failed') foot.textContent = '检测失败：' + (updatePreviewState.errorDetail || updatePreviewState.errorReason || '请检查网络或代理后重试');
+    else if (isDownloading) foot.textContent = (updatePreviewState.message || (isPatch ? '正在下载快速补丁' : '正在下载完整安装包')) + (updateProgressDetailText() ? ' · ' + updateProgressDetailText() : '');
     else if (isError) foot.textContent = '下载失败：' + (updatePreviewState.errorReason || updatePreviewState.errorDetail || updatePreviewState.message || '请稍后重试') + (updatePreviewState.failedAttempts && updatePreviewState.failedAttempts.length ? ' · 已尝试 ' + updatePreviewState.failedAttempts.length + ' 条线路' : '');
     else if (isReady && isPatch) foot.textContent = updatePreviewState.restartRequired ? '快速补丁已应用，重启 Mineradio 后生效。' : '快速补丁已应用。';
     else if (isReady) foot.textContent = updatePreviewState.cached ? '已复用上次校验通过的安装包，不会重复下载。' : '安装包已准备好，点击按钮后再打开安装。';
@@ -453,6 +462,14 @@ async function openDownloadedUpdateInstaller(filePath) {
 }
 
 function startUpdatePreviewDownload() {
+  if (updatePreviewState.status === 'check-failed') {
+    updatePreviewState.status = 'idle';
+    updatePreviewState.hero = '正在重新检测更新…';
+    updatePreviewState.notes = ['请稍候'];
+    renderUpdatePreviewPanel();
+    checkLatestUpdate();
+    return;
+  }
   var releaseLink = updatePreviewState.downloadUrl || updatePreviewState.releaseUrl;
   if (updatePreviewState.status === 'ready' && updatePreviewState.mode === 'patch') {
     restartForAppliedPatch();

@@ -30,7 +30,7 @@ const KUGOU_SKIP_CHECKS = new Set([
   'runQQVipEntitlementRegressionCheck',          // QQ VIP 功能,酷狗版无
   // runLoginEasterEggGateRegressionCheck — 酷狗版已改为「彩蛋禁用」自测，不再跳过
   'runQishuiProviderDistributionRegressionCheck',// qishui 功能,酷狗版无
-  'checkQishuiProviderGuard',                    // 引用 qishui-api.js / 06-lyrics / 04-shelf 等路径
+  'checkQishuiProviderGuard',                    // 引用 qishui-api.js / 06-lyrics / 04-shelf 等作者路径
   'checkSpotifyProviderGuard',                   // 引用 spotify provider 路径
   'checkQQVipStatusSyncGuard',                   // QQ VIP 状态同步
   // 批 2 排查结果(2026-08-07):18 项中仅 checkVolumeWheelStepGuard 解绑(路径OK+内容匹配);

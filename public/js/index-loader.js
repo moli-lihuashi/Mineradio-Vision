@@ -180,6 +180,7 @@
     'js/modules/06-fx/02-wallpaper-engine-fns.js',
     'js/modules/06-fx/03-liquidglass-perf.js',
     'js/modules/06-fx/04-liquidglass-plugin-api.js',
+    'js/modules/06-fx/05-prismal-chrome.js',
     'js/modules/07-playback/00-spotify-provider.js',
     'js/modules/08-account/00-login-easter-egg.js'
   ]);

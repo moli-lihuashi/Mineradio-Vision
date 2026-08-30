@@ -385,12 +385,41 @@ function saveQishuiCookie(c) {
 }
 
 // ---------- 工具 ----------
+function staticCacheControlForPath(filePath) {
+  const rel = String(filePath || '').replace(/\\/g, '/');
+  if (/\/public\/index\.html$/i.test(rel) || /\/index\.html$/i.test(rel)) {
+    return 'no-store, no-cache, must-revalidate';
+  }
+  if (/\/(js\/modules|vendor|css|fonts|assets)\//i.test(rel) ||
+      /\.(?:js|css|woff2?|ttf|otf|png|jpe?g|gif|webp|svg|ico|mp4|webm|json)$/i.test(rel)) {
+    // 配合 index-loader 的 ?v=version 长缓存；无 query 时靠 ETag 304
+    return 'public, max-age=3600, stale-while-revalidate=86400';
+  }
+  return 'public, max-age=300';
+}
 function serveStatic(res, filePath) {
   const ext = path.extname(filePath);
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); res.end('Not Found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'text/plain' });
-    res.end(data);
+  fs.stat(filePath, (statErr, st) => {
+    if (statErr || !st || !st.isFile()) { res.writeHead(404); res.end('Not Found'); return; }
+    const etag = 'W/"' + st.size + '-' + Number(st.mtimeMs || st.mtime.getTime()) + '"';
+    const inm = res.req && res.req.headers && res.req.headers['if-none-match'];
+    if (inm && inm === etag) {
+      res.writeHead(304, {
+        'ETag': etag,
+        'Cache-Control': staticCacheControlForPath(filePath),
+      });
+      res.end();
+      return;
+    }
+    fs.readFile(filePath, (err, data) => {
+      if (err) { res.writeHead(404); res.end('Not Found'); return; }
+      res.writeHead(200, {
+        'Content-Type': MIME[ext] || 'text/plain',
+        'Cache-Control': staticCacheControlForPath(filePath),
+        'ETag': etag,
+      });
+      res.end(data);
+    });
   });
 }
 function serveIndexHtml(res, filePath) {
@@ -400,7 +429,10 @@ function serveIndexHtml(res, filePath) {
     const out = html.includes('<head>')
       ? html.replace('<head>', '<head>' + inject)
       : (html.includes('</head>') ? html.replace('</head>', inject + '</head>') : inject + html);
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    });
     res.end(out);
   });
 }
@@ -2058,32 +2090,71 @@ async function requireLogin(res) {
 // ---------- 业务: 搜索 ----------
 //   优先用 cloudsearch (新接口, 字段更全, picUrl 更稳定)
 //   对于仍然缺失封面的歌曲, 用 song_detail 批量补齐
-async function handleSearch(keywords, limit) {
-  console.log('[Search]', keywords, 'limit:', limit);
-  const result = await cloudsearch({ keywords, limit, cookie: userCookie });
-  const songs = result.body && result.body.result && result.body.result.songs ? result.body.result.songs : [];
+const SEARCH_RESULT_POSITIVE_TTL_MS = 10 * 60 * 1000;
+const SEARCH_RESULT_NEGATIVE_TTL_MS = 60 * 1000;
+const SEARCH_RESULT_CACHE_MAX = 128;
+const searchResultCache = new Map();
+const searchResultInflight = new Map();
 
-  let mapped = songs.map(s => {
-    return mapSongRecord(s);
-  });
-
-  // 兜底: 补齐缺失的封面
-  const missing = mapped.filter(s => !s.cover).map(s => s.id);
-  if (missing.length) {
-    try {
-      console.log('[Search] backfilling covers for', missing.length, 'songs');
-      const dd = await song_detail({ ids: missing.join(','), cookie: userCookie });
-      const songsArr = (dd.body && dd.body.songs) || [];
-      const idToPic = {};
-      songsArr.forEach(s => {
-        const pic = (s.al && s.al.picUrl) || (s.album && s.album.picUrl) || '';
-        if (pic) idToPic[s.id] = pic;
-      });
-      mapped = mapped.map(s => s.cover ? s : { ...s, cover: idToPic[s.id] || '' });
-    } catch (e) { console.warn('[Search] backfill failed:', e.message); }
+function searchResultCacheKey(keywords, limit) {
+  return String(keywords || '').trim().toLowerCase() + '|' + String(limit || 30) + '|' + (userCookie ? '1' : '0');
+}
+function readTtlCache(map, key, posTtl, negTtl) {
+  const entry = map.get(key);
+  if (!entry) return null;
+  const ttl = entry.negative ? negTtl : posTtl;
+  if (Date.now() - entry.at > ttl) {
+    map.delete(key);
+    return null;
   }
+  return entry;
+}
+function writeTtlCache(map, key, value, negative, maxSize) {
+  map.set(key, { at: Date.now(), value: value, negative: !!negative });
+  while (map.size > (maxSize || 128)) map.delete(map.keys().next().value);
+}
 
-  return mapped;
+async function handleSearch(keywords, limit) {
+  const key = searchResultCacheKey(keywords, limit);
+  const cached = readTtlCache(searchResultCache, key, SEARCH_RESULT_POSITIVE_TTL_MS, SEARCH_RESULT_NEGATIVE_TTL_MS);
+  if (cached) return cached.value;
+  if (searchResultInflight.has(key)) return searchResultInflight.get(key);
+
+  const job = (async () => {
+    console.log('[Search]', keywords, 'limit:', limit);
+    const result = await cloudsearch({ keywords, limit, cookie: userCookie });
+    const songs = result.body && result.body.result && result.body.result.songs ? result.body.result.songs : [];
+
+    let mapped = songs.map(s => {
+      return mapSongRecord(s);
+    });
+
+    // 兜底: 补齐缺失的封面
+    const missing = mapped.filter(s => !s.cover).map(s => s.id);
+    if (missing.length) {
+      try {
+        console.log('[Search] backfilling covers for', missing.length, 'songs');
+        const dd = await song_detail({ ids: missing.join(','), cookie: userCookie });
+        const songsArr = (dd.body && dd.body.songs) || [];
+        const idToPic = {};
+        songsArr.forEach(s => {
+          const pic = (s.al && s.al.picUrl) || (s.album && s.album.picUrl) || '';
+          if (pic) idToPic[s.id] = pic;
+        });
+        mapped = mapped.map(s => s.cover ? s : { ...s, cover: idToPic[s.id] || '' });
+      } catch (e) { console.warn('[Search] backfill failed:', e.message); }
+    }
+
+    writeTtlCache(searchResultCache, key, mapped, !mapped.length, SEARCH_RESULT_CACHE_MAX);
+    return mapped;
+  })();
+
+  searchResultInflight.set(key, job);
+  try {
+    return await job;
+  } finally {
+    searchResultInflight.delete(key);
+  }
 }
 
 const NETEASE_SOURCE_MATCH_POSITIVE_TTL_MS = 12 * 60 * 60 * 1000;
@@ -2354,7 +2425,12 @@ function mapDailyRecommendationSongs(raw) {
     .filter(Boolean);
 }
 
-async function handleDiscoverHome() {
+const DISCOVER_HOME_TTL_MS = 3 * 60 * 1000;
+const discoverHomeCache = new Map();
+const discoverHomeInflight = new Map();
+
+async function handleDiscoverHome(opts) {
+  opts = opts || {};
   const info = await getLoginInfo();
   const loggedIn = !!(info && info.loggedIn);
   if (!loggedIn) {
@@ -2370,47 +2446,65 @@ async function handleDiscoverHome() {
       updatedAt: Date.now(),
     };
   }
-  // 播客推荐已下线（前端按需走 /api/podcast/hot）；日推全量返回，前端虚拟化负责窗口化
-  const tasks = [
-    personalized({ limit: 8, cookie: userCookie, timestamp: Date.now() }),
-    recommend_resource({ cookie: userCookie, timestamp: Date.now() }),
-    recommend_songs({ cookie: userCookie, timestamp: Date.now() }),
-  ];
-  const result = await Promise.allSettled(tasks);
+  const cacheKey = String(info.userId || 'user') + '|' + (userCookie ? crypto.createHash('md5').update(String(userCookie)).digest('hex').slice(0, 10) : '0');
+  if (!opts.force) {
+    const cached = readTtlCache(discoverHomeCache, cacheKey, DISCOVER_HOME_TTL_MS, DISCOVER_HOME_TTL_MS);
+    if (cached) return cached.value;
+    if (discoverHomeInflight.has(cacheKey)) return discoverHomeInflight.get(cacheKey);
+  }
 
-  const personalizedBody = result[0].status === 'fulfilled' && result[0].value && result[0].value.body || {};
-  const publicPlaylists = (personalizedBody.result || personalizedBody.data || [])
-    .map(pl => mapDiscoverPlaylist(pl, '推荐歌单'))
-    .filter(pl => pl.id && pl.name)
-    .slice(0, 8);
+  const job = (async () => {
+    // 播客推荐已下线（前端按需走 /api/podcast/hot）；日推全量返回，前端虚拟化负责窗口化
+    const tasks = [
+      personalized({ limit: 8, cookie: userCookie, timestamp: Date.now() }),
+      recommend_resource({ cookie: userCookie, timestamp: Date.now() }),
+      recommend_songs({ cookie: userCookie, timestamp: Date.now() }),
+    ];
+    const result = await Promise.allSettled(tasks);
 
-  let privatePlaylists = [];
-  if (result[1].status === 'fulfilled' && result[1].value) {
-    const body = result[1].value.body || {};
-    const raw = body.recommend || body.data || [];
-    privatePlaylists = (Array.isArray(raw) ? raw : [])
-      .map(pl => mapDiscoverPlaylist(pl, '私人推荐'))
+    const personalizedBody = result[0].status === 'fulfilled' && result[0].value && result[0].value.body || {};
+    const publicPlaylists = (personalizedBody.result || personalizedBody.data || [])
+      .map(pl => mapDiscoverPlaylist(pl, '推荐歌单'))
       .filter(pl => pl.id && pl.name)
-      .slice(0, 6);
-  }
+      .slice(0, 8);
 
-  let dailySongs = [];
-  if (result[2].status === 'fulfilled' && result[2].value) {
-    const body = result[2].value.body || {};
-    const raw = body.data && (body.data.dailySongs || body.data.recommend) || body.recommend || [];
-    dailySongs = mapDailyRecommendationSongs(raw);
-  }
+    let privatePlaylists = [];
+    if (result[1].status === 'fulfilled' && result[1].value) {
+      const body = result[1].value.body || {};
+      const raw = body.recommend || body.data || [];
+      privatePlaylists = (Array.isArray(raw) ? raw : [])
+        .map(pl => mapDiscoverPlaylist(pl, '私人推荐'))
+        .filter(pl => pl.id && pl.name)
+        .slice(0, 6);
+    }
 
-  return {
-    loggedIn,
-    user: loggedIn ? { userId: info.userId, nickname: info.nickname || '', avatar: info.avatar || '' } : null,
-    dailySongs,
-    dailySongTotal: dailySongs.length,
-    dailySongsComplete: true,
-    playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
-    podcasts: [],
-    updatedAt: Date.now(),
-  };
+    let dailySongs = [];
+    if (result[2].status === 'fulfilled' && result[2].value) {
+      const body = result[2].value.body || {};
+      const raw = body.data && (body.data.dailySongs || body.data.recommend) || body.recommend || [];
+      dailySongs = mapDailyRecommendationSongs(raw);
+    }
+
+    const payload = {
+      loggedIn,
+      user: loggedIn ? { userId: info.userId, nickname: info.nickname || '', avatar: info.avatar || '' } : null,
+      dailySongs,
+      dailySongTotal: dailySongs.length,
+      dailySongsComplete: true,
+      playlists: privatePlaylists.concat(publicPlaylists).slice(0, 10),
+      podcasts: [],
+      updatedAt: Date.now(),
+    };
+    writeTtlCache(discoverHomeCache, cacheKey, payload, false, 16);
+    return payload;
+  })();
+
+  discoverHomeInflight.set(cacheKey, job);
+  try {
+    return await job;
+  } finally {
+    discoverHomeInflight.delete(cacheKey);
+  }
 }
 
 const QQ_MUSICU_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
@@ -5295,19 +5389,60 @@ async function resolveNeteaseSameTrackPlayback(id, loginInfo, qualityPreference,
   return null;
 }
 
+const SONG_URL_POSITIVE_TTL_MS = 5 * 60 * 1000;
+const SONG_URL_NEGATIVE_TTL_MS = 45 * 1000;
+const SONG_URL_CACHE_MAX = 256;
+const songUrlCache = new Map();
+const songUrlInflight = new Map();
+
+function songUrlCacheKey(id, loginInfo, qualityPreference, matchHints) {
+  const hints = matchHints || {};
+  const cookieMark = userCookie ? crypto.createHash('md5').update(String(userCookie)).digest('hex').slice(0, 10) : '0';
+  return [
+    String(id || ''),
+    qualityPreference || 'standard',
+    loginInfo && loginInfo.loggedIn ? '1' : '0',
+    cookieMark,
+    hints.skipDirect ? '1' : '0',
+    String(hints.name || hints.title || '').slice(0, 40),
+    String(hints.artist || '').slice(0, 40),
+  ].join('|');
+}
+
 async function handleSongUrl(id, loginInfo, qualityPreference, matchHints) {
   const hints = matchHints || {};
-  const requestDeadline = Date.now() + NETEASE_SONG_URL_TOTAL_BUDGET_MS;
-  let direct = null;
-  if (!hints.skipDirect) {
-    try {
-      direct = await promiseWithTimeout(
-        resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference),
-        Math.min(NETEASE_DIRECT_RESOLVE_BUDGET_MS + 300, Math.max(500, requestDeadline - Date.now())),
-        'NETEASE_DIRECT_RESOLVE_TIMEOUT'
-      );
-    } catch (err) {
-      const restriction = playbackRestriction('netease', 'url_unavailable', '网易云音源请求超时，已继续尝试站内同一录音版本', 'retry', { code: err.code || 'NETEASE_DIRECT_RESOLVE_TIMEOUT' });
+  const cacheKey = songUrlCacheKey(id, loginInfo, qualityPreference, hints);
+  // 带匹配提示的同曲回退结果也缓存；成功 URL 正缓存，失败短负缓存
+  const cached = readTtlCache(songUrlCache, cacheKey, SONG_URL_POSITIVE_TTL_MS, SONG_URL_NEGATIVE_TTL_MS);
+  if (cached) return cached.value;
+  if (songUrlInflight.has(cacheKey)) return songUrlInflight.get(cacheKey);
+
+  const job = (async () => {
+    const requestDeadline = Date.now() + NETEASE_SONG_URL_TOTAL_BUDGET_MS;
+    let direct = null;
+    if (!hints.skipDirect) {
+      try {
+        direct = await promiseWithTimeout(
+          resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference),
+          Math.min(NETEASE_DIRECT_RESOLVE_BUDGET_MS + 300, Math.max(500, requestDeadline - Date.now())),
+          'NETEASE_DIRECT_RESOLVE_TIMEOUT'
+        );
+      } catch (err) {
+        const restriction = playbackRestriction('netease', 'url_unavailable', '网易云音源请求超时，已继续尝试站内同一录音版本', 'retry', { code: err.code || 'NETEASE_DIRECT_RESOLVE_TIMEOUT' });
+        direct = {
+          provider: 'netease',
+          source: 'netease',
+          url: null,
+          trial: false,
+          playable: false,
+          reason: restriction.category,
+          message: restriction.message,
+          restriction,
+          error: err.code || err.message,
+        };
+      }
+    } else {
+      const restriction = playbackRestriction('netease', 'url_unavailable', '正在继续尝试网易云站内的其它同曲版本', 'retry', { code: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE' });
       direct = {
         provider: 'netease',
         source: 'netease',
@@ -5317,44 +5452,47 @@ async function handleSongUrl(id, loginInfo, qualityPreference, matchHints) {
         reason: restriction.category,
         message: restriction.message,
         restriction,
-        error: err.code || err.message,
+        error: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE',
       };
     }
-  } else {
-    const restriction = playbackRestriction('netease', 'url_unavailable', '正在继续尝试网易云站内的其它同曲版本', 'retry', { code: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE' });
-    direct = {
-      provider: 'netease',
-      source: 'netease',
-      url: null,
-      trial: false,
-      playable: false,
-      reason: restriction.category,
-      message: restriction.message,
-      restriction,
-      error: 'NETEASE_DIRECT_SKIPPED_AFTER_MATCH_FAILURE',
-    };
+    let payload;
+    if (direct && direct.url && !direct.trial) {
+      payload = direct;
+    } else {
+      const sourceMatchAttempted = !!(String(hints.name || hints.title || '').trim() && String(hints.artist || '').trim());
+      const matched = await resolveNeteaseSameTrackPlayback(id, loginInfo, qualityPreference, hints, requestDeadline);
+      if (!matched) payload = Object.assign({}, direct, { sourceMatchAttempted });
+      else {
+        payload = Object.assign({}, matched.playback, {
+          provider: 'netease',
+          source: 'netease-same-track',
+          sourceMatch: true,
+          matchKind: matched.candidate.fingerprintMatches > 0
+            ? 'netease_same_recording'
+            : (matched.candidate.officialRecommendation ? 'netease_official_alternate' : 'netease_same_track_metadata'),
+          matchedFromId: String(id || ''),
+          requestedSongId: String(id || ''),
+          resolvedNeteaseId: String(matched.candidate.song.id || ''),
+          resolvedSongId: String(matched.candidate.song.id || ''),
+          matchedSong: matched.candidate.song,
+          matchScore: Math.round(matched.candidate.score || 0),
+          fingerprintMatches: matched.candidate.fingerprintMatches || 0,
+          sourceMatchTriedIds: matched.triedIds || [String(matched.candidate.song.id || '')],
+          originalRestriction: direct && direct.restriction || null,
+        });
+      }
+    }
+    const ok = !!(payload && payload.url && !payload.trial);
+    writeTtlCache(songUrlCache, cacheKey, payload, !ok, SONG_URL_CACHE_MAX);
+    return payload;
+  })();
+
+  songUrlInflight.set(cacheKey, job);
+  try {
+    return await job;
+  } finally {
+    songUrlInflight.delete(cacheKey);
   }
-  if (direct && direct.url && !direct.trial) return direct;
-  const sourceMatchAttempted = !!(String(hints.name || hints.title || '').trim() && String(hints.artist || '').trim());
-  const matched = await resolveNeteaseSameTrackPlayback(id, loginInfo, qualityPreference, hints, requestDeadline);
-  if (!matched) return Object.assign({}, direct, { sourceMatchAttempted });
-  return Object.assign({}, matched.playback, {
-    provider: 'netease',
-    source: 'netease-same-track',
-    sourceMatch: true,
-    matchKind: matched.candidate.fingerprintMatches > 0
-      ? 'netease_same_recording'
-      : (matched.candidate.officialRecommendation ? 'netease_official_alternate' : 'netease_same_track_metadata'),
-    matchedFromId: String(id || ''),
-    requestedSongId: String(id || ''),
-    resolvedNeteaseId: String(matched.candidate.song.id || ''),
-    resolvedSongId: String(matched.candidate.song.id || ''),
-    matchedSong: matched.candidate.song,
-    matchScore: Math.round(matched.candidate.score || 0),
-    fingerprintMatches: matched.candidate.fingerprintMatches || 0,
-    sourceMatchTriedIds: matched.triedIds || [String(matched.candidate.song.id || '')],
-    originalRestriction: direct && direct.restriction || null,
-  });
 }
 
 
@@ -5577,6 +5715,9 @@ const routeCtx = {
   get kugouCookie() { return kugouCookie; },
 };
 
+// shader 市场目录缓存：mtime 未变则复用上次结果，避免每次请求同步扫目录阻塞主进程（server 内嵌主进程）
+let shaderMarketCache = { dir: '', mtime: 0, shaders: null };
+
 const routeMatchers = [
   require('./server/routes/update')(routeCtx),
   require('./server/routes/home')(routeCtx),
@@ -5620,14 +5761,26 @@ const server = http.createServer(async (req, res) => {
   if (pn === '/api/shader-market/list') {
     try {
       const electron = require('electron');
+      const path = require('path');
+      const fs = require('fs');
       const userDataPath = electron.app ? electron.app.getPath('userData') : '';
-      const shaderDir = userDataPath ? require('path').join(userDataPath, 'plugins', 'lyric-shaders') : '';
+      const shaderDir = userDataPath ? path.join(userDataPath, 'plugins', 'lyric-shaders') : '';
+      // 目录 mtime 未变则直接复用上次结果，避免每次请求同步扫目录阻塞主进程
+      let dirMtime = 0;
+      if (shaderDir) {
+        try { dirMtime = (await fs.promises.stat(shaderDir)).mtimeMs || 0; } catch (_) {}
+      }
+      if (shaderMarketCache.dir === shaderDir && shaderMarketCache.mtime === dirMtime && shaderMarketCache.shaders) {
+        sendJSON(res, { shaders: shaderMarketCache.shaders });
+        return;
+      }
       const shaders = [];
-      if (shaderDir && require('fs').existsSync(shaderDir)) {
-        const files = require('fs').readdirSync(shaderDir).filter(f => f.endsWith('.json'));
+      if (shaderDir && dirMtime) {
+        const files = await fs.promises.readdir(shaderDir).catch(() => []);
         for (const file of files) {
+          if (!file.endsWith('.json')) continue;
           try {
-            const content = require('fs').readFileSync(require('path').join(shaderDir, file), 'utf8');
+            const content = await fs.promises.readFile(path.join(shaderDir, file), 'utf8');
             const parsed = JSON.parse(content);
             if (parsed && parsed.id && parsed.name && parsed.fragmentShader) {
               shaders.push(parsed);
@@ -5635,6 +5788,7 @@ const server = http.createServer(async (req, res) => {
           } catch (_) {}
         }
       }
+      shaderMarketCache = { dir: shaderDir, mtime: dirMtime, shaders };
       sendJSON(res, { shaders });
     } catch (err) {
       sendJSON(res, { shaders: [], error: err.message });

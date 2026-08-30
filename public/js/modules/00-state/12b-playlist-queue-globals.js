@@ -11,6 +11,13 @@ var PLAYLIST_DETAIL_VIRTUAL_OVERSCAN = 7;
 var PLAYLIST_DETAIL_OUTER_CHROME_HEIGHT = 142;
 var PLAYLIST_DETAIL_OUTER_FOOTER_HEIGHT = 44;
 var playlistPanelDetailVirtualState = { raf: 0 };
+// 队列虚拟化：行高 ≈ padding+封面+gap（.queue-list gap:6 / .queue-item ~54）
+var QUEUE_ROW_STEP = 60;
+var QUEUE_VIRTUAL_OVERSCAN = 8;
+var MINI_QUEUE_ROW_STEP = 58;
+var MINI_QUEUE_VIRTUAL_OVERSCAN = 6;
+var queueVirtualState = { raf: 0, start: -1, end: -1 };
+var miniQueueVirtualState = { raf: 0, start: -1, end: -1 };
 var smoothWheelScrollBound = false;
 var coverProcessToken = 0, aiDepthPipeline = null, aiDepthReady = false, aiDepthBusy = false, aiDepthFailUntil = 0;
 var coverDepthCache = Object.create(null), coverDepthCacheKeys = [];

@@ -112,7 +112,7 @@
       tintStrength: 0.0,
       bevelMode: 0,
       rootSelector: '#search-results',
-      glassSelector: '#search-results .result-card'
+      glassSelector: '#search-results .search-result'
     },
     // 底部播放控件栏：胶囊 + 双界面折射；弱描边避免塑料白边
     bottomBar: {

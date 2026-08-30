@@ -16,7 +16,7 @@ module.exports = function register(ctx) {
   return async function(req, res, url, pn) {
     if (pn === '/api/discover/home') {
       try {
-        sendJSON(res, await handleDiscoverHome());
+        sendJSON(res, await handleDiscoverHome({ force: url.searchParams.get('force') === '1' || url.searchParams.get('refresh') === '1' }));
       } catch (err) {
         console.error('[DiscoverHome]', err);
         sendJSON(res, { error: err.message, loggedIn: false, dailySongs: [], playlists: [], podcasts: [] }, 500);

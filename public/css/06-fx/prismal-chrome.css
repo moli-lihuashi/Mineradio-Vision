@@ -1,0 +1,294 @@
+/* Prismal-like chrome: glass lens pill + refractive slider thumbs
+   Uses Mineradio SVG glass filter when available — does NOT rewrite core glass SVG.
+   Particle-count fire track (#fx-particlecount / .fx-fire-*) is excluded. */
+
+/* ---- Sliding selection lens (login tabs / fx-seg / method menu) ---- */
+.prism-lens-host{
+  position:relative!important;
+  isolation:isolate
+}
+.prism-lens-pill{
+  position:absolute;
+  left:0;top:0;
+  width:40px;height:32px;
+  border-radius:999px!important;
+  pointer-events:none;
+  z-index:0;
+  opacity:0;
+  transform:translate3d(0,0,0) scale(1);
+  transform-origin:center center;
+  background:rgba(255,255,255,.12);
+  border:1px solid rgba(255,255,255,.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.48),
+    inset 0 -1px 0 rgba(0,0,0,.18),
+    inset 0 0 12px rgba(255,255,255,.12),
+    0 0 0 1px rgba(120,220,255,.14),
+    0 0 18px rgba(255,80,160,.12),
+    0 8px 22px rgba(0,0,0,.24);
+  backdrop-filter:blur(14px) saturate(1.55) brightness(1.2);
+  -webkit-backdrop-filter:blur(14px) saturate(1.55) brightness(1.2);
+  transition:
+    left .42s cubic-bezier(.22,1,.36,1),
+    top .42s cubic-bezier(.22,1,.36,1),
+    width .42s cubic-bezier(.22,1,.36,1),
+    height .42s cubic-bezier(.22,1,.36,1),
+    opacity .22s ease,
+    transform .34s cubic-bezier(.34,1.45,.64,1),
+    box-shadow .28s ease;
+  will-change:left,top,width,height,transform
+}
+.prism-lens-pill.is-ready{opacity:1}
+/* iOS: press enlarge, release spring settle */
+.prism-lens-pill.is-pressing{
+  transform:translate3d(0,0,0) scale(1.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.58),
+    inset 0 -1px 0 rgba(0,0,0,.14),
+    inset 0 0 14px rgba(255,255,255,.16),
+    0 0 0 1px rgba(120,220,255,.22),
+    0 0 22px rgba(255,80,160,.2),
+    0 12px 28px rgba(0,0,0,.28)
+}
+.prism-lens-pill.is-settling{
+  transform:translate3d(0,0,0) scale(1);
+}
+.prism-lens-pill::before{
+  content:"";
+  position:absolute;inset:1px;
+  border-radius:inherit;
+  pointer-events:none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.12),
+    0 0 0 1px rgba(80,220,255,.22),
+    0 0 10px rgba(255,90,180,.18);
+  mix-blend-mode:screen;
+  opacity:.9
+}
+.prism-lens-pill::after{
+  content:"";
+  position:absolute;
+  left:12%;right:12%;top:2px;height:38%;
+  border-radius:999px;
+  background:linear-gradient(180deg,rgba(255,255,255,.58),rgba(255,255,255,0));
+  opacity:.6;pointer-events:none
+}
+html.control-glass-svg-ok .prism-lens-pill{
+  background:rgba(255,255,255,.07);
+  backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.06);
+  -webkit-backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.06);
+  box-shadow:
+    inset 0 0 2px 1px rgba(255,255,255,.36),
+    inset 0 0 10px 3px rgba(255,255,255,.14),
+    0 0 0 1px rgba(120,220,255,.16),
+    0 0 16px rgba(255,80,160,.14),
+    0 10px 28px rgba(0,0,0,.22)
+}
+.prism-lens-host > button,
+.prism-lens-host > .prism-lens-item,
+.prism-lens-host > .login-mode-node{
+  position:relative;
+  z-index:1;
+  background:transparent!important
+}
+
+/* Login: let glass pill carry the selection, not opaque fills */
+#login-modal .login-platform-list.prism-lens-host,
+#login-modal .login-method-menu.prism-lens-host{
+  overflow:visible!important;
+  isolation:isolate
+}
+#login-modal .login-platform-list.prism-lens-host button.active,
+#login-modal .login-platform-list.prism-lens-host button.netease.active,
+#login-modal .login-platform-list.prism-lens-host button.qq.active,
+#login-modal .login-platform-list.prism-lens-host button.kugou.active,
+#login-modal .login-platform-list.prism-lens-host button.qishui.active,
+#login-modal .login-platform-list.prism-lens-host button.spotify.active,
+#login-modal .login-method-menu.prism-lens-host button.active,
+#login-modal .login-method-menu.prism-lens-host .login-mode-node.active{
+  background:transparent!important;
+  box-shadow:none!important;
+  color:#fff!important
+}
+#login-modal .login-platform-list.prism-lens-host button.active b{color:#fff!important}
+#login-modal .login-platform-list.prism-lens-host,
+#login-modal .login-method-menu.prism-lens-host{
+  border-radius:999px!important;
+  padding:3px!important
+}
+#login-modal .login-platform-list.prism-lens-host button,
+#login-modal .login-method-menu.prism-lens-host button,
+#login-modal .login-method-menu.prism-lens-host .login-mode-node{
+  border-radius:999px!important
+}
+
+/* FX segment control: sliding glass capsule (full pill radius) */
+#fx-panel .fx-seg.prism-lens-host{
+  overflow:visible!important;
+  gap:3px;padding:3px;
+  border-radius:999px!important
+}
+#fx-panel .fx-seg.prism-lens-host button{
+  border-right:0!important;
+  border-radius:999px!important;
+  background:transparent!important;
+  box-shadow:none!important
+}
+#fx-panel .fx-seg.prism-lens-host button:hover{
+  background:rgba(255,255,255,.04)!important
+}
+#fx-panel .fx-seg.prism-lens-host button.active{
+  background:transparent!important;
+  border-color:transparent!important;
+  color:#fff!important;
+  text-shadow:0 0 12px rgba(0,245,212,.2)
+}
+#fx-panel .fx-seg .prism-lens-pill{border-radius:999px!important}
+
+/* ---- Normal FX sliders + volume (NOT particle fire track) ---- */
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range],
+#volume-slider{
+  -webkit-appearance:none;appearance:none;
+  height:26px;background:transparent;outline:none
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-runnable-track,
+#volume-slider::-webkit-slider-runnable-track{
+  height:4px;border-radius:999px;
+  background:
+    linear-gradient(90deg,rgba(90,180,255,.88),rgba(90,180,255,.55)) 0/var(--prism-fill,0%) 100% no-repeat,
+    rgba(255,255,255,.12);
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-track,
+#volume-slider::-moz-range-track{
+  height:4px;border-radius:999px;background:rgba(255,255,255,.12);border:0
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-progress,
+#volume-slider::-moz-range-progress{
+  height:4px;border-radius:999px;background:rgba(90,180,255,.78)
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
+#volume-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:28px;height:18px;margin-top:-7px;border-radius:999px;
+  background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.36);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.55),
+    inset 0 -1px 0 rgba(0,0,0,.16),
+    0 0 0 1px rgba(80,210,255,.18),
+    0 0 12px rgba(255,90,170,.16),
+    0 4px 14px rgba(0,0,0,.28);
+  backdrop-filter:blur(10px) saturate(1.5) brightness(1.2);
+  -webkit-backdrop-filter:blur(10px) saturate(1.5) brightness(1.2);
+  cursor:grab;
+  /* iOS: spring enlarge while pressed, settle on release */
+  transition:
+    transform .34s cubic-bezier(.34,1.45,.64,1),
+    box-shadow .28s ease,
+    width .28s cubic-bezier(.34,1.45,.64,1),
+    height .28s cubic-bezier(.34,1.45,.64,1),
+    margin-top .28s cubic-bezier(.34,1.45,.64,1)
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-thumb,
+#volume-slider::-moz-range-thumb{
+  width:26px;height:16px;border-radius:999px;
+  background:rgba(255,255,255,.16);
+  border:1px solid rgba(255,255,255,.36);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    0 0 0 1px rgba(80,210,255,.18),
+    0 0 12px rgba(255,90,170,.16),
+    0 4px 14px rgba(0,0,0,.28);
+  cursor:grab;
+  transition:transform .34s cubic-bezier(.34,1.45,.64,1),box-shadow .28s ease
+}
+/* Press / drag: enlarge like iOS */
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
+#volume-slider:active::-webkit-slider-thumb,
+#volume-slider.is-dragging::-webkit-slider-thumb{
+  cursor:grabbing;
+  width:34px;height:22px;margin-top:-9px;
+  transform:scale(1.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.62),
+    inset 0 -1px 0 rgba(0,0,0,.14),
+    0 0 0 1px rgba(80,210,255,.28),
+    0 0 18px rgba(255,90,170,.28),
+    0 8px 22px rgba(0,0,0,.34)
+}
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-moz-range-thumb,
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-moz-range-thumb,
+#volume-slider:active::-moz-range-thumb,
+#volume-slider.is-dragging::-moz-range-thumb{
+  cursor:grabbing;
+  transform:scale(1.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.58),
+    0 0 0 1px rgba(80,210,255,.28),
+    0 0 18px rgba(255,90,170,.28),
+    0 8px 20px rgba(0,0,0,.32)
+}
+html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
+html.control-glass-svg-ok #volume-slider::-webkit-slider-thumb{
+  background:rgba(255,255,255,.08);
+  backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.08);
+  -webkit-backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.08);
+  box-shadow:
+    inset 0 0 2px 1px rgba(255,255,255,.36),
+    inset 0 0 8px 2px rgba(255,255,255,.12),
+    0 0 0 1px rgba(80,210,255,.2),
+    0 0 14px rgba(255,90,170,.14),
+    0 6px 16px rgba(0,0,0,.24)
+}
+html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
+html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
+html.control-glass-svg-ok #volume-slider:active::-webkit-slider-thumb,
+html.control-glass-svg-ok #volume-slider.is-dragging::-webkit-slider-thumb{
+  box-shadow:
+    inset 0 0 2px 1px rgba(255,255,255,.48),
+    inset 0 0 10px 3px rgba(255,255,255,.16),
+    0 0 0 1px rgba(80,210,255,.32),
+    0 0 20px rgba(255,90,170,.26),
+    0 10px 24px rgba(0,0,0,.32)
+}
+
+/* Progress thumb: enlarge while seeking (iOS-ish) */
+#progress-thumb{
+  width:18px!important;height:14px!important;border-radius:999px!important;
+  background:rgba(255,255,255,.16)!important;
+  border:1px solid rgba(255,255,255,.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.55),
+    0 0 0 1px rgba(80,210,255,.2),
+    0 0 14px rgba(255,90,170,.18),
+    0 4px 12px rgba(0,0,0,.28)!important;
+  backdrop-filter:blur(8px) saturate(1.45) brightness(1.15);
+  -webkit-backdrop-filter:blur(8px) saturate(1.45) brightness(1.15);
+  transition:opacity .16s,transform .28s cubic-bezier(.34,1.45,.64,1)!important
+}
+html.control-glass-svg-ok #progress-thumb{
+  background:rgba(255,255,255,.08)!important;
+  backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.06);
+  -webkit-backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.06)
+}
+#progress-bar:hover #progress-thumb{
+  opacity:1;transform:translate(-50%,-50%) scale(1)!important
+}
+#progress-bar.is-dragging #progress-thumb{
+  opacity:1;transform:translate(-50%,-50%) scale(1.28)!important
+}
+
+#bottom-bar.visible .control-cluster.transport{
+  padding:4px 8px;
+  border-radius:999px;
+  background:rgba(255,255,255,.035);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 -1px 0 rgba(0,0,0,.12)
+}
+html.control-glass-svg-ok #bottom-bar.visible .control-cluster.transport{
+  background:rgba(255,255,255,.03);
+  backdrop-filter:blur(8px) saturate(1.3);
+  -webkit-backdrop-filter:blur(8px) saturate(1.3)
+}
+
+/* Particle-count fire slider: do NOT override — leave fx-panel.css untouched. */

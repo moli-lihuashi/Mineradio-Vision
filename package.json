@@ -43,6 +43,8 @@
       "native/mineradio-bpm/binding.gyp",
       "native/mineradio-bpm/build/Release/*.node",
       "native/mineradio-bpm/node_modules/**/*",
+      "!native/mineradio-bpm/node_modules/**/{test,tests,example,examples,docs,doc,.github,.cache}/**",
+      "!native/mineradio-bpm/node_modules/**/*.md",
       "kugou-api.js",
       "spotify-api.js",
       "qishui-api.js",

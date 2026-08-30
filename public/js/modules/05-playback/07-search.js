@@ -34,6 +34,15 @@ function clearSearchResults() {
   $results.innerHTML = '';
   $results.classList.remove('show');
 }
+function searchEmptyHtml(message, opts) {
+  opts = opts || {};
+  if (opts.loading) {
+    return '<div class="search-empty search-empty-loading" role="status">' +
+      '<div class="search-empty-shimmer"></div><div class="search-empty-shimmer"></div><div class="search-empty-shimmer"></div>' +
+      '<div class="search-empty-text">' + escHtml(message || 'Searching...') + '</div></div>';
+  }
+  return '<div class="search-empty"><div class="search-empty-text">' + escHtml(message || 'No results') + '</div></div>';
+}
 function readSearchHistory() {
   try {
     var raw = JSON.parse(localStorage.getItem(SEARCH_HISTORY_STORE_KEY) || '[]');
@@ -162,7 +171,7 @@ function renderPodcastRadios(items, label) {
   podcastPrograms = [];
   playlist = [];
   if (!podcastResults.length) {
-    $results.innerHTML = '<div class="search-empty">No podcast found</div>';
+    $results.innerHTML = searchEmptyHtml('没有找到播客');
     $results.classList.add('show');
     return;
   }
@@ -183,7 +192,7 @@ function renderPodcastRadios(items, label) {
 }
 async function loadPodcastHot() {
   var requestSeq = ++searchRequestSeq;
-  $results.innerHTML = '<div class="search-empty">Loading podcasts...</div>';
+  $results.innerHTML = searchEmptyHtml('正在加载播客…', { loading: true });
   $results.classList.add('show');
   try {
     var data = await apiJson('/api/podcast/hot?limit=18');
@@ -191,7 +200,7 @@ async function loadPodcastHot() {
     renderPodcastRadios(data.podcasts || [], 'Hot podcasts');
   } catch (err) {
     console.error('Podcast hot:', err);
-    if (requestSeq === searchRequestSeq) $results.innerHTML = '<div class="search-empty">Podcast load failed</div>';
+    if (requestSeq === searchRequestSeq) $results.innerHTML = searchEmptyHtml('播客加载失败');
   }
 }
 async function doPodcastSearch(q) {
@@ -208,7 +217,7 @@ async function openPodcastPrograms(i) {
   var radio = podcastResults[i]; if (!radio) return;
   var requestSeq = ++searchRequestSeq;
   podcastCurrentRadio = radio;
-  $results.innerHTML = '<div class="search-empty">Loading episodes...</div>';
+  $results.innerHTML = searchEmptyHtml('正在加载节目…', { loading: true });
   $results.classList.add('show');
   try {
     var data = await apiJson('/api/podcast/programs?id=' + encodeURIComponent(radio.id) + '&limit=36');
@@ -219,13 +228,13 @@ async function openPodcastPrograms(i) {
     renderPodcastPrograms();
   } catch (err) {
     console.error('Podcast programs:', err);
-    if (requestSeq === searchRequestSeq) $results.innerHTML = '<div class="search-empty">Episodes load failed</div>';
+    if (requestSeq === searchRequestSeq) $results.innerHTML = searchEmptyHtml('节目加载失败');
   }
 }
 function renderPodcastPrograms() {
   var radio = podcastCurrentRadio || {};
   if (!podcastPrograms.length) {
-    $results.innerHTML = '<div class="podcast-result-head"><button class="podcast-back-btn" onclick="event.stopPropagation();renderPodcastRadios(podcastResults)">‹</button><div class="search-result-info"><div class="search-result-title">' + escHtml(radio.name || 'Podcast') + '</div><div class="search-result-meta">No playable episodes</div></div></div>';
+    $results.innerHTML = '<div class="podcast-result-head"><button class="podcast-back-btn" onclick="event.stopPropagation();renderPodcastRadios(podcastResults)">‹</button><div class="search-result-info"><div class="search-result-title">' + escHtml(radio.name || 'Podcast') + '</div><div class="search-result-meta">暂无可用节目</div></div></div>';
     $results.classList.add('show');
     return;
   }
@@ -235,20 +244,47 @@ function renderPodcastPrograms() {
       searchThumbHtml(radio.cover) +
       '<div class="search-result-info"><div class="search-result-title">' + escHtml(radio.name || 'Podcast') + '<span class="tag-podcast">Podcast</span></div><div class="search-result-meta">' + escHtml(radio.djName || (podcastPrograms.length + ' episodes')) + '</div></div>' +
     '</div>' +
-    podcastPrograms.map(function(p, i){
-      return '<div class="search-result">' +
-        '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" onclick="playPodcastProgram(' + i + ')">' +
-          searchThumbHtml(p.cover) +
-          '<div class="search-result-info">' +
-            '<div class="search-result-title">' + escHtml(p.name || '') + '</div>' +
-            '<div class="search-result-meta">' + escHtml(programMetaText(p)) + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<button class="add-btn" title="下一首播放" onclick="event.stopPropagation();queuePodcastProgram(' + i + ')">+</button>' +
-      '</div>';
-    }).join('');
+    '<div class="podcast-program-virtual">' + podcastProgramRowsHtml() + '</div>';
   $results.classList.add('show');
-  if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.010, duration: 0.18, limit: 18 });
+  if (!$results.__podcastVirtualBound) {
+    $results.__podcastVirtualBound = true;
+    $results.addEventListener('scroll', throttle(function(){
+      if (searchMode !== 'podcast' || !podcastPrograms.length) return;
+      var wrap = $results.querySelector('.podcast-program-virtual');
+      if (wrap) wrap.innerHTML = podcastProgramRowsHtml();
+    }, 16), { passive: true });
+  }
+  if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.010, duration: 0.18, limit: 12 });
+}
+var PODCAST_PROGRAM_ROW_STEP = 62;
+var PODCAST_PROGRAM_OVERSCAN = 6;
+function podcastProgramRowsHtml() {
+  var total = podcastPrograms.length;
+  var head = $results.querySelector('.podcast-result-head');
+  var headH = head ? (head.offsetHeight || 58) : 58;
+  var scrollTop = Math.max(0, (Number($results.scrollTop) || 0) - headH);
+  var viewport = Math.max(180, Number($results.clientHeight) || 320);
+  var start = Math.max(0, Math.floor(scrollTop / PODCAST_PROGRAM_ROW_STEP) - PODCAST_PROGRAM_OVERSCAN);
+  var maxRows = Math.ceil(viewport / PODCAST_PROGRAM_ROW_STEP) + PODCAST_PROGRAM_OVERSCAN * 2;
+  var end = Math.min(total, start + maxRows);
+  start = Math.max(0, Math.min(start, Math.max(0, total - maxRows)));
+  end = Math.min(total, Math.max(end, start + maxRows));
+  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (start * PODCAST_PROGRAM_ROW_STEP) + 'px"></div>';
+  html += podcastPrograms.slice(start, end).map(function(p, localIndex){
+    var i = start + localIndex;
+    return '<div class="search-result">' +
+      '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" onclick="playPodcastProgram(' + i + ')">' +
+        searchThumbHtml(p.cover) +
+        '<div class="search-result-info">' +
+          '<div class="search-result-title">' + escHtml(p.name || '') + '</div>' +
+          '<div class="search-result-meta">' + escHtml(programMetaText(p)) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<button class="add-btn" title="下一首播放" onclick="event.stopPropagation();queuePodcastProgram(' + i + ')">+</button>' +
+    '</div>';
+  }).join('');
+  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, total - end) * PODCAST_PROGRAM_ROW_STEP) + 'px"></div>';
+  return html;
 }
 function queuePodcastProgram(i) {
   var item = podcastPrograms[i]; if (!item) return;
@@ -269,7 +305,7 @@ $input.addEventListener('input', function(){
     return;
   }
   if (isMusicSearchMode(searchMode)) {
-    $results.innerHTML = '<div class="search-empty">正在搜索 “' + escHtml(q) + '”…</div>';
+    $results.innerHTML = searchEmptyHtml('正在搜索 “' + q + '”…', { loading: true });
     $results.classList.add('show');
   }
   searchTimer = setTimeout(function(){ doSearch(q); }, 180);
@@ -869,7 +905,7 @@ async function doSearch(q, opts) {
     if (!songs.length) {
       playlist = [];
       searchLastResultQuery = '';
-      $results.innerHTML = '<div class="search-empty">没有找到相关歌曲</div>';
+      $results.innerHTML = searchEmptyHtml('没有找到相关歌曲');
       $results.classList.add('show');
       return;
     }

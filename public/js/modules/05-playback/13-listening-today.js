@@ -1,7 +1,7 @@
 // ============================================================
 //  Home 右下「LISTENING TODAY · 今日聆听」卡
 //  - 三个统计位：聆听时长 / 今日歌曲 / 连续聆听（数据来自 listenStatsState.history）
-//  - 点击「今日歌曲」：两侧统计压缩，中间横向展开最近 20 首历史歌曲
+//  - 点击「今日歌曲」：两侧统计压缩，中间横向展开今日听过的歌曲
 //  - 鼠标移出卡片自动收起；点击历史歌曲走标准播放队列
 // ============================================================
 var listeningTodayState = { expanded: false, recent: [] };
@@ -14,6 +14,7 @@ function listeningTodayStats() {
   var todayMs = 0;
   var todayKeys = Object.create(null);
   var todayArtists = Object.create(null);
+  var todayRecent = [];
   var daySet = Object.create(null);
   history.forEach(function (record) {
     var playedAt = Number(record && record.playedAt) || 0;
@@ -23,7 +24,12 @@ function listeningTodayStats() {
     daySet[recordDay.getTime()] = true;
     if (playedAt >= todayStart) {
       todayMs += Number(record.listenMs) || 0;
-      todayKeys[record.key] = true;
+      if (record.key && !todayKeys[record.key]) {
+        todayKeys[record.key] = true;
+        todayRecent.push(record);
+      } else if (!record.key) {
+        todayRecent.push(record);
+      }
       var artist = String(record.artist || '').split(/\s*\/\s*|\s*,\s*|、|&/)[0].trim();
       if (artist) todayArtists[artist] = (todayArtists[artist] || 0) + (Number(record.listenMs) || 0);
     }
@@ -41,12 +47,15 @@ function listeningTodayStats() {
   Object.keys(todayArtists).forEach(function (name) {
     if (todayArtists[name] > bestMs) { bestMs = todayArtists[name]; topArtist = name; }
   });
+  // 今日还没有记录时，降级展示最近 20 首，避免空条无法交互
+  var recent = todayRecent.length ? todayRecent.slice(0, 20) : history.slice(0, 20);
   return {
     todayMs: todayMs,
-    todayCount: Object.keys(todayKeys).length,
+    todayCount: Object.keys(todayKeys).length || todayRecent.length,
     streak: streak,
     topArtist: topArtist,
-    recent: history.slice(0, 20),
+    recent: recent,
+    todayOnly: !!todayRecent.length,
   };
 }
 
@@ -76,6 +85,11 @@ function renderListeningToday() {
   }
   var streakLabel = document.getElementById('lt-streak-label');
   if (streakLabel) streakLabel.textContent = '连续聆听 ' + stats.streak + ' 天';
+  var todayBtn = document.getElementById('lt-stat-today');
+  if (todayBtn) {
+    var hint = todayBtn.querySelector('span');
+    if (hint) hint.textContent = stats.todayOnly ? '今日歌曲 · 点击展开' : '最近听过 · 点击展开';
+  }
   if (listeningTodayState.expanded) renderListeningTodayStrip();
 }
 
@@ -97,7 +111,11 @@ function toggleListeningTodayExpand(force) {
   var card = document.getElementById('listening-today-card');
   if (!card) return;
   var next = force == null ? !listeningTodayState.expanded : !!force;
-  if (next) renderListeningTodayStrip();
+  if (next) {
+    // 展开前刷新一次数据，避免统计已变但条带仍是旧内容
+    renderListeningToday();
+    renderListeningTodayStrip();
+  }
   listeningTodayState.expanded = next;
   card.classList.toggle('expanded', next);
   notifyListeningTodayGlass();
@@ -119,9 +137,10 @@ function renderListeningTodayStrip() {
     return;
   }
   strip.innerHTML = recent.map(function (record, index) {
-    var cover = record.cover ? ' data-cover-src="' + escHtml(cssImageUrl(record.cover)) + '"' : '';
-    var title = escHtml((record.name || '未知歌曲') + (record.artist ? ' - ' + record.artist : ''));
-    return '<button class="lt-strip-item" type="button" data-lt-index="' + index + '" onclick="playListeningTodaySong(' + index + ')" title="' + title + '">' +
+    var coverUrl = record.cover ? (typeof cssImageUrl === 'function' ? cssImageUrl(record.cover) : String(record.cover)) : '';
+    var cover = coverUrl ? ' data-cover-src="' + escAttr(coverUrl) + '"' : '';
+    var title = escAttr((record.name || '未知歌曲') + (record.artist ? ' - ' + record.artist : ''));
+    return '<button class="lt-strip-item" type="button" data-lt-index="' + index + '" title="' + title + '">' +
       '<span class="lt-strip-cover"' + cover + '></span>' +
       '<span class="lt-strip-copy"><span class="lt-strip-name">' + escHtml(record.name || '未知歌曲') + '</span>' +
       '<span class="lt-strip-artist">' + escHtml(record.artist || '未知歌手') + '</span></span></button>';
@@ -143,6 +162,12 @@ function listeningTodaySongFromRecord(record) {
     song = { mid: key.slice(3), songmid: key.slice(3), provider: 'qq', source: 'qq', type: 'qq' };
   } else if (key.indexOf('local:') === 0) {
     song = { localKey: key.slice(6), type: 'local', source: 'local', provider: 'local' };
+  } else if (key.indexOf('podcast:') === 0) {
+    song = { programId: key.slice(8), type: 'podcast', source: 'netease', provider: 'netease' };
+  } else if (key.indexOf('qishui:') === 0) {
+    song = { id: key.slice(7), provider: 'qishui', source: 'qishui', type: 'qishui' };
+  } else if (key.indexOf('spotify:') === 0) {
+    song = { id: key.slice(8), provider: 'spotify', source: 'spotify', type: 'spotify' };
   } else if (key.indexOf('song:') === 0) {
     song = { id: key.slice(5), provider: 'netease', source: 'netease', type: 'song' };
   }
@@ -154,15 +179,29 @@ function listeningTodaySongFromRecord(record) {
     if (record.id) song.id = record.id;
     if (record.mid) { song.mid = record.mid; song.songmid = record.mid; }
     if (record.mediaMid) song.mediaMid = record.mediaMid;
+    if (record.hash) song.hash = record.hash;
+    if (record.albumAudioId) song.albumAudioId = record.albumAudioId;
     if (record.sourceKey) song.sourceKey = record.sourceKey;
     if (record.type && !song.type) song.type = record.type;
+    if (record.provider) song.provider = record.provider;
     song.name = record.name || song.name || '';
     song.artist = record.artist || song.artist || '';
     song.cover = record.cover || song.cover || '';
   }
-  song.provider = song.provider || song.source || 'netease';
+  song.provider = song.provider || song.source || song.sourceKey || 'netease';
   song.source = song.source || song.provider;
+  // 避免把 name|artist 这种伪 key 当成网易云 id
+  if (song.id && String(song.id).indexOf('|') >= 0 && !song.hash && !song.mid && !song.localKey) {
+    song.id = '';
+  }
   return song;
+}
+
+function listeningTodaySongPlayable(song) {
+  if (!song) return false;
+  if (song.hash || song.mid || song.songmid || song.localKey || song.programId) return true;
+  if (song.id != null && song.id !== '' && String(song.id).indexOf('|') < 0) return true;
+  return false;
 }
 
 function playListeningTodaySong(index) {
@@ -170,26 +209,33 @@ function playListeningTodaySong(index) {
   var record = recent[index];
   if (!record) return;
   var first = listeningTodaySongFromRecord(record);
-  if (!first || (!first.id && !first.hash && !first.mid && !first.localKey)) {
+  if (!listeningTodaySongPlayable(first)) {
     if (typeof showToast === 'function') showToast('这首暂时无法直接播放');
+    if (record.name && typeof runHomeSearch === 'function') runHomeSearch(record.name);
     return;
   }
   if (typeof prepareLeaveHomeForPlayback === 'function') prepareLeaveHomeForPlayback();
   var queue = [];
-  recent.forEach(function (item) {
+  var playAt = 0;
+  recent.forEach(function (item, i) {
     var song = listeningTodaySongFromRecord(item);
-    if (song && (song.id || song.hash || song.mid || song.localKey)) {
-      queue.push(typeof cloneSong === 'function' ? cloneSong(song) : song);
-    }
+    if (!listeningTodaySongPlayable(song)) return;
+    if (i === index) playAt = queue.length;
+    queue.push(typeof cloneSong === 'function' ? cloneSong(song) : song);
   });
+  if (!queue.length) {
+    if (typeof showToast === 'function') showToast('这首暂时无法直接播放');
+    return;
+  }
   playQueue = queue;
-  currentIdx = Math.max(0, Math.min(playQueue.length - 1, Number(index) || 0));
+  currentIdx = playAt;
   if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('listening-today', { scrollCurrent: true });
   if (typeof safeShelfRebuild === 'function') safeShelfRebuild('listening-today', true);
   if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
+  collapseListeningToday();
   Promise.resolve(playQueueAt(currentIdx, {
     manual: true,
-    context: { type: 'listening-today', playlistName: '最近听过' },
+    context: { type: 'listening-today', playlistName: '今日歌曲' },
   })).catch(function (error) { console.warn('[ListeningTodayPlay]', error); });
 }
 
@@ -201,7 +247,7 @@ function bindListeningToday() {
   bindListeningTodayStripDrag();
 }
 
-// 展开条：无滚动条，按住左键横向拖动；滚轮也可横滚；拖动后抑制误触点击
+// 展开条：无滚动条，空白处/按住拖动可横滚；点在歌曲上优先播放，避免微抖吞点击
 function bindListeningTodayStripDrag() {
   var strip = document.getElementById('lt-strip');
   if (!strip || strip._ltDragBound) return;
@@ -210,32 +256,46 @@ function bindListeningTodayStripDrag() {
   var dragStartX = 0;
   var dragStartLeft = 0;
   var dragMoved = false;
+  var DRAG_THRESHOLD = 14;
+
   strip.addEventListener('mousedown', function (e) {
     if (e.button !== 0) return;
     dragDown = true;
     dragMoved = false;
     dragStartX = e.pageX;
     dragStartLeft = strip.scrollLeft;
-    strip.classList.add('dragging');
   });
   window.addEventListener('mousemove', function (e) {
     if (!dragDown) return;
     var dx = e.pageX - dragStartX;
-    if (Math.abs(dx) > 5) dragMoved = true;
-    strip.scrollLeft = dragStartLeft - dx;
+    if (!dragMoved && Math.abs(dx) > DRAG_THRESHOLD) {
+      dragMoved = true;
+      strip.classList.add('dragging');
+    }
+    if (dragMoved) strip.scrollLeft = dragStartLeft - dx;
   });
   window.addEventListener('mouseup', function () {
     if (!dragDown) return;
     dragDown = false;
     strip.classList.remove('dragging');
-    setTimeout(function () { dragMoved = false; }, 0);
+    // 延迟清理，让随后的 click 仍能读到 dragMoved
+    setTimeout(function () { dragMoved = false; }, 40);
   });
+  // 委托点击：不依赖 inline onclick，且拖动后明确吞掉
   strip.addEventListener('click', function (e) {
-    if (!dragMoved) return;
+    if (dragMoved) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    var item = e.target && e.target.closest ? e.target.closest('.lt-strip-item') : null;
+    if (!item) return;
     e.preventDefault();
     e.stopPropagation();
-    dragMoved = false;
-  }, true);
+    var index = Number(item.getAttribute('data-lt-index'));
+    if (!isFinite(index)) return;
+    playListeningTodaySong(index);
+  });
   strip.addEventListener('wheel', function (e) {
     if (!listeningTodayState.expanded) return;
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {

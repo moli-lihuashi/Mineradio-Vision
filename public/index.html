@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.2.12">
+<html lang="zh-CN" data-app-version="3.2.18">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -44,13 +44,14 @@ try {
 <link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/02-home/home.css?v=3.0.2-petwhite">
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
-<link rel="stylesheet" href="css/08-account/account.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/08-account/account.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/06-fx/glass.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-lyrics/lyrics.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-fx/fx-glass.css?v=3.0.0-modular">
-<link rel="stylesheet" href="css/10-shell/shell.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/06-fx/prismal-chrome.css?v=3.0.8-firefix">
+<link rel="stylesheet" href="css/10-shell/shell.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/05-playback/home-insight.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/07-fx/lyric-shader-market.css?v=3.0.0-modular">
 </head>
@@ -1232,69 +1233,69 @@ try {
     <div class="login-bg-layer" data-login-bg="spotify"></div>
     <div class="login-glow" id="login-glow"></div>
     <div class="login-content">
-      <!-- 头部：品牌语 + 退出/关闭 -->
       <header class="login-head">
         <div class="login-head-copy">
           <div class="login-intro-kicker">✦ MINERADIO</div>
-          <h1 class="login-intro-title" id="login-intro-title">音乐播放器，也是一座视觉舞台</h1>
-          <p class="login-intro-body" id="login-intro-body">搜索或导入一首歌即可播放；登录后会同步歌单、红心和播客，让封面、歌词和粒子跟着音乐动起来。</p>
+          <h1 class="login-intro-title" id="login-intro-title">选择平台登录</h1>
+          <p class="login-intro-body" id="login-intro-body">登录后同步歌单、红心与播客；也可先搜索一首歌。</p>
           <span id="login-panel-head-status" class="login-panel-head-status" aria-live="polite"></span>
         </div>
         <div class="login-head-actions">
-          <button id="login-reset-all-btn" class="login-reset-all-btn" type="button" onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出登录</button>
+          <button id="login-reset-all-btn" class="login-reset-all-btn" type="button" onclick="logoutAllAccountsAndResetEasterEgg()" title="清除所有平台登录">退出全部</button>
           <button class="login-panel-close" type="button" onclick="closeLoginModal()" aria-label="关闭">✕</button>
         </div>
       </header>
-      <!-- 中部：左平台菜单 + 右登录方式 -->
-      <section class="login-mid">
-        <nav class="login-platform-tabs login-platform-list" id="login-platform-tabs" aria-label="音乐平台选择">
-          <button id="login-provider-netease" class="netease active" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b><small>官方扫码 / Cookie</small><span class="radio-dot"></span></button>
-          <button id="login-provider-qq" class="qq" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><b>QQ 音乐</b><small>官方扫码 / Cookie</small><span class="radio-dot"></span></button>
-          <button id="login-provider-kugou" class="kugou" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="radio-dot"></span></button>
-          <button id="login-provider-qishui" class="qishui" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><b>汽水音乐</b><small>本机会话 / Token</small><span class="radio-dot"></span></button>
-          <button id="login-provider-spotify" class="spotify" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><b>Spotify</b><small>官方 OAuth</small><span class="radio-dot"></span></button>
-        </nav>
-        <aside class="login-method-menu" aria-label="登录方式">
-          <div class="login-method-mr">
-            <span class="login-node-orb">MR</span>
-            <div class="login-method-copy"><b>MR</b><small>等待接入</small></div>
-          </div>
-          <button id="login-mode-official" class="login-mode-node active" type="button" data-login-mode="official" onclick="selectLoginMode('official')"><span class="provider-logo">QR</span><div class="login-method-copy"><b>扫码</b><small>官方窗口</small></div><span class="radio-dot"></span></button>
-          <button id="login-mode-cookie" class="login-mode-node" type="button" data-login-mode="cookie" onclick="selectLoginMode('cookie')"><span class="provider-logo">CK</span><div class="login-method-copy"><b>Cookie</b><small>保存会话</small></div><span class="radio-dot"></span></button>
-        </aside>
-      </section>
-      <!-- 底部：登录文案 + 二维码/Cookie + 操作 -->
-      <footer id="login-auth-drawer" class="login-auth-drawer">
-        <div class="login-auth-copy">
-          <h2 id="login-modal-title">扫码登录网易云音乐</h2>
-          <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
-          <div id="qr-status">选择平台与登录方式后开始登录。</div>
+
+      <!-- 单页画板：平台 → 方式 → 内容 → 操作，无嵌套卡片、无滚动 -->
+      <nav class="login-platform-tabs login-platform-list" id="login-platform-tabs" aria-label="音乐平台选择">
+        <button id="login-provider-netease" class="netease active" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b></button>
+        <button id="login-provider-qq" class="qq" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><b>QQ 音乐</b></button>
+        <button id="login-provider-kugou" class="kugou" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><b>酷狗</b></button>
+        <button id="login-provider-qishui" class="qishui" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><b>汽水</b></button>
+        <button id="login-provider-spotify" class="spotify" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><b>Spotify</b></button>
+      </nav>
+
+      <div class="login-board-toolbar">
+        <div class="login-method-menu" role="tablist" aria-label="登录方式">
+          <button id="login-mode-official" class="login-mode-node active" type="button" role="tab" aria-selected="true" data-login-mode="official" onclick="selectLoginMode('official')"><span class="login-mode-label" id="login-mode-official-label">扫码登录</span></button>
+          <button id="login-mode-cookie" class="login-mode-node" type="button" role="tab" aria-selected="false" data-login-mode="cookie" onclick="selectLoginMode('cookie')"><span class="login-mode-label" id="login-mode-cookie-label">Cookie</span></button>
         </div>
-        <div class="login-auth-body">
-          <div id="qr-shell" class="qr-shell">
-            <img id="qr-img" src="" alt="">
-            <button id="qq-web-login-card" class="qq-login-mark" type="button" onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
+      </div>
+
+      <div class="login-board-main">
+        <footer id="login-auth-drawer" class="login-auth-drawer show">
+          <div class="login-auth-copy">
+            <h2 id="login-modal-title">扫码登录网易云音乐</h2>
+            <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
+            <div id="qr-status">选择平台后开始登录。</div>
           </div>
-          <div id="qq-cookie-panel" class="qq-cookie-panel">
-            <textarea id="qq-cookie-input" class="qq-cookie-input" spellcheck="false" autocomplete="off" placeholder="uin=...; qqmusic_key=...; qm_keyst=..."></textarea>
-            <div class="qq-cookie-actions">
-              <div class="qq-cookie-note">从 y.qq.com 的登录会话导入。</div>
-              <button id="qq-cookie-save-btn" class="modal-btn primary" type="button" onclick="submitQQCookieLogin()">保存</button>
+          <div class="login-auth-body">
+            <div id="qr-shell" class="qr-shell">
+              <img id="qr-img" src="" alt="">
+              <button id="qq-web-login-card" class="qq-login-mark" type="button" onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
+            </div>
+            <div id="qq-cookie-panel" class="qq-cookie-panel">
+              <textarea id="qq-cookie-input" class="qq-cookie-input" spellcheck="false" autocomplete="off" placeholder="uin=...; qqmusic_key=...; qm_keyst=..."></textarea>
+              <div class="qq-cookie-actions">
+                <div class="qq-cookie-note">从 y.qq.com 的登录会话导入。</div>
+                <button id="qq-cookie-save-btn" class="modal-btn primary" type="button" onclick="submitQQCookieLogin()">保存</button>
+              </div>
             </div>
           </div>
+        </footer>
+        <div id="login-account-card" class="login-account-card">
+          <img id="login-account-avatar" src="" alt="">
+          <div class="login-account-copy">
+            <div id="login-account-name" class="login-account-name"></div>
+            <div id="login-account-meta" class="login-account-meta"></div>
+          </div>
         </div>
-        <div class="btn-row login-auth-actions">
-          <button class="modal-btn" onclick="skipLoginAndFocusSearch()">先搜索一首歌</button>
-          <button id="qq-cookie-toggle-btn" class="modal-btn" type="button" onclick="toggleQQCookiePanel()">手动导入</button>
-          <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
-        </div>
-      </footer>
-      <div id="login-account-card" class="login-account-card">
-        <img id="login-account-avatar" src="" alt="">
-        <div class="login-account-copy">
-          <div id="login-account-name" class="login-account-name"></div>
-          <div id="login-account-meta" class="login-account-meta"></div>
-        </div>
+      </div>
+
+      <div class="btn-row login-auth-actions">
+        <button class="modal-btn" onclick="skipLoginAndFocusSearch()">先搜索一首歌</button>
+        <button id="qq-cookie-toggle-btn" class="modal-btn" type="button" onclick="toggleQQCookiePanel()" hidden>手动导入</button>
+        <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
       </div>
     </div>
   </div>
@@ -1539,7 +1540,7 @@ try {
 
 </div>
 
-<script src="js/index-loader.js"></script>
+<script src="js/index-loader.js?v=3.2.18"></script>
 <!-- 以下模块由 index-loader.js 并行 fetch 后合并为单个 classic script 求值 -->
 <!-- 06-fx/01-liquidglass-config / 06-fx/02-wallpaper-engine-fns / 07-playback/00-spotify-provider / 08-account/00-login-easter-egg -->
 <!-- REMOVED_INLINE_BLOCK_3_END -->

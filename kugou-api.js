@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
+const { requestText } = require('./server/lib/http-request');
 
 const KUGOU_SEARCH_URL = 'http://songsearch.kugou.com/song_search_v2';
 const KUGOU_PLAY_MOBILE = 'http://m.kugou.com/app/i/getSongInfo.php';
@@ -76,48 +77,8 @@ const KUGOU_QUALITY_CHAIN = [
   { key: 'standard', label: '标准', field: 'FileHash' },
 ];
 
-function requestText(targetUrl, opts, body) {
-  opts = opts || {};
-  return new Promise((resolve, reject) => {
-    const u = new URL(targetUrl);
-    const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, opts.headers || {});
-    let bodyBuffer = null;
-    if (body != null && body !== '') {
-      bodyBuffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
-      // 显式 Content-Length + JSON Content-Type：避免 chunked 编码，
-      // 网关/WAF 对 chunked + 非 ASCII body 的处理可能与定长不一致
-      if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
-        headers['Content-Type'] = 'application/json';
-      }
-      if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-length')) {
-        headers['Content-Length'] = String(bodyBuffer.length);
-      }
-    }
-    const req = lib.request(u, {
-      method: opts.method || 'GET',
-      headers,
-    }, response => {
-      const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
-      response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (response.statusCode >= 400) {
-          const err = new Error('HTTP ' + response.statusCode);
-          err.statusCode = response.statusCode;
-          err.body = text;
-          reject(err);
-          return;
-        }
-        resolve(text);
-      });
-    });
-    req.setTimeout(12000, () => req.destroy(new Error('Request timeout')));
-    req.on('error', reject);
-    if (bodyBuffer) req.write(bodyBuffer);
-    req.end();
-  });
-}
+// requestText 由公共封装 server/lib/http-request 提供（含超时 + 指数退避重试 + 显式 Content-Length）。
+// qishui/spotify 后续可同样迁移到公共封装，消除各平台 HTTP 样板。
 
 async function requestJson(targetUrl, opts, body) {
   const text = await requestText(targetUrl, opts, body);

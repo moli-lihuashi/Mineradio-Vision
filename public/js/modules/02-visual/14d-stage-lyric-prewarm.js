@@ -1,6 +1,6 @@
 /**
  * Step A：noSyncBuild / demand-prewarm / upgrade（酷狗适配版）
- * - 不用 coop 整曲建轨；prewarm 只异步建 lightweight 窗 mesh
+ * - 不用作者 coop 整曲建轨；prewarm 只异步建 lightweight 窗 mesh
  * - 换行优先 setLyricTrackTarget / takePrewarm；否则轻量同步；重 payload 可 defer
  * 依赖：14c stageLyricPrewarm、14b buildStageLyricDisplayPayload、13 buildLyricMesh / setLyricTrackTarget
  */

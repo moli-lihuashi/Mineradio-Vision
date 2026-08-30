@@ -1,6 +1,7 @@
 /**
  * Wallpaper Engine 前端函数（库浏览 + 视频/图片背景）
  *
+
  * 已剥离：玻璃采样器 (GlassSampler) / native scene capture / desktop overlay /
  * host bounds recovery / freeze frame / capture viewport / pointer activity 相关代码。
  * 只保留 Wallpaper Engine 库浏览与 video/image 媒体背景能力。

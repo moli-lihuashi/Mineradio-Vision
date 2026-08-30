@@ -632,3 +632,18 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
   .home-platform-recommend-grid { grid-template-columns: 1fr }
 }
 
+
+/* ===== Login board hard override (loaded after account.css) ===== */
+#login-modal .dual-login-modal{overflow:hidden!important}
+#login-modal .login-auth-drawer,#login-modal .login-auth-drawer.show{
+  max-height:none!important;margin-top:0!important;padding:0!important;opacity:1!important;
+  visibility:visible!important;pointer-events:auto!important;transform:none!important;filter:none!important;
+  transition:none!important;overflow:hidden!important
+}
+#login-modal .login-content{overflow:hidden!important}
+#login-modal .login-provider-spotify .login-board-toolbar{display:none!important}
+#login-modal .login-provider-spotify #qr-shell{display:none!important}
+#login-modal .login-provider-spotify #qq-cookie-save-btn{display:none!important}
+#login-modal .login-provider-spotify .qq-cookie-input{
+  height:36px!important;max-height:36px!important;overflow:hidden!important;resize:none!important
+}

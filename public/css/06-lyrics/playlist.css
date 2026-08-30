@@ -36,7 +36,7 @@
 .queue-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .queue-virtual-spacer,
 .playlist-virtual-spacer,
-.pl-detail-virtual-spacer{flex:0 0 auto;width:100%;min-height:0;pointer-events:none}
+.pl-detail-virtual-spacer,.queue-virtual-spacer{flex:0 0 auto;width:100%;min-height:0;pointer-events:none}
 .queue-item{display:flex;align-items:center;gap:10px;padding:8px;border-radius:10px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.04);cursor:pointer;transition:all .2s;will-change:transform,opacity}
 .queue-item:hover{background:rgba(255,255,255,.05)}
 .queue-item.now{border-color:rgba(0,245,212,.34);background:rgba(0,245,212,.075)}

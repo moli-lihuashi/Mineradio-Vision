@@ -344,7 +344,7 @@ body.lg-forced-off .home-card.lg-active{
     transparent 100%);
   animation:lg-gloss-wipe .6s cubic-bezier(.22,1,.36,1);
 }
-#fx-panel .fx-slider:active input[type=range]{
+#fx-panel .fx-slider:not(.fx-fire-slider-row):active input[type=range]{
   filter:brightness(1.2);
 }
 @media (hover:none){

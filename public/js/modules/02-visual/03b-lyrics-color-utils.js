@@ -147,7 +147,11 @@ function particleTemporalSubsetEnabled() {
 }
 function coverParticleGridForResolution(v) {
   var grid = Math.round(118 * effectiveCoverResolution(v));
-  grid = Math.max(72, Math.min(183, grid));
+  var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
+  var maxGrid = 183;
+  if (quality === 'eco') maxGrid = 121;
+  else if (quality === 'balanced') maxGrid = 143;
+  grid = Math.max(72, Math.min(maxGrid, grid));
   return grid % 2 ? grid : grid + 1;
 }
 function coverParticleCountLabel(v) {

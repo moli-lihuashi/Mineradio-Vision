@@ -604,7 +604,17 @@ function bootstrapLiquidGlass() {
       if (homeState === 'active' || homeState === 'ready') activateHomeGlass();
     };
 
-    if ('requestIdleCallback' in window) {
+    if ('IntersectionObserver' in window && homeGrid) {
+      var homeIo = new IntersectionObserver(function(entries){
+        var visible = entries.some(function(e){ return e.isIntersecting && e.intersectionRatio > 0.05; });
+        if (visible) {
+          homeIo.disconnect();
+          if ('requestIdleCallback' in window) requestIdleCallback(warmupHomeGlass, { timeout: 1800 });
+          else setTimeout(warmupHomeGlass, 400);
+        }
+      }, { threshold: [0, 0.05, 0.2] });
+      homeIo.observe(homeGrid);
+    } else if ('requestIdleCallback' in window) {
       requestIdleCallback(warmupHomeGlass, { timeout: 3500 });
     } else {
       setTimeout(warmupHomeGlass, 2200);
@@ -778,7 +788,17 @@ function bootstrapLiquidGlass() {
       if (ltState === 'active' || ltState === 'ready') activateLtGlass();
     };
 
-    if ('requestIdleCallback' in window) {
+    if ('IntersectionObserver' in window && ltRail) {
+      var ltIo = new IntersectionObserver(function(entries){
+        var visible = entries.some(function(e){ return e.isIntersecting && e.intersectionRatio > 0.05; });
+        if (visible) {
+          ltIo.disconnect();
+          if ('requestIdleCallback' in window) requestIdleCallback(warmupLtGlass, { timeout: 2200 });
+          else setTimeout(warmupLtGlass, 500);
+        }
+      }, { threshold: [0, 0.05, 0.2] });
+      ltIo.observe(ltRail);
+    } else if ('requestIdleCallback' in window) {
       requestIdleCallback(warmupLtGlass, { timeout: 4200 });
     } else {
       setTimeout(warmupLtGlass, 2600);

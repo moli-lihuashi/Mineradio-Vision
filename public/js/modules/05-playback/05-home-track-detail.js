@@ -224,21 +224,89 @@ function renderDetailComments(comments) {
 function renderArtistSongList(songs) {
   detailArtistSongs = (songs || []).map(cloneSong);
   if (!detailArtistSongs.length) return '<div class="detail-empty">暂无热门歌曲</div>';
-  return '<div class="detail-scroll">' + detailArtistSongs.map(function(s, i){
+  return '<div class="detail-scroll detail-song-virtual" data-detail-song-kind="artist">' +
+    detailSongRowsHtml(detailArtistSongs, 'artist') +
+  '</div>';
+}
+function renderAlbumSongList(songs) {
+  if (!songs || !songs.length) return '<div class="detail-empty">暂无专辑曲目</div>';
+  return '<div class="detail-scroll detail-song-virtual" data-detail-song-kind="album">' +
+    detailSongRowsHtml(songs, 'album') +
+  '</div>';
+}
+var DETAIL_SONG_ROW_STEP = 72;
+var DETAIL_SONG_VIRTUAL_OVERSCAN = 6;
+var detailSongVirtualState = { raf: 0 };
+function detailSongRowsHtml(songs, kind) {
+  songs = songs || [];
+  var body = document.getElementById('track-detail-body');
+  var list = body && body.querySelector('.detail-song-virtual[data-detail-song-kind="' + kind + '"]');
+  var viewport = Math.max(240, Number(body && body.clientHeight) || 420);
+  var scrollTop = 0;
+  if (body && list && body.getBoundingClientRect && list.getBoundingClientRect) {
+    var bodyRect = body.getBoundingClientRect();
+    var listRect = list.getBoundingClientRect();
+    scrollTop = Math.max(0, bodyRect.top - listRect.top);
+  } else if (body) {
+    scrollTop = Math.max(0, Number(body.scrollTop) || 0);
+  }
+  var start = Math.max(0, Math.floor(scrollTop / DETAIL_SONG_ROW_STEP) - DETAIL_SONG_VIRTUAL_OVERSCAN);
+  var maxRows = Math.ceil(viewport / DETAIL_SONG_ROW_STEP) + DETAIL_SONG_VIRTUAL_OVERSCAN * 2;
+  var end = Math.min(songs.length, start + maxRows);
+  start = Math.max(0, Math.min(start, Math.max(0, songs.length - maxRows)));
+  end = Math.min(songs.length, Math.max(end, start + maxRows));
+  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (start * DETAIL_SONG_ROW_STEP) + 'px"></div>';
+  html += songs.slice(start, end).map(function(s, localIndex){
+    var i = start + localIndex;
     var cover = songCoverSrc(s, 80);
-    var coverHtml = cover ? '<img class="artist-song-cover" src="' + escAttr(cover) + '" alt="" onerror="this.style.opacity=0.18">' : '<div class="artist-song-cover"></div>';
-    var actionsHtml = '<div class="artist-song-actions">' +
-      '<button class="artist-song-action collect" type="button" title="收藏到歌单" aria-label="收藏到歌单" onclick="event.stopPropagation();collectArtistDetailSong(' + i + ')">' + artistCollectTrayIconSvg() + '</button>' +
-      '<button class="artist-song-action next" type="button" title="下一首播放" aria-label="下一首播放" onclick="event.stopPropagation();queueArtistDetailSongNext(' + i + ')">' + artistNextPlusIconSvg() + '</button>' +
-    '</div>';
-    return '<div class="artist-song-item" onclick="playArtistDetailSong(' + i + ')">' +
+    var coverHtml = cover ? '<img class="artist-song-cover" src="' + escAttr(cover) + '" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0.18">' : '<div class="artist-song-cover"></div>';
+    if (kind === 'artist') {
+      var actionsHtml = '<div class="artist-song-actions">' +
+        '<button class="artist-song-action collect" type="button" title="收藏到歌单" aria-label="收藏到歌单" onclick="event.stopPropagation();collectArtistDetailSong(' + i + ')">' + artistCollectTrayIconSvg() + '</button>' +
+        '<button class="artist-song-action next" type="button" title="下一首播放" aria-label="下一首播放" onclick="event.stopPropagation();queueArtistDetailSongNext(' + i + ')">' + artistNextPlusIconSvg() + '</button>' +
+      '</div>';
+      return '<div class="artist-song-item" data-detail-song-index="' + i + '" onclick="playArtistDetailSong(' + i + ')">' +
+        '<div class="artist-song-rank">' + String(i + 1).padStart(2, '0') + '</div>' +
+        coverHtml +
+        '<div class="artist-song-main"><div class="artist-song-name">' + escHtml(s.name || '') + '</div>' +
+        '<div class="artist-song-meta">' + escHtml((s.album || '未知专辑') + (s.duration ? (' · ' + songDurationLabel(s)) : '')) + '</div></div>' +
+        actionsHtml +
+      '</div>';
+    }
+    return '<div class="artist-song-item" data-detail-song-index="' + i + '" onclick="playAlbumDetailSong(' + i + ')">' +
       '<div class="artist-song-rank">' + String(i + 1).padStart(2, '0') + '</div>' +
       coverHtml +
       '<div class="artist-song-main"><div class="artist-song-name">' + escHtml(s.name || '') + '</div>' +
-      '<div class="artist-song-meta">' + escHtml((s.album || '未知专辑') + (s.duration ? (' · ' + songDurationLabel(s)) : '')) + '</div></div>' +
-      actionsHtml +
+      '<div class="artist-song-meta">' + escHtml((s.artist || '未知歌手') + (s.duration ? (' · ' + songDurationLabel(s)) : '')) + '</div></div>' +
     '</div>';
-  }).join('') + '</div>';
+  }).join('');
+  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, songs.length - end) * DETAIL_SONG_ROW_STEP) + 'px"></div>';
+  return html;
+}
+function scheduleDetailSongVirtualRender() {
+  if (detailSongVirtualState.raf) return;
+  detailSongVirtualState.raf = requestAnimationFrame(function(){
+    detailSongVirtualState.raf = 0;
+    var list = document.querySelector('#track-detail-body .detail-song-virtual');
+    if (!list) return;
+    var kind = list.getAttribute('data-detail-song-kind') || 'artist';
+    var songs = kind === 'album' ? detailAlbumSongs : detailArtistSongs;
+    if (!songs || !songs.length) return;
+    list.innerHTML = detailSongRowsHtml(songs, kind);
+  });
+}
+function bindTrackDetailScrollers() {
+  var body = document.getElementById('track-detail-body');
+  bindSmoothWheelScroll(body);
+  if (body) {
+    body.querySelectorAll('.detail-scroll').forEach(bindSmoothWheelScroll);
+    if (!body.__detailSongVirtualBound) {
+      body.__detailSongVirtualBound = true;
+      body.addEventListener('scroll', throttle(function(){
+        scheduleDetailSongVirtualRender();
+      }, 16), { passive: true });
+    }
+  }
 }
 function playArtistDetailSong(i) {
   var song = detailArtistSongs[i];
@@ -259,11 +327,6 @@ function queueArtistDetailSongNext(i) {
   var song = detailArtistSongs[i];
   if (!song) return;
   queueDetailSongNext(song);
-}
-function bindTrackDetailScrollers() {
-  var body = document.getElementById('track-detail-body');
-  bindSmoothWheelScroll(body);
-  if (body) body.querySelectorAll('.detail-scroll').forEach(bindSmoothWheelScroll);
 }
 function closeTrackDetailModal() {
   closeGsapModal(document.getElementById('track-detail-modal'));
@@ -372,19 +435,6 @@ async function toggleAlbumCollection() {
   } finally {
     if (btn) btn.classList.remove('busy');
   }
-}
-function renderAlbumSongList(songs) {
-  if (!songs || !songs.length) return '<div class="detail-empty">暂无专辑曲目</div>';
-  return '<div class="detail-scroll">' + songs.map(function (s, i) {
-    var coverSrc = songCoverSrc(s, 80);
-    var coverHtml = coverSrc ? '<img class="artist-song-cover" src="' + escAttr(coverSrc) + '" alt="" onerror="this.style.opacity=0.18">' : '<div class="artist-song-cover"></div>';
-    return '<div class="artist-song-item" onclick="playAlbumDetailSong(' + i + ')">' +
-      '<div class="artist-song-rank">' + String(i + 1).padStart(2, '0') + '</div>' +
-      coverHtml +
-      '<div class="artist-song-main"><div class="artist-song-name">' + escHtml(s.name || '') + '</div>' +
-      '<div class="artist-song-meta">' + escHtml((s.artist || '未知歌手') + (s.duration ? (' · ' + songDurationLabel(s)) : '')) + '</div></div>' +
-      '</div>';
-  }).join('') + '</div>';
 }
 function playAlbumDetailSong(i) {
   var song = detailAlbumSongs[i];

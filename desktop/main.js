@@ -3278,6 +3278,21 @@ async function createWindow() {
     return { action: 'deny' };
   });
 
+  // 阻止渲染进程内导航到外部站点（window.location 跳转 / 链接点击）。
+  // 仅放行本地 file:// 与本地 server (127.0.0.1/localhost)，其余外部导航拒绝并转交系统浏览器。
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'file:') return;
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+          /^(127\.0\.0\.1|localhost)(:|$)/.test(parsed.host)) return;
+      event.preventDefault();
+      shell.openExternal(url).catch(() => {});
+    } catch (e) {
+      event.preventDefault();
+    }
+  });
+
   mainWindow.webContents.on('did-finish-load', () => {
     sendWindowState(mainWindow);
     try { ensureUserPluginDir(); } catch (_) {}
@@ -3484,6 +3499,19 @@ ipcMain.handle('mineradio-memory-configure-auto', async (_event, config) => {
     return { ok: true, ...memoryAutoState };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('mineradio-set-background-throttling', (event, enabled) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) {
+      return { ok: false, error: 'NO_WINDOW' };
+    }
+    win.webContents.setBackgroundThrottling(!!enabled);
+    return { ok: true, enabled: !!enabled };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
   }
 });
 

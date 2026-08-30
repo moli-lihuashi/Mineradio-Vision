@@ -269,7 +269,7 @@ function audioEnv(prev, next, attack, release) {
   return prev + (next - prev) * (next > prev ? attack : release);
 }
 /* ===== 8 频段 sonic 监控 =====
- * 8 频段作为新增数据暴露，现有 bass/mid/treble legacy 合成不变。
+ * 渐进式移植：8 频段作为新增数据暴露，现有 bass/mid/treble legacy 合成不变。
  * 视觉层可逐步迁移到 subBass/lowMid/highMid/presence/brilliance/air 等新频段。
  */
 var SONIC_BAND_EDGES = [
@@ -859,9 +859,41 @@ var _lgMirrorFrame = 0;
 var _lgMirrorBgColor = '#000';
 var _lgMirrorBgColorAt = 0;
 var _lgMirrorRectAt = 0;
+function liquidGlassMirrorBlitStride() {
+  var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
+  if (quality === 'eco') return 6;
+  if (quality === 'balanced') return 4;
+  if (quality === 'ultra') return 2;
+  return 3;
+}
+function liquidGlassHasActiveMirrorTargets(mgr) {
+  if (!mgr || !mgr._instances) return false;
+  for (var k in mgr._instances) {
+    if (!Object.prototype.hasOwnProperty.call(mgr._instances, k)) continue;
+    var e = mgr._instances[k];
+    if (!e || !e.instance || !e.instance._running) continue;
+    var els = e.elements;
+    if (!els || !els.length) {
+      try {
+        var sel = e.config && e.config.glassSelector;
+        if (sel) els = document.querySelectorAll(sel);
+      } catch (_) { els = null; }
+    }
+    if (!els || !els.length) return true;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (!el || !el.getClientRects) continue;
+      try {
+        if (el.getClientRects().length) return true;
+      } catch (_) {}
+    }
+  }
+  return false;
+}
 function updateLiquidGlassBackdropMirror() {
   var mgr = window._liquidGlassMgr;
   if (!mgr || !mgr._instances || !Object.keys(mgr._instances).length) return;
+  if (!liquidGlassHasActiveMirrorTargets(mgr)) return;
   var src = renderer.domElement;
   if (!src || src.width <= 0 || src.height <= 0) return;
   if (!_lgMirrorCanvas) {
@@ -871,14 +903,18 @@ function updateLiquidGlassBackdropMirror() {
     window.__lgBackdropRect = { left: 0, top: 0, scale: 1 };
     _lgMirrorRectAt = 0;
   }
-  if (_lgMirrorCanvas.width !== src.width || _lgMirrorCanvas.height !== src.height) {
-    _lgMirrorCanvas.width = src.width;
-    _lgMirrorCanvas.height = src.height;
+  var stride = liquidGlassMirrorBlitStride();
+  var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
+  var sampleScale = (quality === 'eco') ? 0.5 : ((quality === 'balanced') ? 0.75 : 1);
+  var targetW = Math.max(1, Math.round(src.width * sampleScale));
+  var targetH = Math.max(1, Math.round(src.height * sampleScale));
+  if (_lgMirrorCanvas.width !== targetW || _lgMirrorCanvas.height !== targetH) {
+    _lgMirrorCanvas.width = targetW;
+    _lgMirrorCanvas.height = targetH;
     _lgMirrorRectAt = 0;
   }
-  // 背景是动态的（音乐律动），blit 与玻璃重采样同频节流：每 3 帧 ≈ 20fps 合成一次，
-  // 避免每帧整幅拷贝 WebGL 画布；首帧必做，保证玻璃首绘有底
-  if ((_lgMirrorFrame++ % 3) !== 0) return;
+  // 背景是动态的（音乐律动），blit 与玻璃重采样同频节流；无可见玻璃时已早退
+  if ((_lgMirrorFrame++ % stride) !== 0) return;
   var info = window.__lgBackdropRect;
   if (!info) { info = window.__lgBackdropRect = { left: 0, top: 0, scale: 1 }; }
   var nowMs = performance.now();
@@ -886,8 +922,10 @@ function updateLiquidGlassBackdropMirror() {
   if (!_lgMirrorRectAt || (nowMs - _lgMirrorRectAt) > 1000) {
     var r = src.getBoundingClientRect();
     info.left = r.left; info.top = r.top;
-    info.scale = r.width > 0 ? src.width / r.width : 1;
+    info.scale = r.width > 0 ? targetW / r.width : sampleScale;
     _lgMirrorRectAt = nowMs;
+  } else if (Math.abs((info.scale || 0) - (targetW / Math.max(1, src.clientWidth || targetW))) > 0.02) {
+    info.scale = src.clientWidth > 0 ? targetW / src.clientWidth : sampleScale;
   }
   var W = _lgMirrorCanvas.width, H = _lgMirrorCanvas.height;
   // 合成完整页面背景：壁纸底色 + 壁纸视频（cover）+ 主视觉 WebGL canvas（透明叠层）
@@ -906,7 +944,11 @@ function updateLiquidGlassBackdropMirror() {
       _lgMirrorCtx.drawImage(vid, (vid.videoWidth - vsw) / 2, (vid.videoHeight - vsh) / 2, vsw, vsh, 0, 0, W, H);
     } catch (_) {}
   }
-  _lgMirrorCtx.drawImage(src, 0, 0);
+  try {
+    _lgMirrorCtx.drawImage(src, 0, 0, W, H);
+  } catch (_) {
+    _lgMirrorCtx.drawImage(src, 0, 0);
+  }
   for (var k in mgr._instances) {
     var e = mgr._instances[k];
     if (e && e.instance && e.instance._running) {

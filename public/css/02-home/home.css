@@ -173,6 +173,12 @@ body.empty-home-active.controls-visible:not(.home-controls-locked) #empty-home{b
 /* ===== Home 今日聆听卡（右下 Rail · 替代最近听过磁贴 · LiquidGlass） ===== */
 #empty-home .listening-today-card { position:relative; display:flex; flex-direction:column; gap:12px; min-width:0; padding:14px 18px 16px; border-radius:18px; border:1px solid color-mix(in srgb,var(--home-accent,#00f5d4) 12%,rgba(255,255,255,.085)); background:linear-gradient(142deg,rgba(18,21,26,.66),rgba(8,9,13,.78)); box-shadow:0 20px 64px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.06); backdrop-filter:blur(20px) saturate(1.1); -webkit-backdrop-filter:blur(20px) saturate(1.1); overflow:hidden; }
 #empty-home .listening-today-card > * { position:relative; z-index:3; }
+#empty-home .listening-today-card > canvas { position:absolute; inset:0; z-index:1; pointer-events:none !important; }
+#empty-home .lt-head,
+#empty-home .lt-stats,
+#empty-home .lt-strip,
+#empty-home .lt-today,
+#empty-home .lt-preference { position:relative; z-index:4; pointer-events:auto; }
 #empty-home .lt-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 #empty-home .lt-kicker { font-size:10px; font-weight:800; letter-spacing:.18em; text-transform:uppercase; color:color-mix(in srgb,var(--home-accent,#00f5d4) 62%,rgba(255,255,255,.9)); }
 #empty-home .lt-preference { padding:3px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.04); color:rgba(255,255,255,.6); font-size:10.5px; cursor:pointer; transition:border-color .18s, color .18s, background .18s; }

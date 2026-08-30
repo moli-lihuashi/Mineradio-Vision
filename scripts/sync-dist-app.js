@@ -62,6 +62,10 @@ files += copyTree(path.join(root, 'desktop'), path.join(app, 'desktop'));
 const rootFiles = [
   'server.js',
   'dj-analyzer.js',
+  'kugou-api.js',
+  'spotify-api.js',
+  'qishui-api.js',
+  'qq-vip-api.js',
   'package.json',
 ];
 for (const rel of rootFiles) {
@@ -70,6 +74,10 @@ for (const rel of rootFiles) {
   copyFile(src, path.join(app, rel));
   files++;
 }
+
+// 音频解密模块（package.json files 已纳入 qishui-audio-decryptor/**/*）
+const decryptorSrc = path.join(root, 'qishui-audio-decryptor');
+if (fs.existsSync(decryptorSrc)) files += copyTree(decryptorSrc, path.join(app, 'qishui-audio-decryptor'));
 
 // Optional trees if present in pack / source
 for (const dir of ['server', 'cuefield', 'build']) {

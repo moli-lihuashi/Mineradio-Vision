@@ -7,7 +7,7 @@ function logoutAllAccountsAndResetEasterEgg() {
   if (typeof apiJson !== 'function') { showToast('API 未就绪'); return; }
   if (!window.confirm('退出全部平台并清除登录 Cookie？')) return;
   var btn = document.getElementById('login-reset-all-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '正在清除…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '清除中…'; }
   Promise.allSettled([
     apiJson('/api/logout'),
     apiJson('/api/qq/logout'),
@@ -26,19 +26,63 @@ function logoutAllAccountsAndResetEasterEgg() {
     console.warn('Logout failed:', e);
     showToast('清理未完成，请重启后重试');
   }).finally(function () {
-    if (btn) { btn.disabled = false; btn.textContent = '退出登录'; }
+    if (btn) { btn.disabled = false; btn.textContent = '退出全部'; }
   });
+}
+function syncLoginModeUi() {
+  var menu = document.querySelector('#login-modal .login-method-menu');
+  var officialBtn = document.getElementById('login-mode-official');
+  var cookieBtn = document.getElementById('login-mode-cookie');
+  var officialLabel = document.getElementById('login-mode-official-label');
+  var cookieLabel = document.getElementById('login-mode-cookie-label');
+  var supportsCookie = loginProvider === 'qq' || loginProvider === 'kugou' || loginProvider === 'qishui';
+  var cookieOn = loginProvider === 'qishui' ? !!qishuiManualCookieOpen : !!qqManualCookieOpen;
+  if (!supportsCookie) {
+    cookieOn = false;
+    qqManualCookieOpen = false;
+    if (typeof qishuiManualCookieOpen !== 'undefined') qishuiManualCookieOpen = false;
+  }
+  if (menu) {
+    menu.classList.toggle('is-single', !supportsCookie);
+    menu.classList.toggle('is-hidden', loginProvider === 'spotify');
+  }
+  if (officialLabel) {
+    officialLabel.textContent = loginProvider === 'qishui'
+      ? '本机会话'
+      : (loginProvider === 'kugou' ? '官方窗口' : (loginProvider === 'spotify' ? 'OAuth' : '扫码登录'));
+  }
+  if (cookieLabel) {
+    cookieLabel.textContent = loginProvider === 'qishui' ? 'Token' : 'Cookie';
+  }
+  if (officialBtn) {
+    officialBtn.classList.toggle('active', !cookieOn);
+    officialBtn.setAttribute('aria-selected', cookieOn ? 'false' : 'true');
+    officialBtn.disabled = false;
+  }
+  if (cookieBtn) {
+    cookieBtn.classList.toggle('active', cookieOn);
+    cookieBtn.setAttribute('aria-selected', cookieOn ? 'true' : 'false');
+    cookieBtn.disabled = !supportsCookie;
+  }
 }
 function selectLoginProviderNode(provider) {
   provider = (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify') ? provider : 'netease';
+  // 切平台时回到主登录方式，避免 Cookie/Token 态串台
+  if (provider === 'qishui') qishuiManualCookieOpen = false;
+  else qqManualCookieOpen = false;
   setLoginProvider(provider);
   var drawer = document.getElementById('login-auth-drawer');
   if (drawer) drawer.classList.add('show');
   updateLoginProviderUi();
-  // 用户主动切换平台 → 更新头部平台文案（布景随 updateLoginProviderUi 已同步）
   if (typeof syncLoginPlatformScenery === 'function') syncLoginPlatformScenery(provider, true);
+  if (window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.refresh === 'function') {
+    requestAnimationFrame(function () { window.MineradioPrismalChrome.refresh(); });
+  }
 }
 function selectLoginMode(mode) {
+  if (loginProvider === 'spotify' || loginProvider === 'netease') {
+    mode = 'official';
+  }
   if (loginProvider === 'qishui') qishuiManualCookieOpen = (mode === 'cookie');
   else qqManualCookieOpen = (mode === 'cookie');
   updateLoginProviderUi();
@@ -49,16 +93,12 @@ function startSelectedLoginConnection() {
   var drawer = document.getElementById('login-auth-drawer');
   if (drawer) drawer.classList.add('show');
   if (loginProvider === 'qishui') {
-    if (qishuiManualCookieOpen) {
-      if (typeof toggleQishuiTokenPanel === 'function') toggleQishuiTokenPanel();
-      return;
-    }
+    if (qishuiManualCookieOpen) return; // Token 面板已由方式切换打开，点保存即可
     if (typeof openQishuiWebLogin === 'function') openQishuiWebLogin();
     return;
   }
-  if (qqManualCookieOpen) {
-    toggleQQCookiePanel();
-    return;
+  if (qqManualCookieOpen && (loginProvider === 'qq' || loginProvider === 'kugou')) {
+    return; // Cookie 面板已打开，点保存即可
   }
   if (loginProvider === 'qq') { openQQWebLogin(); return; }
   if (loginProvider === 'kugou') { openKugouWebLogin(); return; }
