@@ -12,6 +12,7 @@
 - 修复「今日聆听」：今日歌曲无法点击播放的问题。
 - 登录页重做：改为「平台 → 方式 → 操作」单页布局，消除滚动冲突；清理 Spotify 登录页。
 - 新增玻璃控件：FX / 登录滑动玻璃选中胶囊、FX / 音量玻璃滑块拇指，按下放大、松开弹簧缩回的交互打磨。
+- QQ Cookie 失效检测 + 自动续期：资料页 code 1000 / result 301、缺播放密钥、取链 login_required 判定授权失效；服务端调用 QQConnectLogin.LoginServer / QQLogin 自动续期（优先 musickey，支持 refresh token），成功写回 .qq-cookie，失败标记 reauthRequired；状态轮询与取歌链失败时自动尝试，也支持 POST /api/qq/login/refresh 手动触发；桌面端采集 Cookie 时跳过过期项（优先 y.qq.com），已登录再开官方窗口自动 forceReauth 重登。
 
 ## v3.0.0
 

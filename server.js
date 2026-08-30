@@ -3444,11 +3444,195 @@ function normalizeQQProfile(body, cookieObj) {
   };
 }
 
-async function getQQLoginInfo() {
+function getQQCookieFile() {
+  return QQ_COOKIE_FILE;
+}
+
+function refreshQQConfiguredCookieStore() {
+  qqCookie = readCookieFile(QQ_COOKIE_FILE);
+  return qqCookie;
+}
+
+function applyQQMusicKeyFields(obj, musicKey, extra) {
+  const next = Object.assign({}, obj || {});
+  const key = String(musicKey || '').trim();
+  if (key) {
+    next.qm_keyst = key;
+    next.qqmusic_key = key;
+    next.music_key = key;
+  }
+  const patch = extra || {};
+  if (patch.refresh_token || patch.refreshToken) {
+    next.psrf_qqrefresh_token = String(patch.refresh_token || patch.refreshToken);
+  }
+  if (patch.access_token || patch.accessToken) {
+    next.psrf_qqaccess_token = String(patch.access_token || patch.accessToken);
+  }
+  if (patch.openid || patch.openId) {
+    next.psrf_qqopenid = String(patch.openid || patch.openId);
+  }
+  if (patch.expired_in || patch.expiredIn) {
+    next.login_expired_in = String(patch.expired_in || patch.expiredIn);
+  }
+  if (patch.login_type != null) next.login_type = String(patch.login_type);
+  return next;
+}
+
+function extractQQRefreshPayload(body) {
+  if (!body || typeof body !== 'object') return null;
+  const candidates = [
+    body.req_0 && body.req_0.data,
+    body.req1 && body.req1.data,
+    body.req0 && body.req0.data,
+    body.data,
+    body,
+  ].filter(Boolean);
+  for (let i = 0; i < candidates.length; i++) {
+    const data = candidates[i];
+    const musicKey = data.musickey || data.musicKey || data.qm_keyst || data.qqmusic_key || data.key || '';
+    if (!musicKey) continue;
+    return {
+      musicKey: String(musicKey),
+      refresh_token: data.refresh_token || data.refreshToken || data.refresh_key || '',
+      access_token: data.access_token || data.accessToken || '',
+      openid: data.openid || data.openId || '',
+      expired_in: data.expired_in || data.expiredIn || data.expire || '',
+      raw: data,
+    };
+  }
+  return null;
+}
+
+let qqCookieRefreshPromise = null;
+let qqCookieLastRefreshAt = 0;
+const QQ_COOKIE_REFRESH_COOLDOWN_MS = 45000;
+
+async function refreshQQCookieSession(opts) {
+  opts = opts || {};
+  const force = !!opts.force;
+  const now = Date.now();
+  if (!force && qqCookieLastRefreshAt && (now - qqCookieLastRefreshAt) < QQ_COOKIE_REFRESH_COOLDOWN_MS) {
+    return { ok: false, skipped: true, reason: 'cooldown', info: null };
+  }
+  if (qqCookieRefreshPromise) return qqCookieRefreshPromise;
+
+  qqCookieRefreshPromise = (async () => {
+    refreshQQConfiguredCookieStore();
+    const cookieObj = qqCookieObject();
+    const uin = qqCookieUin(cookieObj);
+    const musicKey = qqCookiePlaybackKey(cookieObj) || qqCookieMusicKey(cookieObj);
+    if (!uin || !musicKey) {
+      return {
+        ok: false,
+        reason: 'missing_credentials',
+        reauthRequired: true,
+        info: { provider: 'qq', loggedIn: false, hasCookie: !!qqCookie, stale: true, reauthRequired: true },
+      };
+    }
+
+    const attempts = [];
+    attempts.push({
+      label: 'musickey',
+      payload: {
+        comm: { g_tk: 5381, uin, format: 'json', inCharset: 'utf-8', outCharset: 'utf-8', notice: 0, platform: 'h5', needNewCode: 1, ct: 23, cv: 0 },
+        req_0: {
+          module: 'QQConnectLogin.LoginServer',
+          method: 'QQLogin',
+          param: {
+            expired_in: 7776000,
+            musicid: Number(uin) || uin,
+            musickey: musicKey,
+          },
+        },
+      },
+    });
+
+    const refreshToken = cookieObj.psrf_qqrefresh_token || cookieObj.wxrefresh_token || '';
+    const accessToken = cookieObj.psrf_qqaccess_token || '';
+    if (refreshToken) {
+      attempts.push({
+        label: 'refresh_token',
+        payload: {
+          comm: { g_tk: 5381, uin, format: 'json', inCharset: 'utf-8', outCharset: 'utf-8', notice: 0, platform: 'h5', needNewCode: 1, ct: 23, cv: 0 },
+          req_0: {
+            module: 'QQConnectLogin.LoginServer',
+            method: 'QQLogin',
+            param: {
+              expired_in: 7776000,
+              forceRefreshToken: 1,
+              musicid: Number(uin) || uin,
+              musickey: musicKey,
+              refresh_token: refreshToken,
+              access_token: accessToken || undefined,
+            },
+          },
+        },
+      });
+    }
+
+    let lastError = '';
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i];
+      try {
+        const body = await qqMusicRequest(attempt.payload, { cookie: true });
+        const extracted = extractQQRefreshPayload(body);
+        if (!extracted || !extracted.musicKey) {
+          lastError = 'empty_musickey';
+          continue;
+        }
+        if (extracted.musicKey === musicKey && attempt.label === 'musickey' && refreshToken && i === 0) {
+          // Same key from musickey path — still accept, but try refresh_token next if available.
+          // Prefer a changed key when possible; accept same key as soft renew.
+        }
+        const merged = applyQQMusicKeyFields(cookieObj, extracted.musicKey, extracted);
+        saveQQCookie(serializeCookieObject(merged));
+        qqCookieLastRefreshAt = Date.now();
+        const info = await getQQLoginInfo({ autoRenew: false, skipStoreReload: true });
+        const ok = !!(info && info.loggedIn && !info.authExpired);
+        console.log('[QQLogin] cookie refreshed via', attempt.label, ok ? 'ok' : 'soft', 'uin=' + uin);
+        return {
+          ok,
+          refreshed: true,
+          via: attempt.label,
+          musicKeyChanged: extracted.musicKey !== musicKey,
+          info: ok
+            ? Object.assign({}, info, { refreshed: true, refreshVia: attempt.label })
+            : Object.assign({}, info || {}, { stale: true, authExpired: true, reauthRequired: true, refreshed: false }),
+        };
+      } catch (e) {
+        lastError = e && e.message ? e.message : String(e);
+        console.warn('[QQLogin] cookie refresh attempt failed (' + attempt.label + '):', lastError);
+      }
+    }
+
+    qqCookieLastRefreshAt = Date.now();
+    return {
+      ok: false,
+      reason: lastError || 'refresh_failed',
+      reauthRequired: true,
+      info: Object.assign({}, normalizeQQProfile(null, cookieObj), {
+        stale: true,
+        authExpired: true,
+        profileUnavailable: true,
+        reauthRequired: true,
+      }),
+    };
+  })();
+
+  try {
+    return await qqCookieRefreshPromise;
+  } finally {
+    qqCookieRefreshPromise = null;
+  }
+}
+
+async function getQQLoginInfo(opts) {
+  opts = opts || {};
+  if (!opts.skipStoreReload) refreshQQConfiguredCookieStore();
   const cookieObj = qqCookieObject();
   const uin = qqCookieUin(cookieObj);
   const musicKey = qqCookieMusicKey(cookieObj);
-  if (!uin || !musicKey) return { provider: 'qq', loggedIn: false, hasCookie: !!qqCookie };
+  if (!uin || !musicKey) return { provider: 'qq', loggedIn: false, hasCookie: !!qqCookie, stale: !!qqCookie, reauthRequired: !!qqCookie };
   const fallback = normalizeQQProfile(null, cookieObj);
   try {
     const u = new URL('https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg');
@@ -3469,13 +3653,35 @@ async function getQQLoginInfo() {
     });
     const body = parseJSONText(text);
     const info = normalizeQQProfile(body, cookieObj);
-    if (body && (body.code === 1000 || body.result === 301)) {
-      return { ...fallback, profileUnavailable: true };
+    const authExpired = !!(body && (body.code === 1000 || body.result === 301));
+    if (authExpired) {
+      if (opts.autoRenew !== false) {
+        const renew = await refreshQQCookieSession({ reason: 'profile-auth-fail', force: !!opts.forceRenew });
+        if (renew && renew.ok && renew.info) return renew.info;
+        return Object.assign({}, (renew && renew.info) || fallback, {
+          profileUnavailable: true,
+          stale: true,
+          authExpired: true,
+          reauthRequired: true,
+          refreshAttempted: true,
+          refreshOk: false,
+        });
+      }
+      return Object.assign({}, fallback, {
+        profileUnavailable: true,
+        stale: true,
+        authExpired: true,
+        reauthRequired: true,
+      });
+    }
+    if (!info.playbackKeyReady && opts.autoRenew !== false) {
+      const renew = await refreshQQCookieSession({ reason: 'missing-playback-key' });
+      if (renew && renew.ok && renew.info && renew.info.playbackKeyReady) return renew.info;
     }
     return info;
   } catch (e) {
     console.warn('[QQLogin] profile check failed:', e.message);
-    return { ...fallback, profileUnavailable: true };
+    return Object.assign({}, fallback, { profileUnavailable: true, stale: true });
   }
 }
 
@@ -4782,7 +4988,8 @@ async function handleQQSearch(keywords, limit) {
   });
 }
 
-async function handleQQSongUrl(mid, mediaMid, qualityPreference) {
+async function handleQQSongUrl(mid, mediaMid, qualityPreference, opts) {
+  opts = opts || {};
   const songmid = String(mid || '').trim();
   if (!songmid) return { provider: 'qq', url: '', error: 'MISSING_MID', message: 'Missing QQ song mid' };
   const guid = String(10000000 + Math.floor(Math.random() * 90000000));
@@ -4841,6 +5048,12 @@ async function handleQQSongUrl(mid, mediaMid, qualityPreference) {
     hasSession: !!(uin && musicKey),
     hasPlaybackKey: !!(uin && playbackKey),
   });
+  if (!opts._renewTried && restriction && restriction.category === 'login_required') {
+    const renew = await refreshQQCookieSession({ reason: 'song-url-login-required' });
+    if (renew && renew.ok) {
+      return handleQQSongUrl(mid, mediaMid, qualityPreference, { _renewTried: true });
+    }
+  }
   return {
     provider: 'qq',
     url: '',
@@ -4855,6 +5068,7 @@ async function handleQQSongUrl(mid, mediaMid, qualityPreference) {
     rawMessage: info && (info.msg || info.tips || info.errmsg || ''),
     tried: fileCandidates.map(item => item.label + ' · ' + item.filename),
     requestedQuality,
+    reauthRequired: !!(restriction && restriction.category === 'login_required'),
   };
 }
 
@@ -5689,7 +5903,7 @@ const routeCtx = {
   artist_detail, artist_songs, artist_top_song, lyric, lyric_new,
   // ---- qq ----
   handleQQSearch, handleQQSongUrl, handleQQLyric, getQQLoginInfo, normalizeQQCookieInput,
-  qqCookieUin, qqCookieMusicKey, saveQQCookie,
+  qqCookieUin, qqCookieMusicKey, saveQQCookie, refreshQQCookieSession, refreshQQConfiguredCookieStore, getQQCookieFile,
   handleQQUserPlaylists, handleQQPlaylistTracks, handleQQArtistDetail, handleQQSongComments,
   // ---- kugou ----
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,

@@ -20,16 +20,32 @@
     if (!isFinite(max)) max = 100;
     var val = Number(input.value);
     if (!isFinite(val)) val = min;
-    var pct = max === min ? 0 : ((val - min) / (max - min)) * 100;
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
-    input.style.setProperty('--prism-fill', pct + '%');
+    var t = max === min ? 0 : (val - min) / (max - min);
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+
+    // Chromium thumb travels (track - thumbWidth). Fill to thumb center so the
+    // blue line always meets the glass thumb consistently (never peeks past it).
+    var trackW = input.clientWidth || input.offsetWidth || 0;
+    var thumbW = 28;
+    var fillPct;
+    if (trackW > thumbW + 2) {
+      var fillPx = t * (trackW - thumbW) + thumbW * 0.5;
+      fillPct = (fillPx / trackW) * 100;
+    } else {
+      fillPct = t * 100;
+    }
+    if (fillPct < 0) fillPct = 0;
+    if (fillPct > 100) fillPct = 100;
+    input.style.setProperty('--prism-fill', fillPct.toFixed(3) + '%');
   }
 
   function setDragging(input, on) {
     if (!input || isFireRange(input)) return;
     if (on) input.classList.add('is-dragging');
     else input.classList.remove('is-dragging');
+    // Geometry stays fixed (thumb width constant); only visual scale changes.
+    syncRangeFill(input);
   }
 
   function bindRangeInteractions() {
@@ -49,6 +65,7 @@
       setDragging(t, false);
     }, true);
 
+    // Never attach drag/fill chrome to particle fire slider
     document.addEventListener('pointerdown', function (ev) {
       var t = ev.target;
       if (!t || t.tagName !== 'INPUT' || t.type !== 'range') return;
@@ -263,6 +280,7 @@
     }
     window.addEventListener('resize', function () {
       for (var i = 0; i < hosts.length; i++) movePill(hosts[i], true);
+      syncAllFills();
     });
   }
 

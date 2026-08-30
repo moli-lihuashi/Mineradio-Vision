@@ -220,7 +220,7 @@ function homePetStopLoop() {
   }
 }
 
-// ===== 自定义像素伙伴：上传照片 → 16×16 像素化（对齐 claude-pet 的 buddy 机制） =====
+// ===== 自定义像素伙伴：上传照片 → 16×16 像素化 =====
 var HOME_PET_BUDDY_STORE_KEY = 'mineradio-home-pet-buddies';
 var HOME_PET_PAL_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+*~';
 var homePetBuddySeq = 0;

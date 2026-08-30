@@ -6,7 +6,7 @@ const { runElectronRuntimeCheck, runMainStartupRecoveryCheck } = require('./elec
 
 // 酷狗修改版:以下 check 因模块拆分粒度不同(功能差异),跳过以避免误报。
 // 批 1 排查结果(2026-08-07):17 项中仅 runSpotifyApiResilienceRegressionCheck 解绑(路径OK+函数齐全);
-// 其余 16 项为功能差异 — 05-playback/11-14 等并入 09-queue-playback-core.js,
+// 其余 16 项为功能差异 — 酷狗版把作者 05-playback/11-14 等并入 09-queue-playback-core.js,
 // cuefield 在 05-cuefield/ 而非 05-playback/16-18,04-shelf/01-manager-core 叫 00-layout-manager 等。
 const KUGOU_SKIP_CHECKS = new Set([
   // 批 1 仍跳过(功能差异 — 模块拆分粒度不同)
@@ -31,7 +31,7 @@ const KUGOU_SKIP_CHECKS = new Set([
   // runLoginEasterEggGateRegressionCheck — 酷狗版已改为「彩蛋禁用」自测，不再跳过
   'runQishuiProviderDistributionRegressionCheck',// qishui 功能,酷狗版无
   'checkQishuiProviderGuard',                    // 引用 qishui-api.js / 06-lyrics / 04-shelf 等作者路径
-  'checkSpotifyProviderGuard',                   // 引用 spotify provider 路径
+  'checkSpotifyProviderGuard',                   // 引用作者 spotify provider 路径
   'checkQQVipStatusSyncGuard',                   // QQ VIP 状态同步
   // 批 2 排查结果(2026-08-07):18 项中仅 checkVolumeWheelStepGuard 解绑(路径OK+内容匹配);
   // 其余 17 项为功能差异 — JS 路径缺失(模块号在本版不存在)或功能未移植(期望函数全项目找不到)。

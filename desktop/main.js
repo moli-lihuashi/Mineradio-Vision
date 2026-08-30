@@ -854,6 +854,36 @@ function isKugouCookieDomain(domain) {
     normalized === 'kgimg.com' || normalized.endsWith('.kgimg.com');
 }
 
+function cookieIsExpired(cookie) {
+  if (!cookie) return true;
+  if (cookie.session) return false;
+  const exp = Number(cookie.expirationDate);
+  if (!Number.isFinite(exp) || exp <= 0) return false;
+  return (exp * 1000) <= Date.now();
+}
+
+function qqLoginCookieDomainScore(domain) {
+  const d = String(domain || '').replace(/^\./, '').toLowerCase();
+  if (d === 'y.qq.com') return 300;
+  if (d.endsWith('y.qq.com')) return 260;
+  if (d === 'qq.com') return 120;
+  if (d.endsWith('qq.com')) return 80;
+  return 10;
+}
+
+function qqLoginCookieCandidateScore(cookie) {
+  if (!cookie || !cookie.name || !isQQCookieDomain(cookie.domain) || cookieIsExpired(cookie)) return -1;
+  let score = qqLoginCookieDomainScore(cookie.domain);
+  const priority = QQ_LOGIN_COOKIE_PRIORITY.indexOf(cookie.name);
+  if (priority >= 0) score += (QQ_LOGIN_COOKIE_PRIORITY.length - priority);
+  const exp = Number(cookie.expirationDate);
+  if (Number.isFinite(exp) && exp > 0) {
+    score += Math.min(40, Math.max(0, Math.floor((exp * 1000 - Date.now()) / 86400000)));
+  }
+  if (cookie.secure) score += 1;
+  return score;
+}
+
 function buildCookieHeaderFor(cookies, isAllowedDomain, priority) {
   const picked = new Map();
   (cookies || []).forEach((cookie) => {
@@ -877,7 +907,31 @@ function buildCookieHeaderFor(cookies, isAllowedDomain, priority) {
 }
 
 function buildCookieHeader(cookies) {
-  return buildCookieHeaderFor(cookies, isQQCookieDomain, QQ_LOGIN_COOKIE_PRIORITY);
+  const best = new Map();
+  (cookies || []).forEach((cookie) => {
+    if (!cookie || !cookie.name || !isQQCookieDomain(cookie.domain)) return;
+    if (cookieIsExpired(cookie)) return;
+    const score = qqLoginCookieCandidateScore(cookie);
+    if (score < 0) return;
+    const prev = best.get(cookie.name);
+    if (!prev || score > prev.score) {
+      best.set(cookie.name, { score, value: cookie.value || '' });
+    }
+  });
+
+  const ordered = [];
+  QQ_LOGIN_COOKIE_PRIORITY.forEach((name) => {
+    if (best.has(name)) {
+      ordered.push([name, best.get(name).value]);
+      best.delete(name);
+    }
+  });
+  best.forEach((entry, name) => ordered.push([name, entry.value]));
+
+  return ordered
+    .filter(([name, value]) => name && value != null && String(value) !== '')
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
 }
 
 async function readQQLoginCookieHeader(cookieSession) {
@@ -996,10 +1050,22 @@ async function openNeteaseMusicLoginWindow(owner) {
   });
 }
 
-async function openQQMusicLoginWindow(owner) {
+async function openQQMusicLoginWindow(owner, options) {
+  options = options || {};
   const cookieSession = session.fromPartition(QQ_LOGIN_PARTITION);
+  if (options.forceReauth) {
+    try {
+      await cookieSession.clearStorageData({
+        storages: ['cookies', 'localstorage', 'indexdb', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'],
+      });
+    } catch (e) {
+      console.warn('QQ forceReauth clearStorageData failed:', e.message);
+    }
+  }
   const initialCookie = await readQQLoginCookieHeader(cookieSession);
-  if (qqCookieHasPlaybackLogin(initialCookie)) return { ok: true, cookie: initialCookie, reused: true };
+  if (!options.forceReauth && qqCookieHasPlaybackLogin(initialCookie)) {
+    return { ok: true, cookie: initialCookie, reused: true };
+  }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -1015,7 +1081,7 @@ async function openQQMusicLoginWindow(owner) {
       modal: false,
       show: false,
       autoHideMenuBar: true,
-      title: 'QQ 音乐登录',
+      title: options.forceReauth ? 'QQ 音乐重新登录' : 'QQ 音乐登录',
       backgroundColor: '#111111',
       icon: APP_ICON_ICO,
       webPreferences: {
@@ -2256,8 +2322,8 @@ ipcMain.handle('netease-music-clear-login', async () => {
   return clearNeteaseMusicLoginSession();
 });
 
-ipcMain.handle('qq-music-open-login', async (event) => {
-  return openQQMusicLoginWindow(getSenderWindow(event));
+ipcMain.handle('qq-music-open-login', async (event, options) => {
+  return openQQMusicLoginWindow(getSenderWindow(event), options || {});
 });
 
 ipcMain.handle('qq-music-clear-login', async () => {

@@ -1,6 +1,6 @@
 var firstPlayDone = false;
 
-// 酷狗版兼容桩：provider-fallback 依赖这些符号
+// 酷狗版兼容桩：作者 11-provider-fallback 依赖这些符号
 function normalizePlaybackProvider(provider) {
   if (typeof normalizeMusicProviderKey === 'function') return normalizeMusicProviderKey(provider);
   if (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify') return provider;

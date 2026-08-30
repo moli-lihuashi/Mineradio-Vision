@@ -242,7 +242,7 @@ body.lg-forced-off .home-card.lg-active{
 }
 
 /* ===== GooseHyperGlass 风格控件 (fx-panel 内部) ===== */
-#fx-panel .fx-slider,
+#fx-panel .fx-slider:not(.fx-fire-slider-row),
 #fx-panel .fx-toggle,
 #fx-panel .fx-mini-btn,
 #fx-panel .fx-select,
@@ -265,7 +265,7 @@ body.lg-forced-off .home-card.lg-active{
              border-color .25s ease,
              box-shadow .25s ease;
 }
-#fx-panel .fx-slider::before,
+#fx-panel .fx-slider:not(.fx-fire-slider-row)::before,
 #fx-panel .fx-mini-btn::before,
 #fx-panel .fx-select::before,
 #fx-panel .fx-seg::before{
@@ -314,7 +314,7 @@ body.lg-forced-off .home-card.lg-active{
   background:linear-gradient(180deg,rgba(255,210,130,.25),rgba(200,160,80,.25))!important;
   border-color:rgba(255,210,130,.50)!important;
 }
-#fx-panel.lg-active .fx-slider,
+#fx-panel.lg-active .fx-slider:not(.fx-fire-slider-row),
 #fx-panel.lg-active .fx-toggle,
 #fx-panel.lg-active .fx-mini-btn,
 #fx-panel.lg-active .fx-select,
@@ -323,7 +323,7 @@ body.lg-forced-off .home-card.lg-active{
   backdrop-filter:none!important;
   -webkit-backdrop-filter:none!important;
 }
-#fx-panel .fx-slider input[type=range]{
+#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]{
   accent-color:var(--fc-accent,#0091ff);
 }
 

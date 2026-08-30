@@ -10,7 +10,7 @@ module.exports = function register(ctx) {
     sendJSON, readRequestBody,
     handleQQSearch, handleQQSongUrl, handleQQLyric,
     getQQLoginInfo, normalizeQQCookieInput, parseCookieString,
-    qqCookieUin, qqCookieMusicKey, saveQQCookie,
+    qqCookieUin, qqCookieMusicKey, saveQQCookie, refreshQQCookieSession,
     handleQQUserPlaylists, handleQQPlaylistTracks,
     handleQQArtistDetail, handleQQSongComments,
   } = ctx;
@@ -60,11 +60,32 @@ module.exports = function register(ctx) {
     // ---------- 歌曲URL ----------
     if (pn === '/api/qq/login/status') {
       try {
-        const info = await getQQLoginInfo();
+        const forceRenew = url.searchParams.get('renew') === '1' || url.searchParams.get('refresh') === '1';
+        const info = await getQQLoginInfo({ autoRenew: true, forceRenew });
         sendJSON(res, info);
       } catch (err) {
         console.error('[QQLoginStatus]', err);
         sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message }, 500);
+      }
+      return;
+    }
+
+    if (pn === '/api/qq/login/refresh') {
+      try {
+        const body = (req.method === 'POST') ? await readRequestBody(req) : {};
+        const force = !!(body && (body.force || body.forceRenew)) || url.searchParams.get('force') === '1';
+        const result = await refreshQQCookieSession({ force, reason: 'api-refresh' });
+        const info = (result && result.info) || await getQQLoginInfo({ autoRenew: false });
+        sendJSON(res, Object.assign({}, info, {
+          refreshed: !!(result && result.refreshed),
+          refreshOk: !!(result && result.ok),
+          refreshVia: result && result.via,
+          refreshReason: result && result.reason,
+          reauthRequired: !!(result && result.reauthRequired) || !!(info && info.reauthRequired),
+        }), (result && result.ok) ? 200 : 200);
+      } catch (err) {
+        console.error('[QQLoginRefresh]', err);
+        sendJSON(res, { provider: 'qq', loggedIn: false, refreshOk: false, reauthRequired: true, error: err.message }, 500);
       }
       return;
     }

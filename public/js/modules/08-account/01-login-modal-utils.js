@@ -218,12 +218,30 @@ async function refreshLoginStatus(force) {
 function normalizeQQLoginStatus(info) {
   return Mineradio.auth.normalizeQQ(info);
 }
-async function refreshQQLoginStatus() {
+async function refreshQQLoginStatus(opts) {
+  opts = opts || {};
   try {
     var prevLogged = !!qqLoginStatus.loggedIn;
+    var prevStatus = qqLoginStatus || {};
     qqLoginStatus = await Mineradio.auth.syncQQ(apiJson);
+    var needsRenew = !!(opts.forceRenew || (qqLoginStatus && (qqLoginStatus.authExpired || qqLoginStatus.reauthRequired || (qqLoginStatus.loggedIn && !qqLoginStatus.playbackKeyReady))));
+    if (needsRenew) {
+      try {
+        var renewInfo = await apiJson('/api/qq/login/refresh' + (opts.forceRenew ? '?force=1' : ''), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: !!opts.forceRenew })
+        });
+        if (renewInfo) {
+          qqLoginStatus = normalizeQQLoginStatus(renewInfo);
+          if (renewInfo.refreshOk && (prevLogged || qqLoginWasLoggedIn)) showToast('QQ 音乐登录已自动续期');
+        }
+      } catch (renewErr) {
+        console.warn('QQ cookie auto renew failed:', renewErr);
+      }
+    }
     if (!qqLoginStatus.loggedIn) {
-      if (prevLogged || qqLoginWasLoggedIn) showToast(qqLoginStatus.stale ? 'QQ 音乐登录已失效' : 'QQ 音乐已掉登录');
+      if (prevLogged || qqLoginWasLoggedIn) showToast(qqLoginStatus.stale || qqLoginStatus.authExpired ? 'QQ 音乐登录已失效' : 'QQ 音乐已掉登录');
       qqPlaylists = [];
       userPlaylists = userPlaylists.filter(function(pl){ return pl.provider !== 'qq'; });
       homeDiscoverState.loaded = false;
@@ -232,8 +250,14 @@ async function refreshQQLoginStatus() {
       homeDiscoverState.loggedIn = true;
       loadHomeDiscover(true);
       refreshUserPlaylists(true);
-    } else if (qqLoginStatus.stale) {
+    } else if (qqLoginStatus.reauthRequired || qqLoginStatus.authExpired) {
+      if (prevLogged || qqLoginWasLoggedIn) showToast('QQ 音乐授权已失效，请重新登录续期');
+    } else if (qqLoginStatus.stale && !qqLoginStatus.refreshOk) {
       showToast('QQ 音乐登录状态可能已失效');
+    }
+    // Keep last-known-good on transient soft stale without hard logout
+    if (!qqLoginStatus.loggedIn && (prevLogged || qqLoginWasLoggedIn) && prevStatus.loggedIn && !qqLoginStatus.authExpired && !qqLoginStatus.reauthRequired) {
+      qqLoginStatus = Object.assign({}, prevStatus, { stale: true, membershipStale: true });
     }
     qqLoginWasLoggedIn = !!qqLoginStatus.loggedIn;
     if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
@@ -241,6 +265,11 @@ async function refreshQQLoginStatus() {
     return qqLoginStatus;
   } catch (e) {
     console.warn('QQ login status failed:', e);
+    if (qqLoginStatus && qqLoginStatus.loggedIn) {
+      qqLoginStatus = Object.assign({}, qqLoginStatus, { stale: true, membershipStale: true });
+      renderUserBtn();
+      return qqLoginStatus;
+    }
     qqLoginStatus = normalizeQQLoginStatus(null);
     renderUserBtn();
     return qqLoginStatus;

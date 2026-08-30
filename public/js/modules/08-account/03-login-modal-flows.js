@@ -685,8 +685,9 @@ async function openNeteaseWebLogin() {
     }
   }
 }
-async function openQQWebLogin() {
+async function openQQWebLogin(options) {
   if (qqWebLoginBusy) return;
+  options = options || {};
   var statusEl = document.getElementById('qr-status');
   var api = window.desktopWindow;
   if (!api || !api.isDesktop || typeof api.openQQMusicLogin !== 'function') {
@@ -696,11 +697,15 @@ async function openQQWebLogin() {
     return;
   }
 
+  var forceReauth = !!options.forceReauth || !!(qqLoginStatus && qqLoginStatus.loggedIn);
   qqWebLoginBusy = true;
   updateLoginProviderUi();
-  if (statusEl) { statusEl.textContent = '已打开 QQ 音乐窗口，请扫码并确认登录…'; statusEl.className = 'preview'; }
+  if (statusEl) {
+    statusEl.textContent = forceReauth ? '正在重新打开 QQ 音乐官方窗口以续期…' : '已打开 QQ 音乐窗口，请扫码并确认登录…';
+    statusEl.className = 'preview';
+  }
   try {
-    var result = await api.openQQMusicLogin();
+    var result = await api.openQQMusicLogin({ forceReauth: !!(qqLoginStatus && qqLoginStatus.loggedIn) || !!options.forceReauth });
     if (!result || !result.ok || !result.cookie) {
       throw new Error((result && (result.message || result.error)) || 'QQ 登录未完成');
     }

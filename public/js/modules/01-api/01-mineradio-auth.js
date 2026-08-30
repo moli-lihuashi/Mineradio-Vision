@@ -3,7 +3,7 @@
 
   var DEFAULTS = {
     netease: { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' },
-    qq: { provider: 'qq', loggedIn: false, preview: false, nickname: 'QQ 音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP', stale: false, playbackKeyReady: false },
+    qq: { provider: 'qq', loggedIn: false, preview: false, nickname: 'QQ 音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP', stale: false, playbackKeyReady: false, reauthRequired: false, authExpired: false },
     kugou: { provider: 'kugou', loggedIn: false, preview: true, nickname: '酷狗音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无 VIP', playbackKeyReady: false },
   };
 
@@ -33,6 +33,8 @@
         avatar: (info && info.avatar) || '',
         vipType: Number((info && (info.vipType || info.vip_type)) || 0) || 0,
         stale: !!(info && info.stale),
+        reauthRequired: !!(info && info.reauthRequired),
+        authExpired: !!(info && info.authExpired),
       });
     }
     var vipType = Number(info.vipType || info.vip_type || 0) || 0;
@@ -52,8 +54,10 @@
       isSvip: vipLevel === 'svip',
       vipLabel: info.vipLabel || (vipLevel === 'svip' ? 'QQ SVIP' : (vipLevel === 'vip' ? 'QQ VIP' : '无VIP')),
       playbackKeyReady: !!info.playbackKeyReady,
-      stale: !!info.stale || !!(info.profileUnavailable && !(info.nickname && info.avatar)),
+      stale: !!info.stale || !!(info.profileUnavailable && !(info.nickname && info.avatar)) || !!info.authExpired,
       profileUnavailable: !!info.profileUnavailable,
+      reauthRequired: !!info.reauthRequired || !!info.authExpired,
+      authExpired: !!info.authExpired,
     });
   }
 
