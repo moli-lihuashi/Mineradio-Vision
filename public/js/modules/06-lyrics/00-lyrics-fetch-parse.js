@@ -134,23 +134,6 @@ function applyLyricApiResponse(r, token, song) {
   if (lines.length && lines[0].fallback) timingSource = 'fallback';
   lines = attachLyricTranslations(lines, lyricsTransLines);
   var translationSource = translationPayload.lines.length ? translationPayload.source : 'none';
-  // [LYRIC-DIAG] 临时诊断：定位双语翻译不显示的根因。验证后删除。
-  try {
-    var _matched = lines.filter(function(l){ return l && l.translation; }).length;
-    console.warn('[LYRIC-DIAG]', JSON.stringify({
-      provider: song && (song.source || song.provider),
-      name: song && (song.name || song.title),
-      rawTransLen: (r.trans || '').length,
-      rawTlyricLen: (r.tlyric || '').length,
-      rawYtlrcLen: (r.ytlrc || '').length,
-      transLines: lyricsTransLines.length,
-      primaryLines: lines.length,
-      matched: _matched,
-      source: translationSource,
-      mode: fx && fx.lyricTranslationMode,
-      timing: timingSource
-    }));
-  } catch (_) {}
   setOriginalLyricsState(lines, hasNativeKaraoke, timingSource, lyricsTransLines, translationSource);
   applyPreferredLyricsForCurrent(true);
   // 网易歌词译文回落：非网易源歌曲缺译文时，延迟从网易搜索同名歌曲补译文
