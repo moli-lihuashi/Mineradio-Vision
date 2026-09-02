@@ -32,6 +32,8 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 - **多账号状态统一**：网易云 / QQ / 酷狗 / 汽水 / Spotify 五源登录入口统一，已登录平台显示账号卡片、UID 与会员状态，支持跨设备登录包导出 / 导入。
 - **同曲换源与自动兜底**：灰歌自动寻找可播同录音版本，底栏曲名片源徽章弹出切换器手动切源。
 - **QQ Cookie 失效检测 + 自动续期**：授权失效自动判定（code 1000 / login_required 等），服务端静默续期写回凭证，失败标记需重登；桌面端采集跳过过期项，避免旧 Cookie 污染会话。
+- **酷狗 KRC 加密歌词解密**：krc1 加密歌词（XOR + zlib）正确解译，翻译歌词显示修复，云歌单 dfid 设备身份修复（20017）。
+- **汽水音乐设备身份持久化**：device_id 跨进程稳定，降低风控触发。
 
 ### 视觉系统
 
@@ -42,6 +44,7 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 - **Home 布局升级**：首页 Hero 网格与卡片体系重设计，信息层级与视觉节奏更清晰。
 - **卡片宠物「像素伙伴」**：Home 桌宠卡片，支持上传照片像素化为自定义专属伙伴（基于 [Lew1sWong/claude-pet](https://github.com/Lew1sWong/claude-pet) MIT 许可集成）。
 - **玻璃控件体系**：FX / 登录滑动玻璃选中胶囊、音量玻璃滑块，按下放大、松开弹簧缩回的质感交互。
+- **morphicons 图标形变动画**：播放 / 暂停、播放顺序、音量档位图标平滑形变切换（[guillermolg00/morphicons](https://github.com/guillermolg00/morphicons) MIT 许可）。
 - **登录页单页布局**：「平台 → 方式 → 操作」流程化设计，多平台统一登录管理。
 - 继承原项目的歌词舞台、粒子舞台、电影镜头、3D 歌单架等核心视觉体验。
 

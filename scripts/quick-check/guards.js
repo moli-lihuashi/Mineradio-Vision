@@ -2419,6 +2419,20 @@ function checkKugouCloudlistIdentityGuard() {
   if (/DIAG7QOELSYoIJvTFJhMpe1s/.test(serverText)) fail('standard RSA key must not reappear in server.js (identity drift)');
   if (!/KUGOU_LITE_APPID: KUGOU_APPID/.test(serverText)) fail('server.js must alias the lite identity constants from kugou-api.js');
   if (!/setKugouDfidPersistHook\(/.test(serverText)) fail('server.js must register the dfid persist hook (avoid per-launch device registration)');
+  // 2026-08-31：dfid 死门控回归 — WithCloudlistDevice 必须无条件 ensure，不得再依赖未设置的 opts.router
+  if (/opts\.router\s*!==\s*['"]cloudlist\.service\.kugou\.com['"]/.test(kugouApiText)) {
+    fail('kugouWithCloudlistDevice must not early-return on opts.router (callers never set it; dfid injection dies)');
+  }
+  if (!/opts\.router\s*=\s*['"]cloudlist\.service\.kugou\.com['"]/.test(kugouApiText)) {
+    fail('kugouCloudlistRequest must mark opts.router for the cloudlist channel');
+  }
+  // server 歌单列表不得走 gateway 旁路
+  if (/kugouGatewayRequest\(\s*['"]\/v7\/get_all_list['"]/.test(serverText)) {
+    fail('server.js /v7/get_all_list must use kugouCloudlistRequest (gateway bypass skips ensureKugouDfid)');
+  }
+  if (!/kugouApiCloudlistRequest/.test(serverText)) {
+    fail('server.js must delegate cloudlist to kugou-api.js kugouCloudlistRequest');
+  }
   console.log('[OK] Cloudlist stays on the lite identity channel with dfid registration.');
 }
 

@@ -193,8 +193,9 @@ module.exports = function register(ctx) {
     if (pn === '/api/kugou/lyric') {
       try {
         const hash = url.searchParams.get('hash') || url.searchParams.get('id') || '';
+        const albumAudioId = url.searchParams.get('albumAudioId') || url.searchParams.get('album_audio_id') || '';
         const duration = url.searchParams.get('duration') || url.searchParams.get('timelength') || '';
-        const data = await handleKugouLyric(hash, duration);
+        const data = await handleKugouLyric(hash, albumAudioId, duration);
         sendJSON(res, data);
       } catch (err) {
         console.error('[KugouLyric]', err);

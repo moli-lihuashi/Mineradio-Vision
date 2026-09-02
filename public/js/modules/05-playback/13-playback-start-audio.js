@@ -549,9 +549,13 @@ async function togglePlay() {
   }
 }
 function setPlayIcon(p) {
-  document.getElementById('play-icon').innerHTML = p
-    ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
-    : '<path d="M8 5v14l11-7z"/>';
+  // morphicons 弹簧 morph：play 三角 ↔ pause 双竖线（库缺失时回退 stroke path 直切）
+  var mc = window.MorphiconCtl;
+  if (mc && mc.set('play', p ? 'pause' : 'play')) return;
+  var icon = document.getElementById('play-icon');
+  if (icon) icon.innerHTML = p
+    ? '<path d="M8 5v14M16 5v14"/>'
+    : '<path d="M8 5 19 12 8 19Z"/>';
 }
 function nextTrack() {
   if (!playQueue.length) return;
@@ -623,7 +627,12 @@ function updatePlayModeButton(animate) {
     btn.setAttribute('aria-label', label);
     btn.classList.toggle('active', playMode !== 'loop');
   }
-  if (icon) icon.innerHTML = playModeIconMarkup(playMode);
+  if (icon) {
+    // morphicons 弹簧 morph：loop ↔ shuffle ↔ single（库缺失时回退 stroke path 直切）
+    var mc = window.MorphiconCtl;
+    var modeIcon = playMode === 'shuffle' ? 'modeShuffle' : playMode === 'single' ? 'modeSingle' : 'modeLoop';
+    if (!(mc && mc.set('mode', modeIcon))) icon.innerHTML = playModeIconMarkup(playMode);
+  }
   if (!animate || !btn) return;
   var M = window.MineradioMotion;
   if (M) {
@@ -671,3 +680,9 @@ function cyclePlayMode() {
   showToast('播放模式: ' + playModeLabel(playMode));
 }
 updatePlayModeButton(false);
+
+// QQ playback request deadline (aligned with server VKEY+probe budgets)
+var QQ_PLAYBACK_URL_TIMEOUT_MS = 15000;
+var QQ_PLAYBACK_GAPLESS_TIMEOUT_MS = 15000;
+function qqPlaybackUrlRequestOptions(){ return { timeoutMs: 15000 }; }
+function qqGaplessUrlRequestOptions(){ return { timeoutMs: 15000 }; }

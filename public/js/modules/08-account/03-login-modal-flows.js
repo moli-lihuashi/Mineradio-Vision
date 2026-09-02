@@ -447,22 +447,38 @@ function updateLoginProviderUi() {
     var cardMark = qqCard.querySelector('b');
     var cardLabel = qqCard.querySelector('span');
     if (cardMark) cardMark.textContent = 'QQ';
-    if (cardLabel) cardLabel.textContent = qqWebLoginBusy ? '等待扫码确认' : '打开官方扫码窗口';
+    if (cardLabel) cardLabel.textContent = qqWebLoginBusy
+      ? '等待扫码确认'
+      : (qqLoginStatus.loggedIn ? '重新打开官方窗口同步会员' : '打开官方扫码窗口');
     qqCard.onclick = openQQWebLogin;
   }
   if (st) {
     st.style.display = isLoggedIn ? 'none' : '';
     st.className = isQQ ? 'preview' : '';
     st.textContent = isQQ
-      ? '点击二维码区域或下方按钮打开 QQ 音乐官方扫码窗口'
+      ? (typeof qqLoginStatusText === 'function' ? qqLoginStatusText(qqLoginStatus) : '点击二维码区域或下方按钮打开 QQ 音乐官方扫码窗口')
       : '正在生成二维码…';
   }
   if (refreshBtn) {
     refreshBtn.disabled = loginProviderBusy(loginProvider);
+    var qqNeedsAuthRefresh = isQQ && qqLoginStatus.loggedIn && (
+      qqLoginStatus.authorizationIncomplete ||
+      qqLoginStatus.playbackKeyReady === false ||
+      (typeof qqLoginNeedsAuthorizationRefresh === 'function' && qqLoginNeedsAuthorizationRefresh(qqLoginStatus))
+    );
+    var qqNeedsMembershipSync = isQQ && typeof qqMembershipNeedsSync === 'function' && qqMembershipNeedsSync(qqLoginStatus);
     refreshBtn.textContent = isLoggedIn
       ? ('退出' + meta.label)
-      : (isQQ ? (qqWebLoginBusy ? '等待扫码…' : '扫码登录') : (loginProviderBusy(loginProvider) ? '等待登录…' : '刷新二维码'));
-    refreshBtn.onclick = isLoggedIn ? function(){ logoutLoginProvider(loginProvider); } : (isQQ ? openQQWebLogin : refreshQr);
+      : (isQQ
+        ? (qqWebLoginBusy ? '等待扫码…' : (qqNeedsAuthRefresh ? '重新授权' : (qqNeedsMembershipSync ? '同步会员' : (qqLoginStatus.loggedIn ? '刷新状态' : '扫码登录'))))
+        : (loginProviderBusy(loginProvider) ? '等待登录…' : '刷新二维码'));
+    refreshBtn.onclick = isLoggedIn
+      ? function(){ logoutLoginProvider(loginProvider); }
+      : (isQQ
+        ? (qqNeedsAuthRefresh || qqNeedsMembershipSync
+          ? function () { openQQWebLogin({ forceReauth: true }); }
+          : (qqLoginStatus.loggedIn ? refreshQr : openQQWebLogin))
+        : refreshQr);
   }
 }
 async function refreshQr() {

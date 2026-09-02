@@ -1151,9 +1151,13 @@ async function openQQMusicLoginWindow(owner, options) {
       if (pollTimer) clearInterval(pollTimer);
       try {
         const cookie = await readQQLoginCookieHeader(cookieSession);
-        resolve(qqCookieHasPlaybackLogin(cookie)
-          ? { ok: true, cookie }
-          : { ok: false, cancelled: true, message: 'QQ 登录窗口已关闭' });
+        if (qqCookieHasPlaybackLogin(cookie)) {
+          resolve({ ok: true, cookie });
+        } else if (qqCookieHasLogin(cookie)) {
+          resolve({ ok: true, cookie, partial: true });
+        } else {
+          resolve({ ok: false, cancelled: true, message: 'QQ 登录窗口已关闭' });
+        }
       } catch (e) {
         resolve({ ok: false, error: e.message || 'QQ 登录窗口已关闭' });
       }
@@ -3312,6 +3316,7 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      // [临时诊断] 验证双语翻译链路，临时开 devTools；定位后改回 env 开关
       devTools: true,
     },
   });
@@ -3855,6 +3860,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     appQuitting = true;
+    if (memoryAutoTimer) clearInterval(memoryAutoTimer);
     clearWallpaperEngineCaptureGrant();
     if (wallpaperEngineLibrary && typeof wallpaperEngineLibrary.dispose === 'function') {
       try { wallpaperEngineLibrary.dispose(); } catch (_) {}

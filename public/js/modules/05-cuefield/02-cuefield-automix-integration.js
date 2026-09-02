@@ -168,18 +168,24 @@ function initCuefieldAutoMix() {
         cuefieldLyricTextForSong(fromSong, true),
         cuefieldLyricTextForSong(toSong, false)
       ]);
-      return apiJson('/api/cuefield/transition', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fromKey: fromKey,
-          toKey: toKey,
-          fromLrc: lyricPair[0] || '',
-          toLrc: lyricPair[1] || '',
-          exitBias: 'late',
-          maxEntryTime: 32
-        })
-      });
+      try {
+        return await apiJson('/api/cuefield/transition', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromKey: fromKey,
+            toKey: toKey,
+            fromLrc: lyricPair[0] || '',
+            toLrc: lyricPair[1] || '',
+            exitBias: 'late',
+            maxEntryTime: 32
+          })
+        });
+      } catch (err) {
+        // beat map 缓存未命中（新歌尚未分析）时服务端回 400，属正常降级：
+        // 返回 ok:false 由 automix core 走 fallback，不再向控制台抛资源加载错误。
+        return { ok: false, error: (err && err.message) || 'CUEFIELD_TRANSITION_SKIPPED', skipped: true };
+      }
     },
     prepareAudioUrl: cuefieldAutoMixAudioDescriptor
   });

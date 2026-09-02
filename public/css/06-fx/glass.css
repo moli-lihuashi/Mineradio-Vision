@@ -46,13 +46,13 @@ html.control-glass-svg-ok #search-box,html.control-glass-svg-ok #search-results,
   backdrop-filter:var(--panel-glass-filter)!important;
   -webkit-backdrop-filter:var(--panel-glass-filter)!important;
 }
-.icon-btn:not(.ctrl-btn),#fx-fab,.user-capsule-hide-btn,.fx-mini-btn,.fx-toggle,.fx-seg button,.panel-tab,.preset-card,.lyric-color-row,.fx-slider,.fx-fold,.quality-option,.modal-btn,.visual-guide-actions button,.home-chip,.local-beat-tab,.search-history-chip,.search-result .add-btn,.song-action-btn{
+.icon-btn:not(.ctrl-btn),#fx-fab,.user-capsule-hide-btn,.fx-mini-btn,.fx-toggle,.fx-seg button,.panel-tab,.preset-card,.lyric-color-row,.fx-slider:not(.fx-fire-slider-row),.fx-fold,.quality-option,.modal-btn,.visual-guide-actions button,.home-chip,.local-beat-tab,.search-history-chip,.search-result .add-btn,.song-action-btn{
   background:var(--panel-button-bg)!important;
   border-color:rgba(255,255,255,.070)!important;
   backdrop-filter:blur(16px) saturate(1.18)!important;
   -webkit-backdrop-filter:blur(16px) saturate(1.18)!important;
 }
-html.control-glass-svg-ok .icon-btn:not(.ctrl-btn),html.control-glass-svg-ok #fx-fab,html.control-glass-svg-ok .user-capsule-hide-btn,html.control-glass-svg-ok .fx-mini-btn,html.control-glass-svg-ok .fx-toggle,html.control-glass-svg-ok .fx-seg button,html.control-glass-svg-ok .panel-tab,html.control-glass-svg-ok .preset-card,html.control-glass-svg-ok .lyric-color-row,html.control-glass-svg-ok .fx-slider,html.control-glass-svg-ok .fx-fold,html.control-glass-svg-ok .quality-option,html.control-glass-svg-ok .modal-btn,html.control-glass-svg-ok .visual-guide-actions button,html.control-glass-svg-ok .home-chip,html.control-glass-svg-ok .local-beat-tab,html.control-glass-svg-ok .search-history-chip,html.control-glass-svg-ok .search-result .add-btn,html.control-glass-svg-ok .song-action-btn{
+html.control-glass-svg-ok .icon-btn:not(.ctrl-btn),html.control-glass-svg-ok #fx-fab,html.control-glass-svg-ok .user-capsule-hide-btn,html.control-glass-svg-ok .fx-mini-btn,html.control-glass-svg-ok .fx-toggle,html.control-glass-svg-ok .fx-seg button,html.control-glass-svg-ok .panel-tab,html.control-glass-svg-ok .preset-card,html.control-glass-svg-ok .lyric-color-row,html.control-glass-svg-ok .fx-slider:not(.fx-fire-slider-row),html.control-glass-svg-ok .fx-fold,html.control-glass-svg-ok .quality-option,html.control-glass-svg-ok .modal-btn,html.control-glass-svg-ok .visual-guide-actions button,html.control-glass-svg-ok .home-chip,html.control-glass-svg-ok .local-beat-tab,html.control-glass-svg-ok .search-history-chip,html.control-glass-svg-ok .search-result .add-btn,html.control-glass-svg-ok .song-action-btn{
   backdrop-filter:blur(16px) saturate(1.18)!important;
   -webkit-backdrop-filter:blur(16px) saturate(1.18)!important;
 }

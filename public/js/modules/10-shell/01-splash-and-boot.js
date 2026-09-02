@@ -626,7 +626,15 @@ initIdleGuideCanvas();
   console.error('[boot] startup block failed (continuing to main-loop):', bootErr);
 }
 function bootstrapStartupLoginStatus() {
-  startupLoginStatusPromise = Mineradio.auth.syncAll(apiJson);
+  startupLoginStatusPromise = Promise.all([
+    typeof refreshLoginStatus === 'function' ? refreshLoginStatus() : Promise.resolve(null),
+    typeof refreshQQLoginStatus === 'function' ? refreshQQLoginStatus({ forceVip: true, reason: 'startup' }) : Promise.resolve(null),
+    typeof refreshKugouLoginStatus === 'function' ? refreshKugouLoginStatus() : Promise.resolve(null),
+    typeof refreshQishuiLoginStatus === 'function' ? refreshQishuiLoginStatus() : Promise.resolve(null),
+    typeof refreshSpotifyLoginStatus === 'function' ? refreshSpotifyLoginStatus() : Promise.resolve(null)
+  ]);
+  // Keep a named hook for 05-startup-bindings.js / guards.
+  if (typeof ensureStartupQQVipRecheck === 'function') { /* already included above */ }
   return startupLoginStatusPromise;
 }
 function paintHomeLocalSnapshot() {
@@ -659,6 +667,9 @@ function handleStartupLoginReady() {
 }
 bootstrapStartupLoginStatus();
 startQQLoginStatusAutoRefresh();
+if (typeof startKugouLoginStatusAutoRefresh === 'function') startKugouLoginStatusAutoRefresh();
+if (typeof startQishuiLoginStatusAutoRefresh === 'function') startQishuiLoginStatusAutoRefresh();
+if (typeof startSpotifyLoginStatusAutoRefresh === 'function') startSpotifyLoginStatusAutoRefresh();
 if (startupLoginStatusPromise && startupLoginStatusPromise.then) {
   startupLoginStatusPromise.then(handleStartupLoginReady).catch(function(e){
     console.warn('[StartupLogin]', e);

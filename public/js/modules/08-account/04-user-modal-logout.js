@@ -41,7 +41,9 @@ function updateUserModalUi() {
       vipEl.style.color = hasProviderVip('spotify', st) ? 'rgba(30,215,96,0.9)' : 'rgba(30,215,96,0.55)';
     } else {
       var qqVipLevel = providerVipLevel('qq', st);
-      var qqVipLabel = (st && st.profileUnavailable && qqVipLevel === 'none')
+      var qqPending = (typeof qqMembershipNeedsSync === 'function' && qqMembershipNeedsSync(st)) ||
+        (st && (st.membershipKnown === false || st.membershipStale || (st.profileUnavailable && qqVipLevel === 'none')));
+      var qqVipLabel = qqPending
         ? 'QQ 会员待同步'
         : (qqVipLevel === 'svip' ? 'QQ SVIP 会员' : (qqVipLevel === 'vip' ? 'QQ VIP 会员' : 'QQ 音乐会话'));
       vipEl.textContent = 'UID: ' + ((st && st.userId) || '-') + '  ·  ' + qqVipLabel;
@@ -64,6 +66,14 @@ function showUserModal() {
   if (!hasAnyPlatformLogin()) return showLoginModal();
   updateUserModalUi();
   openGsapModal(document.getElementById('user-modal'));
+  if (typeof refreshQQVipStatusNow === 'function' && hasPlatformLogin('qq')) {
+    refreshQQVipStatusNow('account-modal').then(function () {
+      updateUserModalUi();
+      if (typeof renderUserBtn === 'function') renderUserBtn();
+    }).catch(function (e) {
+      console.warn('QQ VIP account-modal refresh failed:', e);
+    });
+  }
 }
 function closeUserModal() { closeGsapModal(document.getElementById('user-modal')); }
 async function exportActiveLoginSessionPack() {

@@ -60,8 +60,14 @@ module.exports = function register(ctx) {
     // ---------- 歌曲URL ----------
     if (pn === '/api/qq/login/status') {
       try {
-        const forceRenew = url.searchParams.get('renew') === '1' || url.searchParams.get('refresh') === '1';
-        const info = await getQQLoginInfo({ autoRenew: true, forceRenew });
+        const forceVip = /^(1|true|yes)$/i.test(String(url.searchParams.get('forceVip') || url.searchParams.get('force') || ''));
+        const forceRenew = forceVip || url.searchParams.get('renew') === '1' || url.searchParams.get('refresh') === '1';
+        const info = await getQQLoginInfo({
+          autoRenew: true,
+          forceRenew,
+          forceVip,
+          forceCookie: forceVip,
+        });
         sendJSON(res, info);
       } catch (err) {
         console.error('[QQLoginStatus]', err);
@@ -78,11 +84,12 @@ module.exports = function register(ctx) {
         const info = (result && result.info) || await getQQLoginInfo({ autoRenew: false });
         sendJSON(res, Object.assign({}, info, {
           refreshed: !!(result && result.refreshed),
-          refreshOk: !!(result && result.ok),
+          refreshOk: !!(result && (result.ok || result.skipped)),
+          refreshSkipped: !!(result && result.skipped),
           refreshVia: result && result.via,
           refreshReason: result && result.reason,
-          reauthRequired: !!(result && result.reauthRequired) || !!(info && info.reauthRequired),
-        }), (result && result.ok) ? 200 : 200);
+          reauthRequired: !!(info && info.reauthRequired) || !!(result && result.reauthRequired && !result.skipped),
+        }), 200);
       } catch (err) {
         console.error('[QQLoginRefresh]', err);
         sendJSON(res, { provider: 'qq', loggedIn: false, refreshOk: false, reauthRequired: true, error: err.message }, 500);

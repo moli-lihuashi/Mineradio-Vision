@@ -340,11 +340,16 @@ function updateVolumeUiFrom(level) {
   if (value) value.textContent = pct + '%';
   if (wrap) wrap.classList.toggle('muted', level <= 0.01);
   if (icon) {
-    icon.innerHTML = level <= 0.01
-      ? '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="17" y1="9" x2="22" y2="14"/><line x1="22" y1="9" x2="17" y2="14"/>'
-      : level < 0.45
-        ? '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15 10.5a2 2 0 0 1 0 3"/>'
-        : '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15 9.5a4 4 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/>';
+    // morphicons 弹簧 morph：高音量 ↔ 低音量 ↔ 静音三档（库缺失时回退 stroke path 直切）
+    var mc = window.MorphiconCtl;
+    var volIcon = level <= 0.01 ? 'volMute' : level < 0.45 ? 'volLow' : 'volHigh';
+    if (!(mc && mc.set('vol', volIcon))) {
+      icon.innerHTML = level <= 0.01
+        ? '<path d="M11 5 6 9 2 9 2 15 6 15 11 19 11 5Z"/><path d="M17 9 22 14"/><path d="M22 9 17 14"/>'
+        : level < 0.45
+          ? '<path d="M11 5 6 9 2 9 2 15 6 15 11 19 11 5Z"/><path d="M15 10.5a2 2 0 0 1 0 3"/>'
+          : '<path d="M11 5 6 9 2 9 2 15 6 15 11 19 11 5Z"/><path d="M15 9.5a4 4 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/>';
+    }
   }
 }
 

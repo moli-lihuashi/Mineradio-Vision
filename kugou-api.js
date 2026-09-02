@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
+const zlib = require('zlib');
 const { requestText } = require('./server/lib/http-request');
 
 const KUGOU_SEARCH_URL = 'http://songsearch.kugou.com/song_search_v2';
@@ -574,7 +575,9 @@ async function ensureKugouDfid(cookie) {
 }
 
 async function kugouWithCloudlistDevice(opts) {
-  if (opts.router !== 'cloudlist.service.kugou.com') return;
+  // 本 helper 仅由 cloudlist / 需设备身份的网关调用；旧实现要求 opts.router 才注册，
+  // 但调用方只写了 headers['x-router']、从未设 opts.router → ensureKugouDfid 整段死代码，缺 dfid 时回落到 '-' 触发 20017。
+  opts = opts || {};
   const dfid = await ensureKugouDfid(opts.cookie || '');
   if (dfid) {
     opts.cookie = (opts.cookie ? String(opts.cookie) + '; ' : '') + 'kg_dfid=' + dfid + '; dfid=' + dfid;
@@ -592,6 +595,7 @@ const KUGOU_LITE_GATEWAY_UA = 'Android15-1070-11440-46-0-DiscoveryDRADProtocol-w
 
 async function kugouCloudlistRequest(path, opts) {
   opts = opts || {};
+  opts.router = 'cloudlist.service.kugou.com';
   await kugouWithCloudlistDevice(opts);
   const auth = extractKugouAuth(opts.cookie || '');
   if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
@@ -1207,6 +1211,58 @@ function decodeKugouLyricContent(content) {
   return raw;
 }
 
+// KRC 解密：base64 → 跳过 "krc1" 头 → XOR 16 字节 key → zlib inflate
+function decryptKrcContent(content) {
+  let raw;
+  try { raw = Buffer.from(String(content || '').trim(), 'base64'); } catch (_) { return ''; }
+  if (raw.length < 8 || raw.slice(0, 4).toString('latin1') !== 'krc1') return '';
+  const key = Buffer.from([0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47, 0x51, 0x36, 0x31, 0x2d, 0xce, 0xd2, 0x6e, 0x69]);
+  const body = Buffer.from(raw.slice(4).map((b, i) => b ^ key[i % 16]));
+  try { return zlib.inflateSync(body).toString('utf8'); } catch (_) { return body.toString('utf8'); }
+}
+
+// 酷狗翻译声明行（如"以下歌词翻译由文曲大模型提供"），不应显示为译文
+function isKugouTranslationCreditLine(text) {
+  return /歌词翻译|翻译由|机译|AI生成|机器翻译/.test(String(text || ''));
+}
+
+// 从 krctype=2 的 KRC 文本中提取 [language:base64JSON] 翻译，
+// 按行序对齐主 LRC 正文行，生成带时间戳的译文 LRC
+function krcLanguageTranslationsToLrc(krcText, mainLrc) {
+  const m = String(krcText || '').match(/\[language:([^\]]*)\]/);
+  if (!m) return '';
+  let payload;
+  try { payload = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch (_) { return ''; }
+  const groups = payload && Array.isArray(payload.content) ? payload.content : [];
+  const rows = [];
+  for (const g of groups) {
+    const lc = g && Array.isArray(g.lyricContent) ? g.lyricContent : [];
+    for (const row of lc) rows.push(Array.isArray(row) ? row.join('') : String(row || ''));
+  }
+  if (!rows.length) return '';
+  const mainLines = String(mainLrc || '').split(/\r?\n/).filter((l) => /^\[\d{2,}:\d{2}/.test(l.trim()));
+  const out = [];
+  for (let i = 0; i < mainLines.length && i < rows.length; i++) {
+    const text = String(rows[i] || '').trim().replace(/^\/+\s*/, '');
+    if (!text || isKugouTranslationCreditLine(text)) continue;
+    const tm = mainLines[i].match(/^\[(\d{2,}):(\d{2}(?:\.\d{1,3})?)\]/);
+    if (!tm) continue;
+    out.push('[' + tm[1] + ':' + tm[2] + ']' + text);
+  }
+  return out.join('\n');
+}
+
+async function downloadKugouLyricCandidate(candidate, fmt) {
+  const dl = new URL(KUGOU_LYRIC_DOWNLOAD);
+  dl.searchParams.set('ver', '1');
+  dl.searchParams.set('client', 'pc');
+  dl.searchParams.set('id', String(candidate.id));
+  dl.searchParams.set('accesskey', candidate.accesskey || '');
+  dl.searchParams.set('fmt', fmt);
+  dl.searchParams.set('charset', 'utf8');
+  return requestJson(dl.toString(), { headers: KUGOU_HEADERS });
+}
+
 async function handleKugouLyric(hash, albumAudioId, durationSec) {
   const fileHash = String(hash || '').trim();
   if (!fileHash) return { provider: 'kugou', error: 'Missing Kugou hash', lyric: '' };
@@ -1220,48 +1276,27 @@ async function handleKugouLyric(hash, albumAudioId, durationSec) {
   if (albumAudioId) u.searchParams.set('album_audio_id', albumAudioId);
   const search = await requestJson(u.toString(), { headers: KUGOU_HEADERS });
   const candidates = (search && Array.isArray(search.candidates)) ? search.candidates : [];
-  const candidate = candidates[0];
-  if (!candidate || !candidate.id) {
+  if (!candidates.length || !candidates[0].id) {
     return { provider: 'kugou', hash: fileHash, lyric: '', trans: '' };
   }
-  const dl = new URL(KUGOU_LYRIC_DOWNLOAD);
-  dl.searchParams.set('ver', '1');
-  dl.searchParams.set('client', 'pc');
-  dl.searchParams.set('id', String(candidate.id));
-  dl.searchParams.set('accesskey', candidate.accesskey || '');
-  dl.searchParams.set('fmt', 'lrc');
-  dl.searchParams.set('charset', 'utf8');
-  const lyricJson = await requestJson(dl.toString(), { headers: KUGOU_HEADERS });
+  // 主歌词：优先 krctype=1（原文歌词），否则第一个候选
+  const mainCandidate = candidates.find((c) => c && c.id && String(c.krctype) === '1') || candidates[0];
+  // 翻译候选：krctype=2；与主歌词并行下载，避免串行等待拖慢歌词首显
+  const transCandidate = candidates.find((c) => c && c.id && String(c.krctype) === '2' && String(c.id) !== String(mainCandidate.id));
+  const [lyricJson, transJson] = await Promise.all([
+    downloadKugouLyricCandidate(mainCandidate, 'lrc').catch(() => null),
+    transCandidate ? downloadKugouLyricCandidate(transCandidate, 'krc').catch(() => null) : Promise.resolve(null),
+  ]);
   const lyric = decodeKugouLyricContent(lyricJson && lyricJson.content);
 
+  // 翻译：优先主响应自带 trans；否则解密 krctype=2 的 KRC，从 [language:] 标签提取逐行译文
   let trans = '';
   if (lyricJson && lyricJson.trans) {
     trans = decodeKugouLyricContent(lyricJson.trans);
   }
-  if (!trans) {
-    for (let i = 1; i < candidates.length; i++) {
-      const c = candidates[i];
-      if (!c || !c.id) continue;
-      const isTransCandidate = String(c.style) === '2' || String(c.lyric_style) === '2' || c.trans === true;
-      if (!isTransCandidate && i === 1 && candidates.length === 2) {
-      }
-      if (!isTransCandidate && candidates.length > 2) continue;
-      try {
-        const tdl = new URL(KUGOU_LYRIC_DOWNLOAD);
-        tdl.searchParams.set('ver', '1');
-        tdl.searchParams.set('client', 'pc');
-        tdl.searchParams.set('id', String(c.id));
-        tdl.searchParams.set('accesskey', c.accesskey || '');
-        tdl.searchParams.set('fmt', 'lrc');
-        tdl.searchParams.set('charset', 'utf8');
-        const transJson = await requestJson(tdl.toString(), { headers: KUGOU_HEADERS });
-        const transContent = decodeKugouLyricContent(transJson && transJson.content);
-        if (transContent && transContent !== lyric) {
-          trans = transContent;
-          break;
-        }
-      } catch (_) {}
-    }
+  if (!trans && transJson) {
+    const krcText = decryptKrcContent(transJson && transJson.content);
+    trans = krcLanguageTranslationsToLrc(krcText, lyric);
   }
   return { provider: 'kugou', hash: fileHash, lyric, trans };
 }

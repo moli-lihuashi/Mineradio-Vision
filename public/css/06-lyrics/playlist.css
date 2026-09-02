@@ -98,7 +98,7 @@
 #search-results::-webkit-scrollbar-thumb,#fx-panel .fx-scroll::-webkit-scrollbar-thumb{background:rgba(var(--fc-accent-rgb),.30)!important}
 #fx-panel .fx-scroll{scrollbar-color:rgba(var(--fc-accent-rgb),.30) transparent!important}
 .preset-card.active .pc-icon,.fx-section-label,.fx-fold-head .arrow,.pl-section-label{color:rgba(var(--fc-accent-rgb),.72)!important}
-.lyric-color-row:focus-within,.fx-slider:focus-within,.fx-fold.open{border-color:rgba(var(--fc-accent-rgb),.18)}
+.lyric-color-row:focus-within,.fx-slider:not(.fx-fire-slider-row):focus-within,.fx-fold.open{border-color:rgba(var(--fc-accent-rgb),.18)}
 .song-action-btn:hover,.qi-act button.queue-next:hover,.mini-queue-remove.mini-queue-next:hover{background:rgba(var(--fc-accent-rgb),.12)!important;border-color:rgba(var(--fc-accent-rgb),.30)!important;color:#fff!important}
 .pl-section-label,.fx-section-label,.fx-fold-head .arrow{color:rgba(var(--fc-accent-rgb),.58)}
 .search-result .add-btn:hover,.quality-option.active,.fx-mini-btn.active,.fx-mini-btn.ghost.active,.playlist-pin-btn.active{border-color:rgba(var(--fc-accent-rgb),.38)!important;background:rgba(var(--fc-accent-rgb),.12)!important;color:#fff!important;box-shadow:0 10px 28px rgba(var(--fc-accent-rgb),.08)}
@@ -121,14 +121,14 @@ html.control-glass-svg-ok #search-box,html.control-glass-svg-ok #search-results,
   backdrop-filter:var(--saved-panel-glass-svg-filter)!important;
   -webkit-backdrop-filter:var(--saved-panel-glass-svg-filter)!important;
 }
-.icon-btn,#fx-fab,.user-capsule-hide-btn,.fx-mini-btn,.fx-toggle,.fx-seg button,.panel-tab,.preset-card,.lyric-color-row,.fx-slider,.fx-fold,.quality-option,.modal-btn,.visual-guide-actions button,.home-chip,.pl-card,.queue-item,.mini-queue-item,.pl-detail-row,.pl-detail-play,.local-beat-tab,.search-history-chip,.search-result .add-btn,.song-action-btn,.qi-act button,.mini-queue-remove{
+.icon-btn,#fx-fab,.user-capsule-hide-btn,.fx-mini-btn,.fx-toggle,.fx-seg button,.panel-tab,.preset-card,.lyric-color-row,.fx-slider:not(.fx-fire-slider-row),.fx-fold,.quality-option,.modal-btn,.visual-guide-actions button,.home-chip,.pl-card,.queue-item,.mini-queue-item,.pl-detail-row,.pl-detail-play,.local-beat-tab,.search-history-chip,.search-result .add-btn,.song-action-btn,.qi-act button,.mini-queue-remove{
   background:var(--saved-button-glass-bg)!important;
   border-color:transparent!important;
   box-shadow:var(--saved-button-glass-shadow)!important;
   backdrop-filter:var(--saved-button-glass-filter)!important;
   -webkit-backdrop-filter:var(--saved-button-glass-filter)!important;
 }
-html.control-glass-svg-ok .icon-btn,html.control-glass-svg-ok #fx-fab,html.control-glass-svg-ok .user-capsule-hide-btn,html.control-glass-svg-ok .fx-mini-btn,html.control-glass-svg-ok .fx-toggle,html.control-glass-svg-ok .fx-seg button,html.control-glass-svg-ok .panel-tab,html.control-glass-svg-ok .preset-card,html.control-glass-svg-ok .lyric-color-row,html.control-glass-svg-ok .fx-slider,html.control-glass-svg-ok .fx-fold,html.control-glass-svg-ok .quality-option,html.control-glass-svg-ok .modal-btn,html.control-glass-svg-ok .visual-guide-actions button,html.control-glass-svg-ok .home-chip,html.control-glass-svg-ok .pl-card,html.control-glass-svg-ok .queue-item,html.control-glass-svg-ok .mini-queue-item,html.control-glass-svg-ok .pl-detail-row,html.control-glass-svg-ok .pl-detail-play,html.control-glass-svg-ok .local-beat-tab,html.control-glass-svg-ok .search-history-chip,html.control-glass-svg-ok .search-result .add-btn,html.control-glass-svg-ok .song-action-btn,html.control-glass-svg-ok .qi-act button,html.control-glass-svg-ok .mini-queue-remove{
+html.control-glass-svg-ok .icon-btn,html.control-glass-svg-ok #fx-fab,html.control-glass-svg-ok .user-capsule-hide-btn,html.control-glass-svg-ok .fx-mini-btn,html.control-glass-svg-ok .fx-toggle,html.control-glass-svg-ok .fx-seg button,html.control-glass-svg-ok .panel-tab,html.control-glass-svg-ok .preset-card,html.control-glass-svg-ok .lyric-color-row,html.control-glass-svg-ok .fx-slider:not(.fx-fire-slider-row),html.control-glass-svg-ok .fx-fold,html.control-glass-svg-ok .quality-option,html.control-glass-svg-ok .modal-btn,html.control-glass-svg-ok .visual-guide-actions button,html.control-glass-svg-ok .home-chip,html.control-glass-svg-ok .pl-card,html.control-glass-svg-ok .queue-item,html.control-glass-svg-ok .mini-queue-item,html.control-glass-svg-ok .pl-detail-row,html.control-glass-svg-ok .pl-detail-play,html.control-glass-svg-ok .local-beat-tab,html.control-glass-svg-ok .search-history-chip,html.control-glass-svg-ok .search-result .add-btn,html.control-glass-svg-ok .song-action-btn,html.control-glass-svg-ok .qi-act button,html.control-glass-svg-ok .mini-queue-remove{
   backdrop-filter:var(--saved-button-glass-svg-filter)!important;
   -webkit-backdrop-filter:var(--saved-button-glass-svg-filter)!important;
 }
@@ -144,7 +144,7 @@ html.control-glass-svg-ok .icon-btn,html.control-glass-svg-ok #fx-fab,html.contr
   box-shadow:none!important;
 }
 .fx-section-label,.pl-section-label,.preset-card.active .pc-icon,.fx-fold-head .arrow,.visual-guide-kicker{color:rgba(255,255,255,.68)!important;text-shadow:none!important}
-.lyric-color-row:focus-within,.fx-slider:focus-within,.fx-fold.open,#search-box:focus-within{border-color:transparent!important;box-shadow:var(--saved-panel-glass-shadow)!important}
+.lyric-color-row:focus-within,.fx-slider:not(.fx-fire-slider-row):focus-within,.fx-fold.open,#search-box:focus-within{border-color:transparent!important;box-shadow:var(--saved-panel-glass-shadow)!important}
 
 /* Left playlist panel rollback: keep this page lightweight. */
 #playlist-panel{background:rgba(12,12,18,0.42)!important;border:1px solid rgba(255,255,255,0.08)!important;box-shadow:0 24px 80px rgba(0,0,0,0.45)!important;backdrop-filter:blur(40px) saturate(1.4)!important;-webkit-backdrop-filter:blur(40px) saturate(1.4)!important}

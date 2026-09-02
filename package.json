@@ -49,6 +49,7 @@
       "spotify-api.js",
       "qishui-api.js",
       "qq-vip-api.js",
+      "*-api.js",
       "qishui-audio-decryptor/**/*",
       "package.json",
       "!public/index.*.html",

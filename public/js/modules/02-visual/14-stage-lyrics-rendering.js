@@ -166,7 +166,8 @@ function promoteNextLineToCurrent(text) {
 function buildLyricMeshLegacy(text, opts) {
   opts = opts || {};
   var role = opts.role === 'next' || opts.role === 'next2' ? opts.role : 'current';
-  text = String(text || '').replace(/\s+/g, ' ').trim();
+  // 保留 \n 强制换行：原文/译文上下两行渲染（makeLyricMaskLegacy 支持多行）
+  text = (typeof normalizeLyricStageLineText === 'function' ? normalizeLyricStageLineText(text) : String(text || '').replace(/\s+/g, ' ').trim());
   // P1：legacy mesh 固定走 Legacy API，避免被 payload/row shader 全局名踩踏
   var mask = (typeof makeLyricMaskLegacy === 'function' ? makeLyricMaskLegacy : makeLyricMask)(text);
   var pal = stageLyrics.palette;
@@ -464,12 +465,14 @@ function showStageLine(text, redrawOnly, options) {
     }
   }
 
-  text = normalizeLyricLineText(typeof text === 'object' ? (text && text.text) || '' : text);
+  // 保留 \n：原文/译文上下两行；比对时用压平形式保持 promote 逻辑不变
+  text = (typeof normalizeLyricStageLineText === 'function' ? normalizeLyricStageLineText : normalizeLyricLineText)(typeof text === 'object' ? (text && text.text) || '' : text);
   if (!text) { clearStageLyrics(); return false; }
   if (!redrawOnly && isLyricDualLine() && stageLyrics.next) {
     // triple/custom 模式下 nextText 是多行用 " · " 合并的串，需取首段比对以触发 promote 动画
     var nt = normalizeLyricLineText(stageLyrics.nextText);
-    if (nt === text || (nt && String(nt).split(/\s+·\s+/)[0] === text)) {
+    var flatText = normalizeLyricLineText(text);
+    if (nt === flatText || (nt && String(nt).split(/\s+·\s+/)[0] === flatText)) {
       promoteNextLineToCurrent(text);
       return true;
     }
@@ -498,7 +501,8 @@ function showStageLine(text, redrawOnly, options) {
 function showStageNextLine(text) {
   createLyricsParticles();
   if (!stageLyrics.group) return;
-  text = String(text || '').replace(/\s+/g, ' ').trim();
+  // 预告行同样保留 \n：原文/译文上下两行，与当前行布局一致
+  text = (typeof normalizeLyricStageLineText === 'function' ? normalizeLyricStageLineText : String)(text);
   if (!text) {
     hideStageNextLineSmooth();
     return;
@@ -970,7 +974,11 @@ function updateStageLyrics3D(dt) {
         return !!stageLyrics.current;
       }
       var nowReveal = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      if (!mesh.userData.lyricRevealWatchAt) mesh.userData.lyricRevealWatchAt = nowReveal;
+      // 暂停/未播放时不累计 fail-open 计时：此时露字本来就不会推进，
+      // 累计只会造成「刚加载就暂停」的歌 900ms 后误报并锁死本会话。
+      var actuallyPlayingReveal = !!(playing && audio && !audio.paused && !audio.ended);
+      if (!actuallyPlayingReveal) mesh.userData.lyricRevealWatchAt = nowReveal;
+      else if (!mesh.userData.lyricRevealWatchAt) mesh.userData.lyricRevealWatchAt = nowReveal;
       var revealWait = nowReveal - mesh.userData.lyricRevealWatchAt;
       var revealPending = dataEarly.renderInitialTextReady !== true;
       var opaqueEnough = false;

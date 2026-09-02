@@ -80,7 +80,9 @@ function wakeBottomHandle(duration) {
 function forcePlaybackControlsInteractive() {
   if (!hasActivePlaybackControls()) return;
   try {
-    document.body.classList.remove('home-controls-locked');
+    // 与升起路径一致：解除锁定必须清 homeForcedOpen，否则 showHome 重入会重新上锁
+    if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false);
+    else document.body.classList.remove('home-controls-locked');
     var bar = document.getElementById('bottom-bar');
     if (bar) {
       bar.style.pointerEvents = '';

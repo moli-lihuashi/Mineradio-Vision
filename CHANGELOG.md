@@ -13,6 +13,11 @@
 - 登录页重做：改为「平台 → 方式 → 操作」单页布局，消除滚动冲突；清理 Spotify 登录页。
 - 新增玻璃控件：FX / 登录滑动玻璃选中胶囊、FX / 音量玻璃滑块拇指，按下放大、松开弹簧缩回的交互打磨。
 - QQ Cookie 失效检测 + 自动续期：资料页 code 1000 / result 301、缺播放密钥、取链 login_required 判定授权失效；服务端调用 QQConnectLogin.LoginServer / QQLogin 自动续期（优先 musickey，支持 refresh token），成功写回 .qq-cookie，失败标记 reauthRequired；状态轮询与取歌链失败时自动尝试，也支持 POST /api/qq/login/refresh 手动触发；桌面端采集 Cookie 时跳过过期项（优先 y.qq.com），已登录再开官方窗口自动 forceReauth 重登。
+- 酷狗 KRC 歌词解密与翻译显示修复：支持 krc1 加密歌词解密（XOR 密钥 + zlib 解压），翻译声明行（如「翻译由文曲大模型提供」）不再误显示为译文；旧持久缓存无译文时刷新后自动重新应用。
+- 酷狗云歌单 dfid 修复：修复设备身份注册条件错误导致 dfid 回落 '-' 触发 20017 错误的问题。
+- 汽水音乐 device_id 持久化：设备身份跨进程稳定，行为更接近真实客户端，降低风控触发。
+- morphicons 图标形变动画（guillermolg00/morphicons MIT 许可）：播放 / 暂停、播放顺序、音量档位控制台图标平滑形变切换。
+- QQ VIP 启动强检：开机自动强制重查 QQ 登录与 VIP 状态。
 
 ## v3.0.0
 

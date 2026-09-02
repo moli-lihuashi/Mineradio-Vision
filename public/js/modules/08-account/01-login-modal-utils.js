@@ -141,11 +141,18 @@ function providerVipBadge(provider, status, idAttr) {
   if (!(status && status.loggedIn)) return '';
   var id = idAttr ? ' id="' + idAttr + '"' : '';
   var level = providerVipLevel(provider, status);
+  var pendingQQSync = provider === 'qq' && (
+    (typeof qqMembershipNeedsSync === 'function' && qqMembershipNeedsSync(status)) ||
+    status.membershipKnown === false ||
+    !!status.membershipStale ||
+    (!!status.profileUnavailable && level === 'none')
+  );
   var cls = 'top-account-vip ' + level + (provider === 'qq' ? ' qq' : (provider === 'kugou' ? ' kugou' : (provider === 'qishui' ? ' qishui' : (provider === 'spotify' ? ' spotify' : ''))));
+  if (pendingQQSync) cls += ' pending';
   var label = level === 'svip'
     ? (provider === 'spotify' ? 'PREMIUM' : 'SVIP')
     : (level === 'vip' ? 'VIP' : '普通');
-  if (provider === 'qq' && level === 'none' && status.profileUnavailable) label = '待同步';
+  if (pendingQQSync) label = '待同步';
   return '<span' + id + ' class="' + cls + '">' + label + '</span>';
 }
 function hasPlatformLogin(provider) {
@@ -185,162 +192,8 @@ function renderTopAccountPill(provider) {
     vipTag +
   '</span>';
 }
-async function refreshLoginStatus(force) {
-  try {
-    var info = await Mineradio.auth.syncNetease(apiJson);
-    loginStatus = info || { loggedIn: false };
-    if (loginStatus.loggedIn && !hasPlatformLogin(activeAccountProvider)) activeAccountProvider = 'netease';
-    else if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    if (info && info.loggedIn) {
-      homeDiscoverState.loaded = false;
-      homeDiscoverState.loggedIn = true;
-      refreshUserPlaylists(true);
-      loadHomeDiscover(true);
-      syncLikeStatusForSongs(playQueue.concat(playlist || []));
-      maybeRestorePlaybackSessionAfterLogin();
-    } else {
-      userPlaylists = qqPlaylists.concat(kugouPlaylists).concat(qishuiPlaylists).concat(spotifyPlaylists);
-      myPodcastCollections = [];
-      myPodcastItems = {};
-      likedSongMap = {};
-      updateLikeButtons();
-    }
-    return info;
-  } catch (e) {
-    console.warn(e);
-    loginStatusChecked = true;
-    loginStatusCheckFailed = true;
-    renderUserBtn();
-    return null;
-  }
-}
-function normalizeQQLoginStatus(info) {
-  return Mineradio.auth.normalizeQQ(info);
-}
-async function refreshQQLoginStatus(opts) {
-  opts = opts || {};
-  try {
-    var prevLogged = !!qqLoginStatus.loggedIn;
-    var prevStatus = qqLoginStatus || {};
-    qqLoginStatus = await Mineradio.auth.syncQQ(apiJson);
-    var needsRenew = !!(opts.forceRenew || (qqLoginStatus && (qqLoginStatus.authExpired || qqLoginStatus.reauthRequired || (qqLoginStatus.loggedIn && !qqLoginStatus.playbackKeyReady))));
-    if (needsRenew) {
-      try {
-        var renewInfo = await apiJson('/api/qq/login/refresh' + (opts.forceRenew ? '?force=1' : ''), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ force: !!opts.forceRenew })
-        });
-        if (renewInfo) {
-          qqLoginStatus = normalizeQQLoginStatus(renewInfo);
-          if (renewInfo.refreshOk && (prevLogged || qqLoginWasLoggedIn)) showToast('QQ 音乐登录已自动续期');
-        }
-      } catch (renewErr) {
-        console.warn('QQ cookie auto renew failed:', renewErr);
-      }
-    }
-    if (!qqLoginStatus.loggedIn) {
-      if (prevLogged || qqLoginWasLoggedIn) showToast(qqLoginStatus.stale || qqLoginStatus.authExpired ? 'QQ 音乐登录已失效' : 'QQ 音乐已掉登录');
-      qqPlaylists = [];
-      userPlaylists = userPlaylists.filter(function(pl){ return pl.provider !== 'qq'; });
-      homeDiscoverState.loaded = false;
-    } else if (!userPlaylists.some(function(pl){ return pl && pl.provider === 'qq'; })) {
-      homeDiscoverState.loaded = false;
-      homeDiscoverState.loggedIn = true;
-      loadHomeDiscover(true);
-      refreshUserPlaylists(true);
-    } else if (qqLoginStatus.reauthRequired || qqLoginStatus.authExpired) {
-      if (prevLogged || qqLoginWasLoggedIn) showToast('QQ 音乐授权已失效，请重新登录续期');
-    } else if (qqLoginStatus.stale && !qqLoginStatus.refreshOk) {
-      showToast('QQ 音乐登录状态可能已失效');
-    }
-    // Keep last-known-good on transient soft stale without hard logout
-    if (!qqLoginStatus.loggedIn && (prevLogged || qqLoginWasLoggedIn) && prevStatus.loggedIn && !qqLoginStatus.authExpired && !qqLoginStatus.reauthRequired) {
-      qqLoginStatus = Object.assign({}, prevStatus, { stale: true, membershipStale: true });
-    }
-    qqLoginWasLoggedIn = !!qqLoginStatus.loggedIn;
-    if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    return qqLoginStatus;
-  } catch (e) {
-    console.warn('QQ login status failed:', e);
-    if (qqLoginStatus && qqLoginStatus.loggedIn) {
-      qqLoginStatus = Object.assign({}, qqLoginStatus, { stale: true, membershipStale: true });
-      renderUserBtn();
-      return qqLoginStatus;
-    }
-    qqLoginStatus = normalizeQQLoginStatus(null);
-    renderUserBtn();
-    return qqLoginStatus;
-  }
-}
-function startQQLoginStatusAutoRefresh() {
-  if (qqLoginAutoRefreshTimer) clearInterval(qqLoginAutoRefreshTimer);
-  qqLoginAutoRefreshTimer = setInterval(function(){
-    refreshQQLoginStatus().catch(function(e){ console.warn('QQ login auto refresh failed:', e); });
-  }, 45000);
-}
-function normalizeKugouLoginStatus(info) {
-  return Mineradio.auth.normalizeKugou(info);
-}
-async function refreshKugouLoginStatus(retry) {
-  try {
-    var prevLogged = !!kugouLoginStatus.loggedIn;
-    kugouLoginStatus = await Mineradio.auth.syncKugou(apiJson);
-    if (!kugouLoginStatus.loggedIn && (prevLogged || kugouLoginWasLoggedIn)) {
-      kugouPlaylists = [];
-      showToast('酷狗登录已失效');
-    }
-    if (kugouLoginStatus.loggedIn) {
-      homeDiscoverState.loggedIn = true;
-      if (!prevLogged || !userPlaylists.some(function(pl){ return pl && pl.provider === 'kugou'; })) {
-        homeDiscoverState.loaded = false;
-        loadHomeDiscover(true);
-        refreshUserPlaylists(true);
-      }
-    }
-    kugouLoginWasLoggedIn = !!kugouLoginStatus.loggedIn;
-    if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    return kugouLoginStatus;
-  } catch (e) {
-    if (!retry) return refreshKugouLoginStatus(true);
-    console.warn('Kugou login status failed:', e);
-    if (!kugouLoginWasLoggedIn) kugouLoginStatus = normalizeKugouLoginStatus(null);
-    if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    return kugouLoginStatus;
-  }
-}
-function renderUserBtn() {
-  var btn = document.getElementById('user-btn');
-  if (!btn) return;
-  btn.classList.remove('multi-account');
-  if (dualAccountMode && hasAnyPlatformLogin()) {
-    activeAccountProvider = firstLoggedProvider();
-    btn.classList.add('logged-in', 'multi-account');
-    btn.classList.remove('logged-out');
-    btn.title = '账号信息 · 双平台登录状态';
-    btn.innerHTML = renderTopAccountPill('netease') + renderTopAccountPill('qq') + renderTopAccountPill('kugou') + renderTopAccountPill('qishui') + renderTopAccountPill('spotify');
-  } else if (hasAnyPlatformLogin()) {
-    activeAccountProvider = firstLoggedProvider();
-    var st = platformStatus(activeAccountProvider);
-    var meta = platformMeta(activeAccountProvider);
-    btn.classList.add('logged-in');
-    btn.classList.remove('logged-out');
-    btn.title = dualAccountMode ? '账号信息 · 已启用双平台展示' : ((st.nickname || meta.label) + ' · 账号信息');
-    btn.innerHTML = imgTagFromSrc(providerAvatarSrc(activeAccountProvider, st), 'id="user-avatar"') +
-                    '<span>' + escHtml(st.nickname || meta.label) + '</span>' +
-                    providerVipBadge(activeAccountProvider, st, 'user-vip-tag');
-  } else {
-    btn.classList.remove('logged-in');
-    btn.classList.add('logged-out');
-    btn.title = '登录账号';
-    btn.innerHTML = '<span class="login-word">登录</span>';
-  }
-  updatePlaybackQualityUi();
-}
+/* status refresh / renderUserBtn live in 02-login-status.js */
+
 async function showLoginModal(opts) {
   opts = opts || {};
   if (opts.provider) loginProvider = (opts.provider === 'qq' || opts.provider === 'kugou' || opts.provider === 'qishui' || opts.provider === 'spotify') ? opts.provider : 'netease';

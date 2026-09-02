@@ -35,6 +35,9 @@
         stale: !!(info && info.stale),
         reauthRequired: !!(info && info.reauthRequired),
         authExpired: !!(info && info.authExpired),
+        membershipKnown: !!(info && info.membershipKnown),
+        membershipStale: !!(info && info.membershipStale),
+        vipProbeAvailable: !!(info && info.vipProbeAvailable),
       });
     }
     var vipType = Number(info.vipType || info.vip_type || 0) || 0;
@@ -58,6 +61,13 @@
       profileUnavailable: !!info.profileUnavailable,
       reauthRequired: !!info.reauthRequired || !!info.authExpired,
       authExpired: !!info.authExpired,
+      membershipKnown: !!info.membershipKnown,
+      membershipStale: !!info.membershipStale,
+      authorizationIncomplete: !!info.authorizationIncomplete || (info.loggedIn && info.playbackKeyReady === false),
+      vipProbeAvailable: !!info.vipProbeAvailable,
+      vipCheckedAt: Number(info.vipCheckedAt || 0) || 0,
+      vipSource: info.vipSource || '',
+      vipSyncState: info.vipSyncState || '',
     });
   }
 

@@ -31,7 +31,21 @@ const QISHUI_PUBLIC_HEADERS = {
 };
 const QISHUI_WEB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) SodaMusic/3.1.0 Chrome/136.0.7103.59 Electron/36.4.0-rs.22.release.main.1 TTElectron/36.4.0-rs.22.release.main.1 Safari/537.36';
 const QISHUI_PC_APP_UA = 'LunaPC/3.3.0(359450208)';
-const QISHUI_PC_DEVICE_ID = String(Date.now());
+// device_id 持久化：模块级 Date.now() 会让每次重启都换新身份，易触发汽水风控；
+// 跨进程稳定后行为更接近真实客户端。
+function loadQishuiPcDeviceId() {
+  const file = path.join(require('os').tmpdir(), 'mineradio-qishui-device');
+  try {
+    if (fs.existsSync(file)) {
+      const id = fs.readFileSync(file, 'utf8').trim();
+      if (/^\d+$/.test(id)) return id;
+    }
+  } catch (e) {}
+  const fresh = String(Date.now());
+  try { fs.writeFileSync(file, fresh, 'utf8'); } catch (e) {}
+  return fresh;
+}
+const QISHUI_PC_DEVICE_ID = loadQishuiPcDeviceId();
 const QISHUI_PC_INSTALL_ID = String(Number(QISHUI_PC_DEVICE_ID) + 1);
 const QISHUI_PC_BIZ_TRACE_ID = crypto.randomBytes(4).toString('hex');
 const QISHUI_WEB_DEFAULT_PARAMS = {

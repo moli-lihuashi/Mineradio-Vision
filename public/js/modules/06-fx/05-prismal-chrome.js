@@ -12,8 +12,15 @@
     return !!(input.closest && input.closest('.fx-fire-track-wrapper, .fx-fire-slider-row'));
   }
 
+  function stripFireChrome(input) {
+    if (!input || !isFireRange(input)) return;
+    input.classList.remove('is-dragging');
+    try { input.style.removeProperty('--prism-fill'); } catch (_) {}
+  }
+
   function syncRangeFill(input) {
-    if (!input || input.type !== 'range' || isFireRange(input)) return;
+    if (!input || input.type !== 'range') return;
+    if (isFireRange(input)) { stripFireChrome(input); return; }
     var min = Number(input.min);
     var max = Number(input.max);
     if (!isFinite(min)) min = 0;
@@ -55,12 +62,14 @@
     document.addEventListener('input', function (ev) {
       var t = ev.target;
       if (!t || t.tagName !== 'INPUT' || t.type !== 'range') return;
+      if (isFireRange(t)) { stripFireChrome(t); return; }
       syncRangeFill(t);
     }, true);
 
     document.addEventListener('change', function (ev) {
       var t = ev.target;
       if (!t || t.tagName !== 'INPUT' || t.type !== 'range') return;
+      if (isFireRange(t)) { stripFireChrome(t); return; }
       syncRangeFill(t);
       setDragging(t, false);
     }, true);
@@ -92,6 +101,8 @@
   }
 
   function syncAllFills() {
+    var fire = document.getElementById('fx-particlecount');
+    if (fire) stripFireChrome(fire);
     var list = document.querySelectorAll(RANGE_SEL);
     for (var i = 0; i < list.length; i++) syncRangeFill(list[i]);
   }
@@ -139,8 +150,12 @@
         pill.classList.remove('is-ready');
         return;
       }
-      var left = br.left - hr.left;
-      var top = br.top - hr.top;
+      // Absolute children are relative to padding box; subtract border widths.
+      var cs = getComputedStyle(host);
+      var borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+      var borderTop = parseFloat(cs.borderTopWidth) || 0;
+      var left = br.left - hr.left - borderLeft;
+      var top = br.top - hr.top - borderTop;
       if (instant) pill.style.transition = 'none';
       pill.style.left = left + 'px';
       pill.style.top = top + 'px';

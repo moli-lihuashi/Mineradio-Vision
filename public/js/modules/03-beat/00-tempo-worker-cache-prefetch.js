@@ -442,3 +442,5 @@ async function runQueueBeatPrefetch(fromIdx, token, seq, state) {
     }
   }
 }
+
+function beatPrefetchNetworkOptions(){ return { timeoutMs: 15000 }; }

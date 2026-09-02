@@ -1,0 +1,188 @@
+/* =========================================================
+   FX Particle Count Fire Slider — HARD LOCK
+   DO NOT merge into prismal-chrome / fx-glass / glass.
+   This file must load AFTER those sheets.
+   Only #fx-particlecount / .fx-fire-* live here.
+   ========================================================= */
+
+#fx-panel .fx-slider.fx-fire-slider-row,
+#fx-panel .fx-fire-slider-row{
+  background:rgba(255,255,255,.030)!important;
+  border:1px solid rgba(255,255,255,.06)!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  filter:none!important;
+  transform:none!important;
+  isolation:auto!important
+}
+#fx-panel .fx-fire-slider-row::before,
+#fx-panel .fx-fire-slider-row::after,
+#fx-panel .fx-slider.fx-fire-slider-row::before,
+#fx-panel .fx-slider.fx-fire-slider-row::after{
+  content:none!important;
+  display:none!important;
+  background:none!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important
+}
+
+#fx-panel .fx-fire-track-wrapper,
+#fx-particlecount-track{
+  position:relative!important;
+  height:30px!important;
+  border-radius:10px!important;
+  overflow:hidden!important;
+  border:1px solid #1a1a1e!important;
+  background:#0c0c0c!important;
+  isolation:isolate!important;
+  min-width:0!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+  filter:none!important
+}
+#fx-panel .fx-fire-track-bg{
+  position:absolute!important;
+  inset:0!important;
+  background:linear-gradient(135deg,#111113,#0a0a0b)!important;
+  z-index:0!important
+}
+#fx-panel .fx-fire-track-wrapper canvas,
+#fx-particlecount-canvas{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  pointer-events:none!important;
+  mix-blend-mode:screen!important;
+  z-index:2!important
+}
+
+#fx-panel .fx-fire-track-wrapper input[type=range],
+#fx-panel #fx-particlecount,
+#fx-particlecount{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  margin:0!important;
+  padding:0!important;
+  background:transparent!important;
+  -webkit-appearance:none!important;
+  appearance:none!important;
+  accent-color:transparent!important;
+  outline:none!important;
+  filter:none!important;
+  box-shadow:none!important;
+  border:0!important;
+  z-index:5!important;
+  --prism-fill:initial!important
+}
+
+#fx-panel .fx-fire-track-wrapper input[type=range]::-webkit-slider-runnable-track,
+#fx-panel #fx-particlecount::-webkit-slider-runnable-track,
+#fx-particlecount::-webkit-slider-runnable-track{
+  background:transparent!important;
+  border:none!important;
+  height:30px!important;
+  box-shadow:none!important
+}
+#fx-panel .fx-fire-track-wrapper input[type=range]::-webkit-slider-thumb,
+#fx-panel #fx-particlecount::-webkit-slider-thumb,
+#fx-particlecount::-webkit-slider-thumb{
+  -webkit-appearance:none!important;
+  appearance:none!important;
+  width:29px!important;
+  height:29px!important;
+  margin-top:0!important;
+  border-radius:10px!important;
+  background:linear-gradient(170deg,#fff 0%,#f0f0f2 40%,#e4e4e6 100%)!important;
+  border:.5px solid rgba(0,0,0,.08)!important;
+  box-shadow:
+    0 .5px 1px rgba(0,0,0,.18),
+    0 2px 6px rgba(0,0,0,.25),
+    0 6px 16px rgba(0,0,0,.12),
+    inset 0 .5px 0 rgba(255,255,255,.85),
+    inset 0 -.5px 0 rgba(0,0,0,.06)!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  cursor:grab!important;
+  transform:none!important;
+  transition:box-shadow .4s ease,transform .15s ease!important
+}
+#fx-panel .fx-fire-track-wrapper input[type=range]::-webkit-slider-thumb:active,
+#fx-panel .fx-fire-track-wrapper input[type=range].is-dragging::-webkit-slider-thumb,
+#fx-panel #fx-particlecount::-webkit-slider-thumb:active,
+#fx-panel #fx-particlecount.is-dragging::-webkit-slider-thumb,
+#fx-particlecount::-webkit-slider-thumb:active,
+#fx-particlecount.is-dragging::-webkit-slider-thumb{
+  cursor:grabbing!important;
+  width:29px!important;
+  height:29px!important;
+  margin-top:0!important;
+  transform:scale(.95)!important;
+  box-shadow:
+    0 .5px 1px rgba(0,0,0,.18),
+    0 2px 6px rgba(0,0,0,.25),
+    0 6px 16px rgba(0,0,0,.12),
+    inset 0 .5px 0 rgba(255,255,255,.85),
+    inset 0 -.5px 0 rgba(0,0,0,.06)!important
+}
+#fx-panel .fx-fire-track-wrapper.active input[type=range]::-webkit-slider-thumb,
+#fx-panel #fx-particlecount-track.active #fx-particlecount::-webkit-slider-thumb{
+  box-shadow:
+    0 .5px 1px rgba(0,0,0,.18),
+    0 2px 6px rgba(0,0,0,.25),
+    0 6px 16px rgba(0,0,0,.12),
+    0 0 28px rgba(168,85,247,.5),
+    0 0 50px rgba(168,85,247,.25),
+    inset 0 .5px 0 rgba(255,255,255,.85),
+    inset 0 -.5px 0 rgba(0,0,0,.06)!important
+}
+
+#fx-panel .fx-fire-track-wrapper input[type=range]::-moz-range-track,
+#fx-particlecount::-moz-range-track{
+  background:transparent!important;
+  border:none!important;
+  height:30px!important
+}
+#fx-panel .fx-fire-track-wrapper input[type=range]::-moz-range-thumb,
+#fx-particlecount::-moz-range-thumb{
+  width:26px!important;
+  height:26px!important;
+  border-radius:9px!important;
+  background:linear-gradient(170deg,#fff 0%,#f0f0f2 40%,#e4e4e6 100%)!important;
+  border:.5px solid rgba(0,0,0,.08)!important;
+  box-shadow:0 .5px 1px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.25),0 6px 16px rgba(0,0,0,.12)!important;
+  transform:none!important
+}
+#fx-panel .fx-fire-track-wrapper.active input[type=range]::-moz-range-thumb{
+  box-shadow:
+    0 .5px 1px rgba(0,0,0,.18),
+    0 2px 6px rgba(0,0,0,.25),
+    0 6px 16px rgba(0,0,0,.12),
+    0 0 28px rgba(168,85,247,.5),
+    0 0 50px rgba(168,85,247,.25)!important
+}
+
+/* Beat any control-glass SVG thumb styling */
+html.control-glass-svg-ok #fx-panel .fx-fire-track-wrapper input[type=range]::-webkit-slider-thumb,
+html.control-glass-svg-ok #fx-panel #fx-particlecount::-webkit-slider-thumb,
+html.control-glass-svg-ok #fx-particlecount::-webkit-slider-thumb{
+  background:linear-gradient(170deg,#fff 0%,#f0f0f2 40%,#e4e4e6 100%)!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  width:29px!important;
+  height:29px!important;
+  border-radius:10px!important;
+  margin-top:0!important;
+  transform:none!important
+}
+html.control-glass-svg-ok #fx-panel .fx-slider.fx-fire-slider-row,
+html.control-glass-svg-ok #fx-panel .fx-fire-slider-row{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  background:rgba(255,255,255,.030)!important
+}

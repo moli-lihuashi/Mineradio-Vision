@@ -48,12 +48,15 @@ const {
 } = require('NeteaseCloudMusicApi');
 const {
   getKugouLoginInfo: getKugouLoginInfoFromApi,
+  handleKugouLyric,
   handleKugouGuessLike,
   handleKugouLikeCheck,
   handleKugouLikeToggle,
   handleKugouPlaylistAddSong,
   registerKugouCloudDevice,
   setKugouDfidPersistHook,
+  kugouCloudlistRequest: kugouApiCloudlistRequest,
+  ensureKugouDfid,
   signatureAndroidParams: kugouSignatureAndroidParams,
   // 酷狗 lite 客户端身份常量：单一来源在 kugou-api.js（登录/注册/cloudlist 全部一致）
   KUGOU_LITE_APPID: KUGOU_APPID,
@@ -98,6 +101,15 @@ const {
   handleQishuiLyric,
   handleQishuiSongUrl,
 } = require('./qishui-api');
+const {
+  normalizeQQVipPayload: normalizeQQVipPayloadStrict,
+  resolveQQVipFromProbes,
+  qqVipSessionCacheKey,
+  qqVipCacheTtlMs,
+  qqVipEntitlementRights,
+  preserveQQVipStalePositive,
+  qqVipObjectLooksExpired: qqVipObjectLooksExpiredStrict,
+} = require('./qq-vip-api');
 const http = require('http');
 const https = require('https');
 const fs   = require('fs');
@@ -3398,34 +3410,203 @@ async function qqMusicRequest(payload, opts) {
   return parseJSONText(text);
 }
 
+
+const QQ_VIP_INFO_CACHE_TTL_MS = 2 * 60 * 1000;
+const qqVipInfoCache = new Map();
+
+function qqVipObjectLooksExpired(obj) {
+  return qqVipObjectLooksExpiredStrict(obj);
+}
+
+function normalizeQQVipPayload(payload, fallback) {
+  return normalizeQQVipPayloadStrict(payload, fallback || {});
+}
+
+function withQQVipSyncState(info, probeAvailable) {
+  info = info || {};
+  const authIncomplete = !!(info.loggedIn && !info.playbackKeyReady);
+  const membershipUnknown = !!(info.loggedIn && info.membershipKnown !== true);
+  const stalePositive = !!(info.loggedIn && info.membershipStale && info.isVip);
+  const membershipStale = !!(info.loggedIn && (
+    authIncomplete
+    || membershipUnknown
+    || stalePositive
+    || (info.profileUnavailable && !probeAvailable)
+  ));
+  const normalized = {
+    ...info,
+    membershipStale,
+    authorizationIncomplete: authIncomplete,
+    vipSyncState: authIncomplete
+      ? 'authorization_incomplete'
+      : (stalePositive ? 'stale_positive' : (membershipUnknown ? 'unknown' : (probeAvailable ? 'checked' : (membershipStale ? 'stale' : 'profile')))),
+  };
+  return {
+    ...normalized,
+    membershipRights: qqVipEntitlementRights(normalized),
+  };
+}
+
+function mergeQQVipStatus(info, vip, source) {
+  info = info || {};
+  const profilePositive = !!(
+    info.isVip ||
+    info.isSvip ||
+    info.vipLevel === 'vip' ||
+    info.vipLevel === 'svip' ||
+    Number(info.vipType || 0) > 0 ||
+    Number(info.svipType || 0) > 0
+  );
+  const probeKnown = !!(vip && vip.resolved && vip.membershipKnown !== false);
+  if (!probeKnown) {
+    return withQQVipSyncState({
+      ...info,
+      vipCheckedAt: Date.now(),
+      vipProbeAvailable: false,
+      vipSource: info.vipSource || 'profile',
+    }, false);
+  }
+  if (profilePositive && !vip.isVip && vip.authoritativeNegative !== true) {
+    return withQQVipSyncState({
+      ...info,
+      membershipKnown: true,
+      vipCheckedAt: Date.now(),
+      vipProbeAvailable: true,
+      vipEvidenceConflict: true,
+      vipSource: info.vipSource || 'qq-profile-vip',
+    }, true);
+  }
+  if (info.loggedIn && info.playbackKeyReady === false && !vip.isVip) {
+    return withQQVipSyncState({
+      ...info,
+      vipCheckedAt: Date.now(),
+      vipProbeAvailable: false,
+      vipSource: source || vip.vipSource || info.vipSource || 'qq-vip-probe-untrusted',
+    }, false);
+  }
+  return withQQVipSyncState({
+    ...info,
+    vipType: vip.vipType || 0,
+    svipType: vip.svipType || 0,
+    vipLevel: vip.vipLevel || 'none',
+    isVip: !!vip.isVip,
+    isSvip: !!vip.isSvip,
+    vipLabel: vip.vipLabel || (vip.isVip ? 'VIP' : '无VIP'),
+    membershipKnown: true,
+    membershipStale: !!vip.membershipStale,
+    vipEvidenceConflict: !!vip.vipEvidenceConflict,
+    probeDecision: vip.probeDecision || '',
+    authoritativeNegative: vip.authoritativeNegative === true,
+    probeIncomplete: vip.probeIncomplete === true,
+    negativeProbeCount: Math.max(0, Number(vip.negativeProbeCount) || 0),
+    negativeQuorum: Math.max(0, Number(vip.negativeQuorum) || 0),
+    staleUntil: Number(vip.staleUntil) || 0,
+    expiresAt: Number(vip.expiresAt) || 0,
+    vipCheckedAt: Date.now(),
+    vipProbeAvailable: true,
+    vipSource: source || vip.vipSource || 'qq-vip-probe',
+  }, true);
+}
+
+async function fetchQQVipStatus(cookieObj, opts) {
+  opts = opts || {};
+  cookieObj = cookieObj || qqCookieObject();
+  const uin = qqCookieUin(cookieObj);
+  const musicKey = qqCookiePlaybackKey(cookieObj);
+  if (!uin || !musicKey) return null;
+  const cacheKey = qqVipSessionCacheKey(uin, musicKey, cookieObj);
+  const cached = cacheKey ? qqVipInfoCache.get(cacheKey) : null;
+  if (!opts.force && cached && Date.now() < cached.expiresAt) return cached.value;
+  const comm = { uin, format: 'json', ct: 24, cv: 0 };
+  if (musicKey) comm.authst = musicKey;
+  const probes = [
+    {
+      source: 'qq-vip-query-v2-list',
+      responseKey: 'req_1',
+      uin: String(uin),
+      body: {
+        comm,
+        req_1: {
+          module: 'userInfo.VipQueryServer',
+          method: 'SRFVipQuery_V2',
+          param: { uin_list: [String(uin)] },
+        },
+      },
+    },
+    {
+      source: 'qq-vip-query-v1-list',
+      responseKey: 'req_1',
+      uin: String(uin),
+      body: {
+        comm,
+        req_1: {
+          module: 'userInfo.VipQueryServer',
+          method: 'SRFVipQuery',
+          param: { uin_list: [String(uin)] },
+        },
+      },
+    },
+    {
+      source: 'qq-vip-query-v2-single',
+      responseKey: 'vip',
+      uin: String(uin),
+      body: {
+        comm,
+        vip: {
+          module: 'userInfo.VipQueryServer',
+          method: 'SRFVipQuery_V2',
+          param: { uin: String(uin), uin_list: [String(uin)] },
+        },
+      },
+    },
+  ];
+  const value = await resolveQQVipFromProbes(probes, async probe => {
+    return qqMusicRequest(probe.body, { cookie: true, timeoutMs: 4200 });
+  });
+  const now = Date.now();
+  const stableValue = preserveQQVipStalePositive(cached, value, { now });
+  if (stableValue && stableValue.membershipStale) {
+    return stableValue;
+  }
+  if (value && value.resolved) {
+    const ttlMs = qqVipCacheTtlMs(value, {
+      positiveTtlMs: QQ_VIP_INFO_CACHE_TTL_MS,
+      negativeTtlMs: 30 * 1000,
+    });
+    if (cacheKey && ttlMs > 0) {
+      qqVipInfoCache.set(cacheKey, {
+        expiresAt: now + ttlMs,
+        staleUntil: value.isVip
+          ? Math.min(
+            now + ttlMs + 10 * 60 * 1000,
+            Number(value.expiresAt) > 0 ? Number(value.expiresAt) : Number.MAX_SAFE_INTEGER
+          )
+          : 0,
+        value,
+      });
+    }
+    return value;
+  }
+  if (opts.force && value && value.errorCount) {
+    console.warn('[QQLogin] VIP probe incomplete:', value.errorCount + '/' + probes.length);
+  }
+  return null;
+}
+
 function normalizeQQProfile(body, cookieObj) {
   cookieObj = cookieObj || qqCookieObject();
   const uin = qqCookieUin(cookieObj);
   const data = (body && (body.data || body.profile || body.creator || body.result)) || {};
   const creator = (data.creator || data.user || data.profile || data) || {};
   const vipInfo = data.vipInfo || data.vipinfo || data.vip || creator.vipInfo || creator.vipinfo || {};
-  const profileNick = creator.nick || creator.nickname || creator.name || creator.hostname || creator.title || '';
+  const profileNick = decodeQQCookieValue(creator.nick || creator.nickname || creator.name || creator.hostname || creator.title || '');
   const profileAvatar = creator.headpic || creator.avatar || creator.avatarUrl || creator.logo || '';
   const cookieNick = qqCookieNickname(cookieObj, uin);
   const nick = profileNick || cookieNick || '';
   const avatar = profileAvatar || qqCookieAvatar(cookieObj, uin);
-  let vipType = Number(
-    cookieObj.vipType || cookieObj.vip_type ||
-    data.vipType || data.vip_type || data.viptype || data.music_vip_level || data.green_vip_level || data.luxury_vip_level ||
-    creator.vipType || creator.vip_type || creator.music_vip_level || creator.green_vip_level || creator.luxury_vip_level ||
-    vipInfo.vipType || vipInfo.vip_type || vipInfo.music_vip_level || vipInfo.green_vip_level || vipInfo.luxury_vip_level || 0
-  ) || 0;
-  if (!vipType) {
-    const vipFlag = data.isVip || data.is_vip || data.vipFlag || data.vipflag || creator.isVip || creator.is_vip || vipInfo.isVip || vipInfo.is_vip || vipInfo.vipFlag;
-    if (vipFlag === true || Number(vipFlag) > 0 || String(vipFlag || '').toLowerCase() === 'true') vipType = 1;
-  }
-  const isSvip = !!(
-    vipType >= 10 ||
-    data.isSvip || data.is_svip || creator.isSvip || creator.is_svip || vipInfo.isSvip || vipInfo.is_svip ||
-    Number(vipInfo.iSuperVip || vipInfo.super_vip || vipInfo.luxury_vip_level || 0) > 0
-  );
-  const isVip = isSvip || vipType > 0;
-  const vipLevel = isSvip ? 'svip' : (isVip ? 'vip' : 'none');
+  // Cookie labels may survive a membership downgrade, so only current
+  // official profile fields are allowed to become profile membership proof.
+  const profileVip = normalizeQQVipPayload({ data, creator, vipInfo }, {});
   return {
     provider: 'qq',
     loggedIn: !!(uin && qqCookieMusicKey(cookieObj)),
@@ -3433,16 +3614,21 @@ function normalizeQQProfile(body, cookieObj) {
     userId: uin,
     nickname: nick || (uin ? ('QQ ' + uin) : 'QQ 音乐'),
     avatar,
-    vipType,
-    vipLevel,
-    isVip,
-    isSvip,
-    vipLabel: vipLevel === 'svip' ? 'QQ SVIP' : (vipLevel === 'vip' ? 'QQ VIP' : '无VIP'),
+    vipType: profileVip.vipType || 0,
+    svipType: profileVip.svipType || 0,
+    vipLevel: profileVip.vipLevel || 'none',
+    isVip: !!profileVip.isVip,
+    isSvip: !!profileVip.isSvip,
+    vipLabel: profileVip.vipLabel || '无VIP',
+    membershipKnown: !!profileVip.membershipKnown,
+    expiresAt: Number(profileVip.expiresAt) || 0,
     hasCookie: !!qqCookie,
     playbackKeyReady: !!qqCookiePlaybackKey(cookieObj),
     profileSource: profileNick || profileAvatar ? 'qq-profile' : (cookieNick || avatar ? 'cookie' : 'fallback'),
+    vipSource: profileVip.resolved ? 'qq-profile-vip' : 'profile',
   };
 }
+
 
 function getQQCookieFile() {
   return QQ_COOKIE_FILE;
@@ -3512,7 +3698,14 @@ async function refreshQQCookieSession(opts) {
   const force = !!opts.force;
   const now = Date.now();
   if (!force && qqCookieLastRefreshAt && (now - qqCookieLastRefreshAt) < QQ_COOKIE_REFRESH_COOLDOWN_MS) {
-    return { ok: false, skipped: true, reason: 'cooldown', info: null };
+    const current = await getQQLoginInfo({ autoRenew: false, skipStoreReload: true });
+    return {
+      ok: !!(current && current.loggedIn && !current.authExpired),
+      skipped: true,
+      reason: 'cooldown',
+      refreshed: false,
+      info: current,
+    };
   }
   if (qqCookieRefreshPromise) return qqCookieRefreshPromise;
 
@@ -3628,12 +3821,16 @@ async function refreshQQCookieSession(opts) {
 
 async function getQQLoginInfo(opts) {
   opts = opts || {};
-  if (!opts.skipStoreReload) refreshQQConfiguredCookieStore();
+  if (!opts.skipStoreReload || opts.forceCookie) refreshQQConfiguredCookieStore();
   const cookieObj = qqCookieObject();
   const uin = qqCookieUin(cookieObj);
   const musicKey = qqCookieMusicKey(cookieObj);
   if (!uin || !musicKey) return { provider: 'qq', loggedIn: false, hasCookie: !!qqCookie, stale: !!qqCookie, reauthRequired: !!qqCookie };
   const fallback = normalizeQQProfile(null, cookieObj);
+  const vipProbePromise = fetchQQVipStatus(cookieObj, { force: !!opts.forceVip }).catch(e => {
+    if (opts.forceVip) console.warn('[QQLogin] VIP probe skipped:', e.message);
+    return null;
+  });
   try {
     const u = new URL('https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg');
     u.searchParams.set('cid', '205360838');
@@ -3650,40 +3847,50 @@ async function getQQLoginInfo(opts) {
     u.searchParams.set('needNewCode', '0');
     const text = await requestText(u.toString(), {
       headers: { ...QQ_HEADERS, Cookie: qqCookie },
+      timeoutMs: opts.forceVip ? 6500 : 10000,
     });
     const body = parseJSONText(text);
     const info = normalizeQQProfile(body, cookieObj);
     const authExpired = !!(body && (body.code === 1000 || body.result === 301));
     if (authExpired) {
       if (opts.autoRenew !== false) {
-        const renew = await refreshQQCookieSession({ reason: 'profile-auth-fail', force: !!opts.forceRenew });
-        if (renew && renew.ok && renew.info) return renew.info;
-        return Object.assign({}, (renew && renew.info) || fallback, {
+        const renew = await refreshQQCookieSession({ reason: 'profile-auth-fail', force: !!opts.forceRenew || !!opts.forceVip });
+        if (renew && renew.ok && renew.info) {
+          const vipProbe = await vipProbePromise;
+          return mergeQQVipStatus(renew.info, vipProbe, vipProbe && vipProbe.vipSource);
+        }
+        const vipProbe = await vipProbePromise;
+        return mergeQQVipStatus(Object.assign({}, (renew && renew.info) || fallback, {
           profileUnavailable: true,
           stale: true,
           authExpired: true,
           reauthRequired: true,
           refreshAttempted: true,
           refreshOk: false,
-        });
+        }), vipProbe, vipProbe && vipProbe.vipSource);
       }
-      return Object.assign({}, fallback, {
+      const vipProbe = await vipProbePromise;
+      return mergeQQVipStatus(Object.assign({}, fallback, {
         profileUnavailable: true,
         stale: true,
         authExpired: true,
         reauthRequired: true,
-      });
+      }), vipProbe, vipProbe && vipProbe.vipSource);
     }
+    let mergedInfo = info;
     if (!info.playbackKeyReady && opts.autoRenew !== false) {
       const renew = await refreshQQCookieSession({ reason: 'missing-playback-key' });
-      if (renew && renew.ok && renew.info && renew.info.playbackKeyReady) return renew.info;
+      if (renew && renew.ok && renew.info && renew.info.playbackKeyReady) mergedInfo = renew.info;
     }
-    return info;
+    const vipProbe = await vipProbePromise;
+    return mergeQQVipStatus(mergedInfo, vipProbe, vipProbe && vipProbe.vipSource);
   } catch (e) {
     console.warn('[QQLogin] profile check failed:', e.message);
-    return Object.assign({}, fallback, { profileUnavailable: true, stale: true });
+    const vipProbe = await vipProbePromise;
+    return mergeQQVipStatus(Object.assign({}, fallback, { profileUnavailable: true, stale: true }), vipProbe, vipProbe && vipProbe.vipSource);
   }
 }
+
 
 async function qqGetJSON(targetUrl, params, opts) {
   opts = opts || {};
@@ -4122,7 +4329,9 @@ function kugouCookieMid(obj) {
 
 function kugouCookieDfid(obj) {
   obj = obj || kugouCookieObject();
-  return obj.dfid || obj.DFID || '-';
+  const value = obj.kg_dfid || obj.KG_DFID || obj.dfid || obj.DFID || '-';
+  const text = String(value || '').trim();
+  return text && text !== '-' ? text : '-';
 }
 
 function kugouCookieHeader() {
@@ -4214,44 +4423,13 @@ async function kugouGatewayRequest(pathname, options) {
   return parseJSONText(text);
 }
 
+// 归口到 kugou-api.js 的 lite 身份通道（含 ensureKugouDfid）；勿再本地旁路签名/Cookie。
 async function kugouCloudlistRequest(pathname, params, data) {
-  const obj = kugouCookieObject();
-  const clienttime = String(Math.floor(Date.now() / 1000));
-  const token = kugouCookieToken(obj);
-  const userId = kugouCookieUserId(obj);
-  const finalParams = Object.assign({
-    dfid: kugouCookieDfid(obj),
-    mid: kugouCookieMid(obj),
-    uuid: '-',
-    appid: KUGOU_APPID,
-    clientver: KUGOU_CLIENTVER,
-    clienttime,
-    userid: userId,
-    token,
-  }, params || {});
-  const dataString = data ? JSON.stringify(data) : '';
-  finalParams.signature = kugouAndroidSignature(finalParams, dataString);
-  const u = new URL(pathname, KUGOU_GATEWAY_URL);
-  Object.keys(finalParams).forEach(k => {
-    if (finalParams[k] !== undefined && finalParams[k] !== null) u.searchParams.set(k, String(finalParams[k]));
+  return kugouApiCloudlistRequest(pathname, {
+    cookie: kugouCookie || '',
+    params: params || {},
+    body: data == null ? undefined : data,
   });
-  const headers = {
-    'User-Agent': KUGOU_ANDROID_UA,
-    'x-router': 'cloudlist.service.kugou.com',
-    'kg-rc': '1',
-    'kg-thash': '5d816a0',
-    'kg-rec': '1',
-    'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
-    dfid: kugouCookieDfid(obj),
-    mid: kugouCookieMid(obj),
-    clienttime,
-    'Content-Type': 'application/json',
-    Cookie: 'userid=' + encodeURIComponent(String(userId || '')) +
-      '; token=' + encodeURIComponent(String(token || '')) +
-      '; KUGOU_API_MID=' + encodeURIComponent(String(kugouCookieMid(obj) || '')),
-  };
-  const text = await requestText(u.toString(), { method: dataString ? 'POST' : 'GET', headers }, dataString);
-  return parseJSONText(text);
 }
 
 function kugouSafeGet(obj, pathKeys, fallback) {
@@ -4540,29 +4718,26 @@ function sortKugouCloudTracks(rawTracks) {
 async function handleKugouUserPlaylists() {
   const info = await getKugouLoginInfoFresh();
   if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'kugou', playlists: [] };
-  const data = await kugouGatewayRequest('/v7/get_all_list', {
-    method: 'POST',
-    params: {
-      total_ver: 979,
-      type: 2,
-      page: 1,
-      pagesize: 200,
-      userid: info.userId,
-      token: kugouCookieToken(),
-    },
-    data: {
-      total_ver: 979,
-      type: 2,
-      page: 1,
-      pagesize: 200,
-      userid: Number(info.userId) || info.userId,
-      token: kugouCookieToken(),
-    },
-    headers: { 'x-router': 'cloudlist.service.kugou.com' },
+  const data = await kugouCloudlistRequest('/v7/get_all_list', {
+    total_ver: 979,
+    type: 2,
+    page: 1,
+    pagesize: 200,
+    userid: info.userId,
+    token: kugouCookieToken(),
+  }, {
+    total_ver: 979,
+    type: 2,
+    page: 1,
+    pagesize: 200,
+    userid: Number(info.userId) || info.userId,
+    token: kugouCookieToken(),
   });
   const rawLists = asArrayDeep(data, ['lists', 'list', 'info', 'data', 'listinfo', 'collection_list', 'playlist']);
+  const nested = data && data.data && typeof data.data === 'object' ? asArrayDeep(data.data, ['lists', 'list', 'info', 'listinfo', 'collection_list', 'playlist']) : [];
+  const merged = rawLists.length ? rawLists : nested;
   const seen = new Set();
-  const playlists = rawLists.map(mapKugouPlaylist).filter(pl => {
+  const playlists = merged.map(mapKugouPlaylist).filter(pl => {
     if (!pl.id || seen.has(pl.id)) return false;
     seen.add(pl.id);
     return true;
@@ -4658,82 +4833,8 @@ function kugouPlayableUrlFromResponse(json) {
   return url || backupUrl || '';
 }
 
-function decodeKugouLyricContent(raw) {
-  raw = String(raw || '').trim();
-  if (!raw) return '';
-  const compact = raw.replace(/\s+/g, '');
-  if (/^[A-Za-z0-9+/]+={0,2}$/.test(compact) && compact.length >= 8) {
-    try {
-      const decoded = Buffer.from(compact, 'base64').toString('utf8').replace(/^\uFEFF/, '');
-      if (decoded && (decoded.includes('[') || /[\u4e00-\u9fa5]/.test(decoded))) return decoded.replace(/\r\n/g, '\n').trim();
-    } catch (_) {}
-  }
-  return raw.replace(/\r\n/g, '\n').trim();
-}
-
-async function handleKugouLyric(hash, duration) {
-  const h = String(hash || '').trim().toUpperCase();
-  if (!h) return { provider: 'kugou', error: 'Missing Kugou hash', lyric: '' };
-  const searchUrl = new URL('http://lyrics.kugou.com/search');
-  searchUrl.searchParams.set('ver', '1');
-  searchUrl.searchParams.set('man', 'yes');
-  searchUrl.searchParams.set('client', 'pc');
-  searchUrl.searchParams.set('hash', h);
-  const dur = Number(duration || 0) || 0;
-  if (dur > 0) searchUrl.searchParams.set('duration', String(Math.round(dur > 1000 ? dur : dur * 1000)));
-  const search = parseJSONText(await requestText(searchUrl.toString(), { headers: { 'User-Agent': UA } }));
-  const candidates = Array.isArray(search && search.candidates) ? search.candidates : [];
-  const first = candidates[0];
-  if (!first || !first.id || !first.accesskey) {
-    return { provider: 'kugou', lyric: '', tlyric: '', yrc: '', source: 'kugou-empty' };
-  }
-  const downloadUrl = new URL('http://lyrics.kugou.com/download');
-  downloadUrl.searchParams.set('ver', '1');
-  downloadUrl.searchParams.set('client', 'pc');
-  downloadUrl.searchParams.set('id', String(first.id));
-  downloadUrl.searchParams.set('accesskey', String(first.accesskey));
-  downloadUrl.searchParams.set('fmt', 'lrc');
-  downloadUrl.searchParams.set('charset', 'utf8');
-  const body = parseJSONText(await requestText(downloadUrl.toString(), { headers: { 'User-Agent': UA } }));
-  const lyricText = decodeKugouLyricContent(body && body.content);
-
-  let transText = '';
-  if (body && body.trans) {
-    transText = decodeKugouLyricContent(body.trans);
-  }
-  if (!transText) {
-    for (let i = 1; i < candidates.length; i++) {
-      const c = candidates[i];
-      if (!c || !c.id || !c.accesskey) continue;
-      const isTransCandidate = String(c.style) === '2' || String(c.lyric_style) === '2' || c.trans === true;
-      if (!isTransCandidate && candidates.length > 2) continue;
-      try {
-        const tdl = new URL('http://lyrics.kugou.com/download');
-        tdl.searchParams.set('ver', '1');
-        tdl.searchParams.set('client', 'pc');
-        tdl.searchParams.set('id', String(c.id));
-        tdl.searchParams.set('accesskey', String(c.accesskey));
-        tdl.searchParams.set('fmt', 'lrc');
-        tdl.searchParams.set('charset', 'utf8');
-        const tbody = parseJSONText(await requestText(tdl.toString(), { headers: { 'User-Agent': UA } }));
-        const tContent = decodeKugouLyricContent(tbody && tbody.content);
-        if (tContent && tContent !== lyricText) {
-          transText = tContent;
-          break;
-        }
-      } catch (_) {}
-    }
-  }
-
-  return {
-    provider: 'kugou',
-    hash: h,
-    lyric: lyricText,
-    tlyric: transText,
-    yrc: '',
-    source: lyricText ? 'kugou-lyrics' : 'kugou-empty',
-  };
-}
+// handleKugouLyric 统一从 kugou-api.js 导入（krcs 域名 + KRC 解密翻译），
+// 不再保留本地旧实现（旧 lyrics.kugou.com 域名无法获取翻译）。
 
 async function getKugouLoginInfoFresh() {
   if (kugouCookie) {
@@ -5025,7 +5126,7 @@ async function handleQQSongUrl(mid, mediaMid, qualityPreference, opts) {
       method: 'CgiGetVkey',
       param,
     },
-  }, { cookie: true });
+  }, { cookie: true, timeoutMs: QQ_VKEY_REQUEST_TIMEOUT_MS });
   const data = json && json.req_0 && json.req_0.data;
   const infos = (data && Array.isArray(data.midurlinfo)) ? data.midurlinfo : [];
   const info = infos.find(item => item && item.purl) || infos[0];
@@ -5388,6 +5489,8 @@ async function fetchMyPodcastItems(key, info, limit, offset) {
 //   返回 { url, trial, level, br }
 //   trial=true 表示这是试听片段 (freeTrialInfo 非空)
 const QQ_AUDIO_PROBE_ATTEMPT_MS = 2000;
+const QQ_VKEY_REQUEST_TIMEOUT_MS = 6000;
+const QQ_AUDIO_PROBE_TOTAL_MS = 6200;
 const AUDIO_URL_PROBE_BYTES = 8192;
 function audioProbeMagic(buffer) {
   if (!buffer || !buffer.length) return '';
@@ -5450,7 +5553,7 @@ async function probePlaybackAudioUrl(audioUrl, timeoutMs) {
   }
 }
 async function probeQQAudioUrl(audioUrl, timeoutMs) {
-  return probePlaybackAudioUrl(audioUrl, timeoutMs || QQ_AUDIO_PROBE_ATTEMPT_MS);
+  return probePlaybackAudioUrl(audioUrl, timeoutMs || QQ_AUDIO_PROBE_TOTAL_MS);
 }
 
 async function resolveNeteaseDirectSongUrl(id, loginInfo, qualityPreference) {

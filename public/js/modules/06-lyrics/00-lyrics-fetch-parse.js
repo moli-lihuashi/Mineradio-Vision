@@ -8,7 +8,7 @@ async function fetchLyric(songOrId, token) {
     if (token !== trackSwitchToken) return;
     if (cached) {
       applyLyricApiResponse(cached, token, song);
-      refreshPersistentLyricCache(song);
+      refreshPersistentLyricCache(song, token);
       return;
     }
     var endpoint = typeof lyricEndpointForSong === 'function'
@@ -104,13 +104,20 @@ async function runQueueLyricPrefetch(fromIndex, token) {
     lyricQueuePrefetchBusy = false;
   }
 }
-function refreshPersistentLyricCache(song) {
+function refreshPersistentLyricCache(song, token) {
   if (!song) return;
   var endpoint = typeof lyricEndpointForSong === 'function'
     ? lyricEndpointForSong(song)
     : ('/api/lyric?id=' + encodeURIComponent(song.id || ''));
   apiJson(endpoint).then(function (response) {
-    if (response && !response.error) writePersistentLyricCache(song, response);
+    if (!response || response.error) return;
+    writePersistentLyricCache(song, response);
+    // 缓存补翻译：旧持久缓存无译文（如酷狗翻译修复前写入的缓存），
+    // 刷新响应带译文且仍是同一首歌时，重新应用让当前显示立即更新
+    if (typeof token === 'number' && token !== trackSwitchToken) return;
+    if (lyricsTranslationLines && lyricsTranslationLines.length) return;
+    var hasFreshTrans = !!(String(response.trans || '') || String(response.tlyric || '') || String(response.ytlrc || ''));
+    if (hasFreshTrans) applyLyricApiResponse(response, token, song);
   }).catch(function () {});
 }
 function applyLyricApiResponse(r, token, song) {
@@ -127,6 +134,23 @@ function applyLyricApiResponse(r, token, song) {
   if (lines.length && lines[0].fallback) timingSource = 'fallback';
   lines = attachLyricTranslations(lines, lyricsTransLines);
   var translationSource = translationPayload.lines.length ? translationPayload.source : 'none';
+  // [LYRIC-DIAG] 临时诊断：定位双语翻译不显示的根因。验证后删除。
+  try {
+    var _matched = lines.filter(function(l){ return l && l.translation; }).length;
+    console.warn('[LYRIC-DIAG]', JSON.stringify({
+      provider: song && (song.source || song.provider),
+      name: song && (song.name || song.title),
+      rawTransLen: (r.trans || '').length,
+      rawTlyricLen: (r.tlyric || '').length,
+      rawYtlrcLen: (r.ytlrc || '').length,
+      transLines: lyricsTransLines.length,
+      primaryLines: lines.length,
+      matched: _matched,
+      source: translationSource,
+      mode: fx && fx.lyricTranslationMode,
+      timing: timingSource
+    }));
+  } catch (_) {}
   setOriginalLyricsState(lines, hasNativeKaraoke, timingSource, lyricsTransLines, translationSource);
   applyPreferredLyricsForCurrent(true);
   // 网易歌词译文回落：非网易源歌曲缺译文时，延迟从网易搜索同名歌曲补译文
@@ -295,7 +319,7 @@ function mergeLyricTranslationLineSources() {
   Array.prototype.forEach.call(arguments, function (group) {
     (group || []).forEach(function (line) {
       if (!line) return;
-      var key = String(Number(line.t) || 0).toFixed(2) + '|' + normalizeLyricTranslationText(line.text);
+      var key = (Number(line.t) || 0).toFixed(2) + '|' + normalizeLyricTranslationText(line.text);
       if (!key || seen[key]) return;
       seen[key] = true;
       out.push(line);
@@ -402,6 +426,25 @@ function attachLyricTranslations(primaryLines, translationLines) {
       if (bestIndex >= 0) assignTranslation(lineIndex, bestIndex, bestDelta, 'order');
     });
   }
+  // 兜底：时间/order 匹配后仍有未匹配翻译行 + 未匹配歌词行时，按行序剩余对齐。
+  // 处理跨平台时间轴错位或翻译行数与歌词行数不等（如酷狗 trans 与 yrc 时间轴错位，
+  // 时间匹配只命中一两句的情况）。行序对齐在时间错位时往往比时间匹配更准。
+  var unmatchedTransIdx = [];
+  for (var ti = 0; ti < translations.length; ti++) {
+    if (!usedTranslations[ti]) unmatchedTransIdx.push(ti);
+  }
+  if (unmatchedTransIdx.length) {
+    var unmatchedPrimaryIdx = [];
+    primary.forEach(function (line, lineIndex) {
+      if (line && !line.fallback && !assignments[lineIndex] && !isLyricCreditLineText(line.text)) {
+        unmatchedPrimaryIdx.push(lineIndex);
+      }
+    });
+    var fallbackLimit = Math.min(unmatchedTransIdx.length, unmatchedPrimaryIdx.length);
+    for (var fk = 0; fk < fallbackLimit; fk++) {
+      assignTranslation(unmatchedPrimaryIdx[fk], unmatchedTransIdx[fk], 0, 'order-fallback');
+    }
+  }
   Object.keys(assignments).forEach(function (key) {
     var lineIndex = Number(key);
     var line = primary[lineIndex];
@@ -451,6 +494,13 @@ function getLyricTranslation(time, lineHint) {
   }
   return best && bestDist < 3.2 ? (best.text || '') : '';
 }
+function normalizeLyricStageLineText(text) {
+  // 保留 \n 强制换行（原文在上、译文在下的上下布局），仅段内压缩空白
+  var segs = String(text || '').split(/\n/);
+  for (var i = 0; i < segs.length; i++) segs[i] = segs[i].replace(/\s+/g, ' ').trim();
+  segs = segs.filter(function (s) { return s.length > 0; });
+  return segs.join('\n');
+}
 function enrichLyricText(original, lineIdx) {
   var mode = fx.lyricTranslationMode || 'off';
   if (mode === 'off') return original;
@@ -459,9 +509,10 @@ function enrichLyricText(original, lineIdx) {
     ? line.translation
     : (line ? getLyricTranslation(line.t, line) : '');
   if (!trans) return original;
+  // 译文统一排原文下方（\n 分两行），不再横排拼接（旧 dual 用 " | " 左右排）
   switch (mode) {
-    case 'current': return trans;
-    case 'dual': return original + '  |  ' + trans;
+    case 'current': return original + '\n' + trans;
+    case 'dual': return original + '\n' + trans;
     case 'multi': return original + '\n' + trans;
     default: return original;
   }

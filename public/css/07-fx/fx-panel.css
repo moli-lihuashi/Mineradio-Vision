@@ -276,7 +276,8 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .memory-action-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .foreground-fps-seg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;overflow:hidden;margin-top:6px;padding:5px;border-radius:16px}
 .foreground-fps-seg button{min-width:0;border-right:none;border-bottom:none;border-radius:12px}
-.foreground-fps-seg button:first-child{grid-column:1 / -1}
+.foreground-fps-seg button:first-of-type,
+.foreground-fps-seg button[data-foreground-fps="vsync"]{grid-column:1 / -1}
 .cache-storage-panel{border:1px solid rgba(255,255,255,.075);background:rgba(3,9,14,.42);border-radius:10px;padding:10px;margin:-1px 0 12px}
 .cache-storage-head,.cache-storage-row,.cache-storage-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .cache-storage-head{color:rgba(255,255,255,.82);font-size:11px;font-weight:700}

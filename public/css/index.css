@@ -173,3 +173,5 @@ body.idle-guide-dragging #canvas-container{cursor:grabbing}
 @keyframes splash-sub-in{0%,38%{opacity:0;transform:translateY(7px)}56%{opacity:.72;transform:translateY(0)}100%{opacity:.62;transform:translateY(0)}}
 @keyframes splash-enter-pulse{0%{opacity:.56;text-shadow:0 0 12px rgba(0,168,255,.20),0 0 22px rgba(255,255,255,.22)}100%{opacity:.86;text-shadow:0 0 20px rgba(0,168,255,.36),0 0 38px rgba(255,255,255,.32)}}
 
+
+.top-account-vip.pending{background:rgba(255,196,92,.18);color:rgba(255,214,140,.92);box-shadow:none}

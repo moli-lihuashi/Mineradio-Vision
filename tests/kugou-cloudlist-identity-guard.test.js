@@ -62,10 +62,31 @@ test('kugou-api.js must pin the lite client identity constants', () => {
 test('kugouCloudlistRequest must present the lite identity to cloudlist', () => {
   const body = functionBody(kugouApiSource, 'kugouCloudlistRequest');
   assert.match(body, /kugouWithCloudlistDevice\(opts\)/, 'must inject registered dfid');
+  assert.match(body, /opts\.router\s*=\s*'cloudlist\.service\.kugou\.com'/, 'must mark cloudlist router before ensure');
   assert.match(body, /appid: KUGOU_LITE_APPID/);
   assert.match(body, /clientver: KUGOU_LITE_CLIENTVER/);
   assert.match(body, /KUGOU_LITE_ANDROID_SALT/, 'must sign with the lite salt');
   assert.match(body, /KUGOU_LITE_GATEWAY_UA/, 'must present the lite User-Agent');
+});
+
+test('kugouWithCloudlistDevice must always ensure dfid (no dead opts.router gate)', () => {
+  assert.doesNotMatch(
+    kugouApiSource,
+    /opts\.router\s*!==\s*['"]cloudlist\.service\.kugou\.com['"]/,
+    'router early-return made ensureKugouDfid unreachable',
+  );
+  const body = functionBody(kugouApiSource, 'kugouWithCloudlistDevice');
+  assert.match(body, /ensureKugouDfid/, 'must call ensureKugouDfid unconditionally');
+});
+
+test('server.js cloudlist must delegate to kugou-api and not gateway-bypass get_all_list', () => {
+  assert.match(serverSource, /kugouApiCloudlistRequest/, 'server must import kugou-api cloudlist channel');
+  assert.doesNotMatch(
+    serverSource,
+    /kugouGatewayRequest\(\s*['"]\/v7\/get_all_list['"]/,
+    'server /v7/get_all_list must not bypass cloudlist channel',
+  );
+  assert.match(serverSource, /kugouCloudlistRequest\('\/v7\/get_all_list'/);
 });
 
 test('device registration must exist, use the lite RSA key, and cover both response shapes', () => {

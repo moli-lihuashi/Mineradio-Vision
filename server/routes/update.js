@@ -165,10 +165,12 @@ module.exports = function register(ctx) {
         });
         sendJSON(res, plan);
       } catch (err) {
+        // 返回 200 + ok:false：beatmap 缓存缺失等场景属预期跳过，
+        // 4xx 会触发浏览器控制台 "Failed to load resource" 红字噪音
         sendJSON(res, {
           ok: false,
           error: err && (err.code || err.message) || 'CUEFIELD_TRANSITION_FAILED',
-        }, 400);
+        }, 200);
       }
       return;
     }

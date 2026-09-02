@@ -279,7 +279,9 @@ function makeLyricMaskLegacy(text) {
     lines = [];
     for (var sg = 0; sg < forcedSegments.length && lines.length < maxLines; sg++) {
       var seg = forcedSegments[sg];
-      if (lyricMeasureText(ctx, seg, fontSize) > maxWidth && maxLines > 1) {
+      // 强制换行（原文/译文上下两行）时不自动折行：折行会占满行数把译文挤掉，
+      // 改为继续缩字号，仍超宽则靠 fitScaleX 横向压缩
+      if (!hasForceBreak && lyricMeasureText(ctx, seg, fontSize) > maxWidth && maxLines > 1) {
         var wrapped = wrapLyricText(ctx, seg, maxWidth, maxLines - lines.length, fontSize);
         for (var w = 0; w < wrapped.length && lines.length < maxLines; w++) lines.push(wrapped[w]);
       } else {
@@ -296,7 +298,7 @@ function makeLyricMaskLegacy(text) {
   widest = 1;
   for (var mi = 0; mi < lines.length; mi++) widest = Math.max(widest, lyricMeasureText(ctx, lines[mi], fontSize));
   var width = Math.min(maxWidth, widest);
-  var fitScaleX = maxLines <= 1 && widest > maxWidth ? Math.max(0.68, maxWidth / widest) : 1;
+  var fitScaleX = (maxLines <= 1 || hasForceBreak) && widest > maxWidth ? Math.max(0.68, maxWidth / widest) : 1;
   if (fitScaleX < 1) width = Math.min(maxWidth, widest * fitScaleX);
   var lineHeight = fontSize * (lines.length > 1 ? 1.02 : 1.0) * lyricLineHeightFactor();
   var blockH = fontSize + (lines.length - 1) * lineHeight;
