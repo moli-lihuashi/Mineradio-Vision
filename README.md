@@ -49,6 +49,7 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 ### 架构与工程
 
 - **模块化架构重构**：单文件 `index.html` 巨石拆分为 69 个按领域划分的模块（01-scene ~ 10-shell），`index-loader.js` 并行 fetch 加载。
+- **三层懒加载架构**：主进程重模块（Wallpaper Engine、Spotify、汽水本地会话）首次 IPC 按需加载，服务端音源模块首次调用才 require，前端模块分两波注入（boot 必需 + 延迟波），显著加快冷启动。
 - **原生 C++ BPM 分析模块**：`native/mineradio-bpm` 提供节拍 / 能量分析加速（可选，带纯 JS 回退）。
 - **DPAPI 凭据加密**：登录 cookie 通过 Windows DPAPI 加密存储在用户数据目录，仓库内不含任何账号信息。
 - **安全安装器**：安装路径优先 D-Z 盘、专用目录占用保护、卸载仅清理已知 Mineradio 文件。

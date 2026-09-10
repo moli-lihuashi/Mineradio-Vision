@@ -313,3 +313,6 @@ function initFxParticleFireSlider() {
   };
   scheduleFxParticleFireRefresh();
 }
+
+// 05a/05b/05c 延迟波最后一棒：标记面板 DOM 模块已就绪
+window.__fxPanelDomModulesReady = true;

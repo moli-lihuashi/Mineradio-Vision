@@ -18,6 +18,13 @@
 - 汽水音乐 device_id 持久化：设备身份跨进程稳定，行为更接近真实客户端，降低风控触发。
 - morphicons 图标形变动画（guillermolg00/morphicons MIT 许可）：播放 / 暂停、播放顺序、音量档位控制台图标平滑形变切换。
 - QQ VIP 启动强检：开机自动强制重查 QQ 登录与 VIP 状态。
+- 启动性能优化（主进程 / 服务端 / 前端三层懒加载）：主进程重模块（Wallpaper Engine 库与运行时、Spotify、汽水本地会话、桌面图标形状）改为首次 IPC 时按需加载；服务端音源模块（网易 / 酷狗 / Spotify / 汽水 / QQ VIP）改为首次调用时 require；前端模块拆两波注入，boot 必需模块立即加载，FX 扩展面板 / 登录弹窗流 / 更新预览 / 二维码同步等延后到 boot 之后。
+- 新增 FX 面板延迟波占位模块（07-fx/00-panel-lazy-stubs.js），真实实现加载前提供同名空实现，避免 boot / overlay 阶段 ReferenceError。
+- 修复延迟加载引入的白屏隐患：closeUpdatePanel 改为点击时惰性解析（原急切引用会中断合并脚本）；汽水登录态声明上移主波（boot 期急切读写）；loader 缓存版本号改为跟随 data-app-version 自动生成，避免硬编码漏更新导致旧 loader 配新模块。
+- 本地服务模块 ETag 改用 size + mtime 支持 revalidate，杜绝「版本号忘 bump → Chromium 缓存旧模块 → 白屏且重装无效」。
+- 面板 DOM 绑定延后到 idle / 首次打开（bindFxGlobalInteractions + scheduleFxPanelDomBind），视觉仍由 setPreset 独立生效。
+- 修复 Prismal 玻璃滑块：程序化改 value 时同步填充，解决蓝色进度条停在旧位置的问题。
+- 清理：移除 public/liquidglass.js 旧残留与嵌套重复的 sonic-topography 副本（减少约 2.2MB 资源与 914KB 预览图）。
 
 ## v3.0.0
 

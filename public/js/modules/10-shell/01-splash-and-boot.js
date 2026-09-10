@@ -575,7 +575,9 @@ if (document.readyState === 'loading') {
 // ============================================================
 try {
 applyDiyMode(diyPlayerMode, { save: false });
-bindFxPanel();
+// 只绑全局交互（快捷键/toggle）；面板 DOM 绑定延后到 idle/首次打开，视觉由 setPreset 独立生效
+bindFxGlobalInteractions();
+if (typeof scheduleFxPanelDomBind === 'function') scheduleFxPanelDomBind();
 if (typeof migratePerformanceQualityTowardAutoOnce === 'function') migratePerformanceQualityTowardAutoOnce();
 // 低配 auto→eco 时把封面粒子网格压下来（默认 1.55≈183² 是播放 CPU 大头）
 if (typeof applyCoverParticleResolution === 'function' && fx) {
@@ -698,5 +700,7 @@ safeRenderQueuePanel('startup');
 updateCustomCoverButton();
 updateCustomLyricControls();
 updateLikeButtons();
-setTimeout(initUpdatePreview, 9000);
+setTimeout(function () {
+  if (typeof initUpdatePreview === 'function') initUpdatePreview();
+}, 9000);
 

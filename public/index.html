@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.2.30">
+<html lang="zh-CN" data-app-version="3.2.31">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -32,7 +32,7 @@
 <script src="js/modules/05-cuefield/00-cuefield-automix-core.js"></script>
 <script src="js/modules/05-cuefield/01-cuefield-timeline-executor.js"></script>
 <script src="js/modules/05-cuefield/02-cuefield-automix-integration.js"></script>
-<script src="sonic-topography-preset.js"></script>
+<script src="sonic-topography-preset.js" defer></script>
 <script>
 try {
   var _diyPref = localStorage.getItem('mineradio-diy-player-mode-v1');
@@ -1542,7 +1542,17 @@ try {
 
 </div>
 
-<script src="js/index-loader.js?v=3.2.23"></script>
+<script>
+// loader 缓存版本跟随 <html data-app-version>，避免硬编码漏更新导致旧 loader 配新模块（白屏隐患）
+(function () {
+  var v = (document.documentElement && document.documentElement.getAttribute('data-app-version')) || String(Date.now());
+  var s = document.createElement('script');
+  s.src = 'js/index-loader.js?v=' + encodeURIComponent(v);
+  s.async = false;
+  var anchor = document.currentScript;
+  (anchor && anchor.parentNode || document.body).insertBefore(s, anchor ? anchor.nextSibling : null);
+})();
+</script>
 <!-- 以下模块由 index-loader.js 并行 fetch 后合并为单个 classic script 求值 -->
 <!-- 06-fx/01-liquidglass-config / 06-fx/02-wallpaper-engine-fns / 07-playback/00-spotify-provider / 08-account/00-login-easter-egg -->
 <!-- REMOVED_INLINE_BLOCK_3_END -->

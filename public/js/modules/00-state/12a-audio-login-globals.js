@@ -43,6 +43,19 @@ var PROVIDER_VIP_AUDIT_STORE_KEY = 'mineradio-provider-vip-audit-v1';
 var QQ_PLAYBACK_VIP_EVIDENCE_STORE_KEY = 'mineradio-qq-playback-vip-evidence-v1';
 var kugouLoginWasLoggedIn = false;
 var kugouLoginAutoRefreshTimer = null;
+// qishui 登录态：声明必须在主波（boot 期 platformStatus/refreshLoginStatus 急切读写）。
+// 真实初始化与流程在延迟波 08-account/02-qishui-login.js，那里不得再 var 声明（避免求值时覆盖运行态）。
+var qishuiLoginStatus = {
+  provider: 'qishui', loggedIn: false, configured: false, preview: false,
+  nickname: '汽水音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none',
+  isVip: false, isSvip: false, playbackKeyReady: false, playbackMode: 'recommend-match',
+  searchReady: false, webSession: false, cookieReady: false, tokenConfigured: false, publicCatalog: false
+};
+var qishuiLoginWasLoggedIn = false;
+var qishuiLoginAutoRefreshTimer = null;
+var qishuiOAuthBusy = false;
+var qishuiTokenBusy = false;
+var qishuiManualCookieOpen = false;
 var loginProvider = 'netease';
 var activeAccountProvider = 'netease';
 var dualAccountMode = false;

@@ -79,7 +79,9 @@ function bindModalBackdropClose() {
     ['login-modal', closeLoginModal],
     ['user-modal', closeUserModal],
     ['custom-lyric-modal', closeCustomLyricModal],
-    ['update-modal', closeUpdatePanel]
+    // closeUpdatePanel 定义在 deferred 波（00-update-preview.js）；主波求值时还未加载，
+    // 急切引用会 ReferenceError 中断整个合并脚本（白屏）。必须惰性解析到点击时的全局实现。
+    ['update-modal', function () { if (typeof closeUpdatePanel === 'function') closeUpdatePanel(); }]
   ].forEach(function(pair){
     var mask = document.getElementById(pair[0]);
     var close = pair[1];

@@ -6,17 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 
-// Kugou API 集成
-const { extractKugouAuth } = require('../kugou-api');
-
-// Spotify 支持
-const { getSpotifyOAuthConfig, buildSpotifyOAuthAuthorizeUrl, exchangeSpotifyOAuthCode, clearSpotifyToken, handleSpotifyStatus, handleSpotifySearch, handleSpotifyRecommendations, handleSpotifyUserPlaylists, handleSpotifyPlaylistTracks, handleSpotifySongUrl, handleSpotifyLyric, saveSpotifyConfig } = require('../spotify-api');
-
-// Qishui (汽水) 本机登录态导入
-const {
-  openQishuiMusicLoginWindow,
-  clearQishuiMusicLoginSession,
-} = require('./qishui-local-session-import');
+// 轻量模块（启动即用）
 const { buildLoginPack, applyLoginPack } = require('./login-session-pack');
 const {
   startLoginPackQrSession,
@@ -29,31 +19,43 @@ const {
 } = require('./liquidglass-plugins');
 const secretStore = require('./secret-store');
 
-// Wallpaper Engine 集成
-const { WallpaperEngineLibrary, registerWallpaperEngineScheme } = require('./wallpaper-engine-library');
+// WE 协议必须在 app ready 前注册；库实例/运行时改为按需加载
+const { registerWallpaperEngineScheme } = require('./wallpaper-engine-library');
+registerWallpaperEngineScheme(protocol);
+
 const wasapiOutputRuntime = require('./wasapi-output-runtime');
 wasapiOutputRuntime.registerIpc(ipcMain);
-const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
-
-// Full Desktop Mode
-const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
 
 // Login Easter Egg
 const { LoginEasterEggGate, LOGIN_EASTER_EGG_GATE_VERSION, LOGIN_EASTER_EGG_STATE_FILE } = require('./login-easter-egg-gate');
 
-// Desktop icon 模块
-const { applyDesktopIconShape, clearDesktopIconShape, probeDesktopIcons } = require('./desktop-icon-shape-runtime');
-const { startNativeDesktopIconLayer } = require('./desktop-native-icon-layer-runtime');
-
-// Wallpaper mode
-const { attachWallpaperWindowToDesktop } = require('./wallpaper-mode-runtime');
-
-// 注册 Wallpaper Engine 自定义协议
-registerWallpaperEngineScheme(protocol);
-
 // 内存管理模块（缓解 WebGL context loss）
 const appMemory = require('./app-memory');
 const systemMemory = require('./system-memory');
+
+// ---- 懒加载：重模块首次 IPC 时再 require / 实例化 ----
+let _spotifyApiMod = null;
+function spotifyApi() {
+  if (!_spotifyApiMod) _spotifyApiMod = require('../spotify-api');
+  return _spotifyApiMod;
+}
+
+let _qishuiLocalMod = null;
+function qishuiLocal() {
+  if (!_qishuiLocalMod) _qishuiLocalMod = require('./qishui-local-session-import');
+  return _qishuiLocalMod;
+}
+
+let _desktopIconShapeMod = null;
+function desktopIconShape() {
+  if (!_desktopIconShapeMod) _desktopIconShapeMod = require('./desktop-icon-shape-runtime');
+  return _desktopIconShapeMod;
+}
+
+function resolveNativeTempPath() {
+  const userDataPath = app.getPath('userData');
+  return (cacheSettings && cacheSettings.nativePath) || path.join(userDataPath, 'cache', 'native-helper-temp');
+}
 
 let mainWindow = null;
 let localServer = null;
@@ -76,11 +78,51 @@ let windowFullscreenActive = false;
 let mainWindowStateTimer = null;
 const registeredGlobalHotkeys = new Map();
 
-// Wallpaper Engine / Full Desktop Mode 实例
+// Wallpaper Engine / Full Desktop Mode 实例（按需构造，见 ensure*）
 let wallpaperEngineLibrary = null;
 let wallpaperEngineRuntime = null;
 let fullDesktopModeRuntime = null;
 let loginEasterEggGate = null;
+
+function ensureWallpaperEngineLibrary() {
+  if (wallpaperEngineLibrary) return wallpaperEngineLibrary;
+  const { WallpaperEngineLibrary } = require('./wallpaper-engine-library');
+  wallpaperEngineLibrary = new WallpaperEngineLibrary({ userDataPath: app.getPath('userData') });
+  return wallpaperEngineLibrary;
+}
+
+function ensureWallpaperEngineRuntime() {
+  if (wallpaperEngineRuntime) return wallpaperEngineRuntime;
+  const library = ensureWallpaperEngineLibrary();
+  const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
+  const nativeTempPath = resolveNativeTempPath();
+  try { fs.mkdirSync(nativeTempPath, { recursive: true }); } catch (_) {}
+  wallpaperEngineRuntime = new WallpaperEngineRuntime({
+    library,
+    desktopCapturer,
+    hostElevationProbe: systemMemory.probeProcessElevation
+      ? () => systemMemory.probeProcessElevation().catch(() => false)
+      : () => Promise.resolve(false),
+    nativeTempPath,
+  });
+  return wallpaperEngineRuntime;
+}
+
+function ensureFullDesktopModeRuntime() {
+  if (fullDesktopModeRuntime) return fullDesktopModeRuntime;
+  const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
+  const nativeTempPath = resolveNativeTempPath();
+  try { fs.mkdirSync(nativeTempPath, { recursive: true }); } catch (_) {}
+  fullDesktopModeRuntime = new FullDesktopModeRuntime({
+    screen,
+    platform: process.platform,
+    execFileImpl: execFile,
+    nativeTempPath,
+    requestReconcile: () => {},
+    onStatus: (status) => broadcastDesktopWallpaperStatus(status),
+  });
+  return fullDesktopModeRuntime;
+}
 let wallpaperEngineCaptureSourceId = '';
 let wallpaperEngineCaptureGrant = null;
 let wallpaperEngineCaptureOperation = 0;
@@ -1946,7 +1988,7 @@ function startSpotifyOAuthCallbackServer(redirectUri, onCallback) {
 }
 
 async function openSpotifyMusicLoginWindow(owner) {
-  const config = getSpotifyOAuthConfig();
+  const config = spotifyApi().getSpotifyOAuthConfig();
   if (!config.configured) {
     return {
       ok: false,
@@ -1962,7 +2004,7 @@ async function openSpotifyMusicLoginWindow(owner) {
   const pkce = createSpotifyPkcePair();
   let authUrl = '';
   try {
-    authUrl = buildSpotifyOAuthAuthorizeUrl({
+    authUrl = spotifyApi().buildSpotifyOAuthAuthorizeUrl({
       state: oauthState,
       codeChallenge: pkce.codeChallenge,
       redirectUri: config.redirectUri,
@@ -2021,7 +2063,7 @@ async function openSpotifyMusicLoginWindow(owner) {
         return finish({ ok: false, provider: 'spotify', error: 'SPOTIFY_OAUTH_CODE_MISSING', message: 'Spotify 回调没有返回 code。' });
       }
       try {
-        const info = await exchangeSpotifyOAuthCode({
+        const info = await spotifyApi().exchangeSpotifyOAuthCode({
           code,
           codeVerifier: pkce.codeVerifier,
           redirectUri: config.redirectUri,
@@ -2108,7 +2150,7 @@ async function clearSpotifyMusicLoginSession() {
   await cookieSession.clearStorageData({
     storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage'],
   });
-  clearSpotifyToken();
+  spotifyApi().clearSpotifyToken();
   return { ok: true, provider: 'spotify' };
 }
 
@@ -2128,7 +2170,7 @@ async function clearAllProviderLoginState(reason) {
     await clearNeteaseMusicLoginSession();
     await clearQQMusicLoginSession();
     await clearKugouMusicLoginSession();
-    await clearQishuiMusicLoginSession();
+    await qishuiLocal().clearQishuiMusicLoginSession();
     await clearSpotifyMusicLoginSession();
     console.log('[LoginEasterEgg] all provider login state cleared:', reason);
     return { ok: true };
@@ -2345,11 +2387,11 @@ ipcMain.handle('kugou-music-clear-login', async () => {
 // ========== Qishui IPC handlers ==========
 
 ipcMain.handle('qishui-music-open-login', async (event) => {
-  return openQishuiMusicLoginWindow(getSenderWindow(event));
+  return qishuiLocal().openQishuiMusicLoginWindow(getSenderWindow(event));
 });
 
 ipcMain.handle('qishui-music-clear-login', async () => {
-  return clearQishuiMusicLoginSession();
+  return qishuiLocal().clearQishuiMusicLoginSession();
 });
 
 // ========== Spotify IPC handlers ==========
@@ -2364,7 +2406,7 @@ ipcMain.handle('spotify-music-clear-login', async () => {
 
 ipcMain.handle('spotify-status', async (_event) => {
   try {
-    return await handleSpotifyStatus();
+    return await spotifyApi().handleSpotifyStatus();
   } catch (e) {
     return { ok: false, error: e.message, loggedIn: false };
   }
@@ -2372,7 +2414,7 @@ ipcMain.handle('spotify-status', async (_event) => {
 
 ipcMain.handle('spotify-config', async (_event) => {
   try {
-    const config = getSpotifyOAuthConfig();
+    const config = spotifyApi().getSpotifyOAuthConfig();
     return { ok: true, ...config };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2381,7 +2423,7 @@ ipcMain.handle('spotify-config', async (_event) => {
 
 ipcMain.handle('spotify-save-config', async (_event, payload) => {
   try {
-    const result = saveSpotifyConfig(payload || {});
+    const result = spotifyApi().saveSpotifyConfig(payload || {});
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2390,7 +2432,7 @@ ipcMain.handle('spotify-save-config', async (_event, payload) => {
 
 ipcMain.handle('spotify-search', async (_event, query, options) => {
   try {
-    return await handleSpotifySearch(query, options);
+    return await spotifyApi().handleSpotifySearch(query, options);
   } catch (e) {
     return { ok: false, error: e.message, songs: [] };
   }
@@ -2398,7 +2440,7 @@ ipcMain.handle('spotify-search', async (_event, query, options) => {
 
 ipcMain.handle('spotify-recommendations', async (_event, options) => {
   try {
-    return await handleSpotifyRecommendations(options);
+    return await spotifyApi().handleSpotifyRecommendations(options);
   } catch (e) {
     return { ok: false, error: e.message, songs: [] };
   }
@@ -2406,7 +2448,7 @@ ipcMain.handle('spotify-recommendations', async (_event, options) => {
 
 ipcMain.handle('spotify-user-playlists', async (_event) => {
   try {
-    return await handleSpotifyUserPlaylists();
+    return await spotifyApi().handleSpotifyUserPlaylists();
   } catch (e) {
     return { ok: false, error: e.message, playlists: [] };
   }
@@ -2414,7 +2456,7 @@ ipcMain.handle('spotify-user-playlists', async (_event) => {
 
 ipcMain.handle('spotify-playlist-tracks', async (_event, playlistId, options) => {
   try {
-    return await handleSpotifyPlaylistTracks(playlistId, options);
+    return await spotifyApi().handleSpotifyPlaylistTracks(playlistId, options);
   } catch (e) {
     return { ok: false, error: e.message, songs: [] };
   }
@@ -2422,7 +2464,7 @@ ipcMain.handle('spotify-playlist-tracks', async (_event, playlistId, options) =>
 
 ipcMain.handle('spotify-song-url', async (_event, songId) => {
   try {
-    return await handleSpotifySongUrl(songId);
+    return await spotifyApi().handleSpotifySongUrl(songId);
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2430,14 +2472,14 @@ ipcMain.handle('spotify-song-url', async (_event, songId) => {
 
 ipcMain.handle('spotify-lyric', async (_event, songId) => {
   try {
-    return await handleSpotifyLyric(songId);
+    return await spotifyApi().handleSpotifyLyric(songId);
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
 
 ipcMain.handle('spotify-logout', async () => {
-  clearSpotifyToken();
+  spotifyApi().clearSpotifyToken();
   return { ok: true };
 });
 
@@ -2446,8 +2488,8 @@ ipcMain.handle('spotify-logout', async () => {
 ipcMain.handle('mineradio-wallpaper-engine-list', async (event, payload = {}) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
-    const snapshot = await wallpaperEngineLibrary.list({ force: payload && payload.force === true });
+    const library = ensureWallpaperEngineLibrary();
+    const snapshot = await library.list({ force: payload && payload.force === true });
     const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(payload && payload.force === true) : { available: false };
     return { ...snapshot, runtime };
   } catch (error) {
@@ -2458,8 +2500,8 @@ ipcMain.handle('mineradio-wallpaper-engine-list', async (event, payload = {}) =>
 ipcMain.handle('mineradio-wallpaper-engine-project-details', async (event, id) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
-    return await wallpaperEngineLibrary.getProjectDetails(String(id || ''));
+    const library = ensureWallpaperEngineLibrary();
+    return await library.getProjectDetails(String(id || ''));
   } catch (error) {
     return { ok: false, error: error.message || 'WALLPAPER_ENGINE_PROJECT_DETAILS_FAILED' };
   }
@@ -2468,7 +2510,7 @@ ipcMain.handle('mineradio-wallpaper-engine-project-details', async (event, id) =
 ipcMain.handle('mineradio-wallpaper-engine-choose-directory', async (event) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, canceled: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, canceled: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
+    const library = ensureWallpaperEngineLibrary();
     const options = {
       title: '识别并导入 Wallpaper Engine 项目',
       buttonLabel: '识别此目录',
@@ -2478,7 +2520,7 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-directory', async (event) => {
       ? await dialog.showOpenDialog(mainWindow, options)
       : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths || !result.filePaths[0]) return { ok: true, canceled: true };
-    const snapshot = await wallpaperEngineLibrary.addManualRoot(result.filePaths[0]);
+    const snapshot = await library.addManualRoot(result.filePaths[0]);
     const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
     return { ...snapshot, runtime, canceled: false };
   } catch (error) {
@@ -2489,7 +2531,7 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-directory', async (event) => {
 ipcMain.handle('mineradio-wallpaper-engine-choose-project-file', async (event) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, canceled: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, canceled: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
+    const library = ensureWallpaperEngineLibrary();
     const options = {
       title: '选择 Wallpaper Engine 的 project.json 或场景包（.pkg/.pak）',
       buttonLabel: '导入此项目',
@@ -2503,7 +2545,7 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-project-file', async (event) =
       : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths || !result.filePaths[0]) return { ok: true, canceled: true };
     const selected = path.resolve(result.filePaths[0]);
-    const snapshot = await wallpaperEngineLibrary.addManualProjectFile(selected);
+    const snapshot = await library.addManualProjectFile(selected);
     const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
     return { ...snapshot, runtime, canceled: false };
   } catch (error) {
@@ -2514,8 +2556,8 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-project-file', async (event) =
 ipcMain.handle('mineradio-wallpaper-engine-remove-directory', async (event, rootId) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
-    const snapshot = await wallpaperEngineLibrary.removeManualRoot(rootId);
+    const library = ensureWallpaperEngineLibrary();
+    const snapshot = await library.removeManualRoot(rootId);
     const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
     return { ...snapshot, runtime };
   } catch (error) {
@@ -2526,9 +2568,9 @@ ipcMain.handle('mineradio-wallpaper-engine-remove-directory', async (event, root
 ipcMain.handle('mineradio-wallpaper-engine-runtime-status', async (event, payload = {}) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, available: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineRuntime) return { ok: false, available: false, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
-    const probe = await wallpaperEngineRuntime.probe(payload && payload.force === true);
-    return { ...probe, ...wallpaperEngineRuntime.getStatus(), pending: wallpaperEngineRuntime.pending != null };
+    const runtime = ensureWallpaperEngineRuntime();
+    const probe = await runtime.probe(payload && payload.force === true);
+    return { ...probe, ...runtime.getStatus(), pending: runtime.pending != null };
   } catch (error) {
     return { ok: false, available: false, error: error.message || 'WALLPAPER_ENGINE_RUNTIME_PROBE_FAILED' };
   }
@@ -2537,26 +2579,27 @@ ipcMain.handle('mineradio-wallpaper-engine-runtime-status', async (event, payloa
 ipcMain.handle('mineradio-wallpaper-engine-start-scene', async (event, payload = {}) => {
   let operation = 0;
   let startedSessionId = '';
+  let runtime = null;
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineRuntime) return { ok: false, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
+    runtime = ensureWallpaperEngineRuntime();
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'WALLPAPER_ENGINE_NO_HOST_WINDOW' };
     operation = ++wallpaperEngineCaptureOperation;
-    const result = await wallpaperEngineRuntime.start(String(payload.id || ''), {
+    const result = await runtime.start(String(payload.id || ''), {
       width: Math.max(640, Math.min(7680, Number(payload.width) || 1280)),
       height: Math.max(360, Math.min(4320, Number(payload.height) || 720)),
       fps: Math.max(24, Math.min(240, Number(payload.fps) || 60)),
     });
     startedSessionId = String(result && result.sessionId || '');
     if (operation !== wallpaperEngineCaptureOperation) {
-      await wallpaperEngineRuntime.stop(startedSessionId).catch(() => {});
+      await runtime.stop(startedSessionId).catch(() => {});
       return { ok: false, error: 'WALLPAPER_ENGINE_START_SUPERSEDED', sessionId: startedSessionId };
     }
     return { ...result, capturePrepared: true, captureMode: 'dwm-thumbnail' };
   } catch (error) {
-    if (startedSessionId) {
+    if (startedSessionId && runtime) {
       clearWallpaperEngineCaptureGrant(startedSessionId);
-      await wallpaperEngineRuntime.stop(startedSessionId).catch(() => {});
+      await runtime.stop(startedSessionId).catch(() => {});
     }
     return { ok: false, error: error.code || error.message || 'WALLPAPER_ENGINE_SCENE_START_FAILED', sessionId: startedSessionId };
   }
@@ -2636,11 +2679,11 @@ ipcMain.handle('full-desktop-status', async (event) => {
 
 ipcMain.handle('full-desktop-enable', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'DESKTOP_MODE_UNTRUSTED_SENDER' };
-  if (!fullDesktopModeRuntime) return { ok: false, error: 'FULL_DESKTOP_NOT_INITIALIZED' };
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'NO_MAIN_WINDOW' };
   try {
+    const runtime = ensureFullDesktopModeRuntime();
     fullDesktopEnableOperation += 1;
-    const result = await fullDesktopModeRuntime.enableDesktopMode(mainWindow, 'renderer-enable');
+    const result = await runtime.enableDesktopMode(mainWindow, 'renderer-enable');
     if (result && result.ok === true) {
       broadcastDesktopWallpaperStatus();
     }
@@ -2688,7 +2731,7 @@ ipcMain.handle('mineradio-login-easter-egg-reset', async (event) => {
 ipcMain.handle('mineradio-desktop-icon-probe', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
-    return await probeDesktopIcons();
+    return await desktopIconShape().probeDesktopIcons();
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2697,7 +2740,7 @@ ipcMain.handle('mineradio-desktop-icon-probe', async (event) => {
 ipcMain.handle('mineradio-desktop-icon-apply-shape', async (event, shape) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
-    return await applyDesktopIconShape(shape);
+    return await desktopIconShape().applyDesktopIconShape(shape);
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2706,7 +2749,7 @@ ipcMain.handle('mineradio-desktop-icon-apply-shape', async (event, shape) => {
 ipcMain.handle('mineradio-desktop-icon-clear-shape', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
-    return await clearDesktopIconShape();
+    return await desktopIconShape().clearDesktopIconShape();
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2715,8 +2758,8 @@ ipcMain.handle('mineradio-desktop-icon-clear-shape', async (event) => {
 ipcMain.handle('mineradio-wallpaper-engine-open-project-details', async (event, payload = {}) => {
   try {
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
-    if (!wallpaperEngineLibrary) return { ok: false, error: 'WALLPAPER_ENGINE_NOT_INITIALIZED' };
-    const details = await wallpaperEngineLibrary.getProjectDetails(String(payload && payload.id || ''));
+    const library = ensureWallpaperEngineLibrary();
+    const details = await library.getProjectDetails(String(payload && payload.id || ''));
     const workshopId = String(details && details.workshopId || '');
     if (!/^\d{5,32}$/.test(workshopId)) {
       return { ok: false, error: 'WALLPAPER_ENGINE_WORKSHOP_DETAILS_UNAVAILABLE' };
@@ -3805,29 +3848,7 @@ if (!gotSingleInstanceLock) {
     ],
   });
 
-  // 初始化 Wallpaper Engine Library
-  wallpaperEngineLibrary = new WallpaperEngineLibrary({ userDataPath });
-
-  // 初始化 Wallpaper Engine Runtime
-  const nativeTempPath = (cacheSettings && cacheSettings.nativePath) || path.join(userDataPath, 'cache', 'native-helper-temp');
-  try { fs.mkdirSync(nativeTempPath, { recursive: true }); } catch (_) {}
-  wallpaperEngineRuntime = new WallpaperEngineRuntime({
-    library: wallpaperEngineLibrary,
-    desktopCapturer,
-    hostElevationProbe: systemMemory.probeProcessElevation ? () => systemMemory.probeProcessElevation().catch(() => false) : () => Promise.resolve(false),
-    nativeTempPath,
-  });
-
-  // 初始化 Full Desktop Mode Runtime
-  fullDesktopModeRuntime = new FullDesktopModeRuntime({
-    screen,
-    platform: process.platform,
-    execFileImpl: execFile,
-    nativeTempPath,
-    requestReconcile: () => {},
-    onStatus: (status) => broadcastDesktopWallpaperStatus(status),
-  });
-
+  // Wallpaper Engine / Full Desktop：首次相关 IPC 时再 ensure 构造
   app.on('second-instance', () => {
     if (startupCompleted && focusMainWindow()) return;
     app.whenReady().then(() => createWindow()).then(() => focusMainWindow())

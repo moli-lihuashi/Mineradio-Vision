@@ -5,111 +5,144 @@
 //  - 试听检测 (freeTrialInfo) + 全 quality 探测
 //  - 所有受保护 API 都会带上已登录用户的 cookie
 // ====================================================================
-const {
-  cloudsearch,
-  song_detail,
-  song_url,
-  song_url_v1,
-  login_qr_key,
-  login_qr_create,
-  login_qr_check,
-  login_status,
-  logout,
-  user_account,
-  user_playlist,
-  comment_music,
-  artist_detail,
-  artist_top_song,
-  artist_songs,
-  like: like_song,
-  likelist,
-  song_like_check,
-  playlist_tracks,
-  playlist_track_add,
-  playlist_create,
-  playlist_detail,
-  playlist_track_all,
-  personalized,
-  recommend_resource,
-  recommend_songs,
-  dj_detail,
-  dj_program,
-  dj_hot,
-  dj_sublist,
-  user_audio,
-  dj_paygift,
-  record_recent_voice,
-  sati_resource_sub_list,
-  lyric,
-  lyric_new,
-  album_sub,
-  album_sublist,
-  playlist_subscribe,
-} = require('NeteaseCloudMusicApi');
-const {
-  getKugouLoginInfo: getKugouLoginInfoFromApi,
-  handleKugouLyric,
-  handleKugouGuessLike,
-  handleKugouLikeCheck,
-  handleKugouLikeToggle,
-  handleKugouPlaylistAddSong,
-  registerKugouCloudDevice,
-  setKugouDfidPersistHook,
-  kugouCloudlistRequest: kugouApiCloudlistRequest,
-  ensureKugouDfid,
-  signatureAndroidParams: kugouSignatureAndroidParams,
-  // 酷狗 lite 客户端身份常量：单一来源在 kugou-api.js（登录/注册/cloudlist 全部一致）
-  KUGOU_LITE_APPID: KUGOU_APPID,
-  KUGOU_LITE_CLIENTVER: KUGOU_CLIENTVER,
-  KUGOU_LITE_ANDROID_SALT: KUGOU_ANDROID_SIGN_KEY,
-  KUGOU_LITE_GATEWAY_UA: KUGOU_ANDROID_UA,
-  KUGOU_H5_SALT: KUGOU_WEB_SIGN_KEY,
-} = require('./kugou-api');
-const {
-  getSpotifyConfig,
-  clearSpotifyToken,
-  saveSpotifyConfig,
-  handleSpotifyStatus,
-  handleSpotifySearch,
-  handleSpotifyRecommendations,
-  handleSpotifyUserPlaylists,
-  handleSpotifyPlaylistTracks,
-  handleSpotifyAlbumDetail,
-  handleSpotifyLibraryCheck,
-  handleSpotifyLibrarySet,
-  handleSpotifyPlaylistAddSong,
-  handleSpotifyCreatePlaylist,
-  handleSpotifySongUrl,
-  handleSpotifyLyric,
-} = require('./spotify-api');
-const {
-  getQishuiStatus,
-  handleQishuiStatus,
-  normalizeQishuiCookieInput,
-  qishuiCookieHasLogin,
-  saveQishuiAccessToken,
-  clearQishuiAccessToken,
-  handleQishuiSearch,
-  handleQishuiFeed,
-  handleQishuiUserPlaylists,
-  handleQishuiPlaylistTracks,
-  handleQishuiCheckTracksLiked,
-  handleQishuiSetTrackLiked,
-  handleQishuiSetPlaylistCollected,
-  handleQishuiPlaylistAddSong,
-  handleQishuiSetAlbumCollected,
-  handleQishuiLyric,
-  handleQishuiSongUrl,
-} = require('./qishui-api');
-const {
-  normalizeQQVipPayload: normalizeQQVipPayloadStrict,
-  resolveQQVipFromProbes,
-  qqVipSessionCacheKey,
-  qqVipCacheTtlMs,
-  qqVipEntitlementRights,
-  preserveQQVipStalePositive,
-  qqVipObjectLooksExpired: qqVipObjectLooksExpiredStrict,
-} = require('./qq-vip-api');
+// ---- 音源模块懒加载：首次调用时 require，保留原函数名以兼容全部调用点 ----
+const _lazyMods = { netease: null, kugou: null, spotify: null, qishui: null, qqVip: null };
+function _neteaseMod() {
+  if (!_lazyMods.netease) _lazyMods.netease = require('NeteaseCloudMusicApi');
+  return _lazyMods.netease;
+}
+function _kugouMod() {
+  if (!_lazyMods.kugou) {
+    _lazyMods.kugou = require('./kugou-api');
+    // cloudlist 拿到新 dfid 后写回 cookie 存档（原先在模块顶层注册）
+    try {
+      _lazyMods.kugou.setKugouDfidPersistHook(function (dfid) {
+        try { saveKugouAuth(Object.assign(kugouCookieObject(), { dfid })); } catch (_) {}
+      });
+    } catch (_) {}
+  }
+  return _lazyMods.kugou;
+}
+function _spotifyMod() {
+  if (!_lazyMods.spotify) _lazyMods.spotify = require('./spotify-api');
+  return _lazyMods.spotify;
+}
+function _qishuiMod() {
+  if (!_lazyMods.qishui) _lazyMods.qishui = require('./qishui-api');
+  return _lazyMods.qishui;
+}
+function _qqVipMod() {
+  if (!_lazyMods.qqVip) _lazyMods.qqVip = require('./qq-vip-api');
+  return _lazyMods.qqVip;
+}
+function _lazyFn(getMod, name) {
+  return function (...args) { return getMod()[name](...args); };
+}
+
+// NeteaseCloudMusicApi
+const cloudsearch = _lazyFn(_neteaseMod, 'cloudsearch');
+const song_detail = _lazyFn(_neteaseMod, 'song_detail');
+const song_url = _lazyFn(_neteaseMod, 'song_url');
+const song_url_v1 = _lazyFn(_neteaseMod, 'song_url_v1');
+const login_qr_key = _lazyFn(_neteaseMod, 'login_qr_key');
+const login_qr_create = _lazyFn(_neteaseMod, 'login_qr_create');
+const login_qr_check = _lazyFn(_neteaseMod, 'login_qr_check');
+const login_status = _lazyFn(_neteaseMod, 'login_status');
+const logout = _lazyFn(_neteaseMod, 'logout');
+const user_account = _lazyFn(_neteaseMod, 'user_account');
+const user_playlist = _lazyFn(_neteaseMod, 'user_playlist');
+const comment_music = _lazyFn(_neteaseMod, 'comment_music');
+const artist_detail = _lazyFn(_neteaseMod, 'artist_detail');
+const artist_top_song = _lazyFn(_neteaseMod, 'artist_top_song');
+const artist_songs = _lazyFn(_neteaseMod, 'artist_songs');
+const like_song = _lazyFn(_neteaseMod, 'like');
+const likelist = _lazyFn(_neteaseMod, 'likelist');
+const song_like_check = _lazyFn(_neteaseMod, 'song_like_check');
+const playlist_tracks = _lazyFn(_neteaseMod, 'playlist_tracks');
+const playlist_track_add = _lazyFn(_neteaseMod, 'playlist_track_add');
+const playlist_create = _lazyFn(_neteaseMod, 'playlist_create');
+const playlist_detail = _lazyFn(_neteaseMod, 'playlist_detail');
+const playlist_track_all = _lazyFn(_neteaseMod, 'playlist_track_all');
+const personalized = _lazyFn(_neteaseMod, 'personalized');
+const recommend_resource = _lazyFn(_neteaseMod, 'recommend_resource');
+const recommend_songs = _lazyFn(_neteaseMod, 'recommend_songs');
+const dj_detail = _lazyFn(_neteaseMod, 'dj_detail');
+const dj_program = _lazyFn(_neteaseMod, 'dj_program');
+const dj_hot = _lazyFn(_neteaseMod, 'dj_hot');
+const dj_sublist = _lazyFn(_neteaseMod, 'dj_sublist');
+const user_audio = _lazyFn(_neteaseMod, 'user_audio');
+const dj_paygift = _lazyFn(_neteaseMod, 'dj_paygift');
+const record_recent_voice = _lazyFn(_neteaseMod, 'record_recent_voice');
+const sati_resource_sub_list = _lazyFn(_neteaseMod, 'sati_resource_sub_list');
+const lyric = _lazyFn(_neteaseMod, 'lyric');
+const lyric_new = _lazyFn(_neteaseMod, 'lyric_new');
+const album_sub = _lazyFn(_neteaseMod, 'album_sub');
+const album_sublist = _lazyFn(_neteaseMod, 'album_sublist');
+const playlist_subscribe = _lazyFn(_neteaseMod, 'playlist_subscribe');
+
+// kugou-api（函数 + 常量）
+const getKugouLoginInfoFromApi = _lazyFn(_kugouMod, 'getKugouLoginInfo');
+const handleKugouLyric = _lazyFn(_kugouMod, 'handleKugouLyric');
+const handleKugouGuessLike = _lazyFn(_kugouMod, 'handleKugouGuessLike');
+const handleKugouLikeCheck = _lazyFn(_kugouMod, 'handleKugouLikeCheck');
+const handleKugouLikeToggle = _lazyFn(_kugouMod, 'handleKugouLikeToggle');
+const handleKugouPlaylistAddSong = _lazyFn(_kugouMod, 'handleKugouPlaylistAddSong');
+const registerKugouCloudDevice = _lazyFn(_kugouMod, 'registerKugouCloudDevice');
+const kugouApiCloudlistRequest = _lazyFn(_kugouMod, 'kugouCloudlistRequest');
+const ensureKugouDfid = _lazyFn(_kugouMod, 'ensureKugouDfid');
+const kugouSignatureAndroidParams = _lazyFn(_kugouMod, 'signatureAndroidParams');
+const KUGOU_ID = {
+  get APPID() { return _kugouMod().KUGOU_LITE_APPID; },
+  get CLIENTVER() { return _kugouMod().KUGOU_LITE_CLIENTVER; },
+  get ANDROID_SIGN_KEY() { return _kugouMod().KUGOU_LITE_ANDROID_SALT; },
+  get ANDROID_UA() { return _kugouMod().KUGOU_LITE_GATEWAY_UA; },
+  get WEB_SIGN_KEY() { return _kugouMod().KUGOU_H5_SALT; },
+};
+
+// spotify-api
+const getSpotifyConfig = _lazyFn(_spotifyMod, 'getSpotifyConfig');
+const clearSpotifyToken = _lazyFn(_spotifyMod, 'clearSpotifyToken');
+const saveSpotifyConfig = _lazyFn(_spotifyMod, 'saveSpotifyConfig');
+const handleSpotifyStatus = _lazyFn(_spotifyMod, 'handleSpotifyStatus');
+const handleSpotifySearch = _lazyFn(_spotifyMod, 'handleSpotifySearch');
+const handleSpotifyRecommendations = _lazyFn(_spotifyMod, 'handleSpotifyRecommendations');
+const handleSpotifyUserPlaylists = _lazyFn(_spotifyMod, 'handleSpotifyUserPlaylists');
+const handleSpotifyPlaylistTracks = _lazyFn(_spotifyMod, 'handleSpotifyPlaylistTracks');
+const handleSpotifyAlbumDetail = _lazyFn(_spotifyMod, 'handleSpotifyAlbumDetail');
+const handleSpotifyLibraryCheck = _lazyFn(_spotifyMod, 'handleSpotifyLibraryCheck');
+const handleSpotifyLibrarySet = _lazyFn(_spotifyMod, 'handleSpotifyLibrarySet');
+const handleSpotifyPlaylistAddSong = _lazyFn(_spotifyMod, 'handleSpotifyPlaylistAddSong');
+const handleSpotifyCreatePlaylist = _lazyFn(_spotifyMod, 'handleSpotifyCreatePlaylist');
+const handleSpotifySongUrl = _lazyFn(_spotifyMod, 'handleSpotifySongUrl');
+const handleSpotifyLyric = _lazyFn(_spotifyMod, 'handleSpotifyLyric');
+
+// qishui-api
+const getQishuiStatus = _lazyFn(_qishuiMod, 'getQishuiStatus');
+const handleQishuiStatus = _lazyFn(_qishuiMod, 'handleQishuiStatus');
+const normalizeQishuiCookieInput = _lazyFn(_qishuiMod, 'normalizeQishuiCookieInput');
+const qishuiCookieHasLogin = _lazyFn(_qishuiMod, 'qishuiCookieHasLogin');
+const saveQishuiAccessToken = _lazyFn(_qishuiMod, 'saveQishuiAccessToken');
+const clearQishuiAccessToken = _lazyFn(_qishuiMod, 'clearQishuiAccessToken');
+const handleQishuiSearch = _lazyFn(_qishuiMod, 'handleQishuiSearch');
+const handleQishuiFeed = _lazyFn(_qishuiMod, 'handleQishuiFeed');
+const handleQishuiUserPlaylists = _lazyFn(_qishuiMod, 'handleQishuiUserPlaylists');
+const handleQishuiPlaylistTracks = _lazyFn(_qishuiMod, 'handleQishuiPlaylistTracks');
+const handleQishuiCheckTracksLiked = _lazyFn(_qishuiMod, 'handleQishuiCheckTracksLiked');
+const handleQishuiSetTrackLiked = _lazyFn(_qishuiMod, 'handleQishuiSetTrackLiked');
+const handleQishuiSetPlaylistCollected = _lazyFn(_qishuiMod, 'handleQishuiSetPlaylistCollected');
+const handleQishuiPlaylistAddSong = _lazyFn(_qishuiMod, 'handleQishuiPlaylistAddSong');
+const handleQishuiSetAlbumCollected = _lazyFn(_qishuiMod, 'handleQishuiSetAlbumCollected');
+const handleQishuiLyric = _lazyFn(_qishuiMod, 'handleQishuiLyric');
+const handleQishuiSongUrl = _lazyFn(_qishuiMod, 'handleQishuiSongUrl');
+
+// qq-vip-api
+const normalizeQQVipPayloadStrict = _lazyFn(_qqVipMod, 'normalizeQQVipPayload');
+const resolveQQVipFromProbes = _lazyFn(_qqVipMod, 'resolveQQVipFromProbes');
+const qqVipSessionCacheKey = _lazyFn(_qqVipMod, 'qqVipSessionCacheKey');
+const qqVipCacheTtlMs = _lazyFn(_qqVipMod, 'qqVipCacheTtlMs');
+const qqVipEntitlementRights = _lazyFn(_qqVipMod, 'qqVipEntitlementRights');
+const preserveQQVipStalePositive = _lazyFn(_qqVipMod, 'preserveQQVipStalePositive');
+const qqVipObjectLooksExpiredStrict = _lazyFn(_qqVipMod, 'qqVipObjectLooksExpired');
 const http = require('http');
 const https = require('https');
 const fs   = require('fs');
@@ -404,8 +437,10 @@ function staticCacheControlForPath(filePath) {
   }
   if (/\/(js\/modules|vendor|css|fonts|assets)\//i.test(rel) ||
       /\.(?:js|css|woff2?|ttf|otf|png|jpe?g|gif|webp|svg|ico|mp4|webm|json)$/i.test(rel)) {
-    // 配合 index-loader 的 ?v=version 长缓存；无 query 时靠 ETag 304
-    return 'public, max-age=3600, stale-while-revalidate=86400';
+    // 本地 localhost 服务，revalidate 零成本：文件变了 ETag 必变（size+mtime），
+    // 彻底避免「版本号忘 bump → Chromium 缓存旧模块 → 白屏且重装无效」。
+    // ?v= 保留用于穿透中间层缓存，不再承担新鲜度职责。
+    return 'no-cache';
   }
   return 'public, max-age=300';
 }
@@ -4272,7 +4307,7 @@ function kugouMd5(text) {
 
 function kugouAndroidSignature(params, dataString) {
   // 签名算法单一来源在 kugou-api.js；此处仅传 lite 盐
-  return kugouSignatureAndroidParams(params, dataString, KUGOU_ANDROID_SIGN_KEY);
+  return kugouSignatureAndroidParams(params, dataString, KUGOU_ID.ANDROID_SIGN_KEY);
 }
 
 function kugouWebSignature(params) {
@@ -4280,7 +4315,7 @@ function kugouWebSignature(params) {
     .sort()
     .map(k => k + '=' + (params[k] == null ? '' : params[k]))
     .join('');
-  return kugouMd5(KUGOU_WEB_SIGN_KEY + body + KUGOU_WEB_SIGN_KEY);
+  return kugouMd5(KUGOU_ID.WEB_SIGN_KEY + body + KUGOU_ID.WEB_SIGN_KEY);
 }
 
 function kugouRandomString(length, lower) {
@@ -4316,11 +4351,8 @@ function saveKugouAuth(obj) {
   return auth;
 }
 
-// cloudlist 设备注册（含收藏链路内部触发）拿到新 dfid 后持久化进 cookie 存档，
-// 避免每次启动都向风控接口重复注册
-setKugouDfidPersistHook(function (dfid) {
-  try { saveKugouAuth(Object.assign(kugouCookieObject(), { dfid })); } catch (_) {}
-});
+// cloudlist 设备注册（含收藏链路内部触发）拿到新 dfid 后持久化：
+// hook 在 _kugouMod 首次 require 时注册（见上方懒加载）
 
 function kugouCookieMid(obj) {
   obj = obj || kugouCookieObject();
@@ -4382,8 +4414,8 @@ async function kugouGatewayRequest(pathname, options) {
     dfid: kugouCookieDfid(obj),
     mid: kugouCookieMid(obj),
     uuid: '-',
-    appid: KUGOU_APPID,
-    clientver: KUGOU_CLIENTVER,
+    appid: KUGOU_ID.APPID,
+    clientver: KUGOU_ID.CLIENTVER,
     clienttime,
   }, options.params || {});
   const token = kugouCookieToken(obj);
@@ -4405,7 +4437,7 @@ async function kugouGatewayRequest(pathname, options) {
   });
   const cookie = kugouCookieHeader();
   const headers = Object.assign({
-    'User-Agent': KUGOU_ANDROID_UA,
+    'User-Agent': KUGOU_ID.ANDROID_UA,
     'kg-rc': '1',
     'kg-thash': '5d816a0',
     'kg-rec': '1',
@@ -4463,7 +4495,7 @@ function kugouDeepFind(obj, names) {
 
 async function handleKugouLoginQrKey() {
   const device = saveKugouAuth(kugouCookieObject());
-  const qrcodeText = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=' + KUGOU_APPID + '&';
+  const qrcodeText = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=' + KUGOU_ID.APPID + '&';
   const data = await kugouGatewayRequest('/v2/qrcode', {
     baseURL: KUGOU_LOGIN_BASE_URL,
     encryptType: 'web',
@@ -4514,7 +4546,7 @@ async function handleKugouLoginQrCheck(key) {
     encryptType: 'web',
     params: {
       plat: 4,
-      appid: KUGOU_APPID,
+      appid: KUGOU_ID.APPID,
       srcappid: KUGOU_QR_SRC_APPID,
       qrcode: qr,
     },
@@ -4792,7 +4824,7 @@ async function kugouTrackercdnPlayUrl(hash, options) {
   const userId = kugouCookieUserId(obj);
   const token = kugouCookieToken(obj);
   const mid = kugouCookieMid(obj);
-  const appid = KUGOU_APPID;
+  const appid = KUGOU_ID.APPID;
   const params = {
     cmd: '26',
     hash: h,
@@ -4801,7 +4833,7 @@ async function kugouTrackercdnPlayUrl(hash, options) {
     pid: '2',
     mid,
     userid: userId || '0',
-    version: KUGOU_CLIENTVER,
+    version: KUGOU_ID.CLIENTVER,
     vipType: String(options.vipType || kugouCookieVipType(obj) || 0),
     token: token || '0',
     key: kugouMd5(h + KUGOU_PLAY_KEY_SALT + appid + mid + (userId || '0')),
@@ -4814,7 +4846,7 @@ async function kugouTrackercdnPlayUrl(hash, options) {
   });
   const text = await requestText(u.toString(), {
     headers: {
-      'User-Agent': KUGOU_ANDROID_UA,
+      'User-Agent': KUGOU_ID.ANDROID_UA,
       Cookie: kugouCloudlistCookieHeader(obj),
     },
   });

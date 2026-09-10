@@ -148,37 +148,42 @@
     'js/modules/06-lyrics/03-podcast-playlist-loaders.js',
     'js/modules/06-lyrics/04-progress-seek.js',
     'js/modules/06-lyrics/05-upload-dragdrop.js',
-    // fx
+    // fx（面板绑定依赖，必须与 bindFxPanel 同批）
+    'js/modules/07-fx/00-panel-lazy-stubs.js',
     'js/modules/07-fx/06-hotkeys.js',
     'js/modules/07-fx/00-preset-archive-data.js',
     'js/modules/07-fx/01-lyric-color-accent.js',
     'js/modules/07-fx/04-preset-grid-uniforms.js',
-    'js/modules/07-fx/05a-fx-panel-inputs.js',
-    'js/modules/07-fx/05b-fx-panel-layout.js',
-    'js/modules/07-fx/05c-fx-particle-fire.js',
     'js/modules/07-fx/07-bindings-shelf-immersive.js',
     'js/modules/07-fx/08-cache-storage-settings.js',
-    'js/modules/07-fx/09-lyric-shader-market.js',
     'js/modules/07-fx/11-system-memory-controls.js',
-    'js/modules/07-fx/12-perf-dashboard.js',
-    // account
-    'js/modules/08-account/00-update-preview.js',
-    'js/modules/08-account/02-qishui-login.js',
+    // account（boot 必需：登录态刷新 / toast / 引导）
     'js/modules/08-account/01-login-modal-utils.js',
     'js/modules/08-account/02-login-status.js',
-    'js/modules/08-account/03-login-modal-flows.js',
     'js/modules/08-account/04-user-modal-logout.js',
-    'js/modules/08-account/08-login-pack-qr-sync.js',
     'js/modules/08-account/05-startup-idle-guide.js',
     'js/modules/08-account/06-toast.js',
-    'js/modules/08-account/07-dynamic-libs.js',
     // shell：overlay 须在 splash-and-boot 之前（boot 会同步调用 applyDesktopLyricsState 等）
     'js/modules/10-shell/00-gesture-resize-ui.js',
     'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
     'js/modules/10-shell/01-splash-and-boot.js',
     'js/modules/10-shell/05-startup-bindings.js',
-    'js/modules/11-main-loop.js',
-    // 延迟初始化
+    'js/modules/11-main-loop.js'
+  ]);
+
+  // 第二波：boot 之后再注入（FX 扩展面板 / 登录弹窗流 / 预览 / 液态玻璃周边）
+  // 注意：勿把 bindFxPanel、登录态刷新、toast、hotkeys 放进这里。
+  const deferredModulePaths = [
+    'js/modules/07-fx/05a-fx-panel-inputs.js',
+    'js/modules/07-fx/05b-fx-panel-layout.js',
+    'js/modules/07-fx/05c-fx-particle-fire.js',
+    'js/modules/07-fx/09-lyric-shader-market.js',
+    'js/modules/07-fx/12-perf-dashboard.js',
+    'js/modules/08-account/00-update-preview.js',
+    'js/modules/08-account/02-qishui-login.js',
+    'js/modules/08-account/03-login-modal-flows.js',
+    'js/modules/08-account/08-login-pack-qr-sync.js',
+    'js/modules/08-account/07-dynamic-libs.js',
     'js/modules/06-fx/01-liquidglass-config.js',
     'js/modules/06-fx/02-wallpaper-engine-fns.js',
     'js/modules/06-fx/03-liquidglass-perf.js',
@@ -186,7 +191,7 @@
     'js/modules/06-fx/05-prismal-chrome.js',
     'js/modules/07-playback/00-spotify-provider.js',
     'js/modules/08-account/00-login-easter-egg.js'
-  ]);
+  ];
 
   try {
     if (document.documentElement) document.documentElement.classList.add('splash-active');
@@ -231,6 +236,39 @@
     }
   }
 
+  function injectDeferredCombined(texts) {
+    var script = document.createElement('script');
+    script.text = texts.join('\n') + '\n//# sourceURL=mineradio-index-deferred-modules.js\n';
+    (document.head || document.documentElement).appendChild(script);
+    try {
+      if (typeof window.__onDeferredModulesReady === 'function') window.__onDeferredModulesReady();
+    } catch (e) {
+      console.warn('[MineradioLoader] deferred ready hook failed', e);
+    }
+  }
+
+  function loadDeferredModules() {
+    if (!deferredModulePaths || !deferredModulePaths.length) return;
+    if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
+      Promise.all(deferredModulePaths.map(function (path) {
+        return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
+      })).then(injectDeferredCombined).catch(function (err) {
+        console.warn('[MineradioLoader] deferred fetch failed, trying sync XHR', err);
+        try {
+          injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        } catch (fallbackErr) {
+          console.error('[MineradioLoader] deferred modules failed', fallbackErr || err);
+        }
+      });
+    } else {
+      try {
+        injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+      } catch (err) {
+        console.error('[MineradioLoader] deferred modules failed', err);
+      }
+    }
+  }
+
   function showLoaderFailure(err) {
     console.error('[MineradioLoader]', err);
     try {
@@ -246,9 +284,14 @@
   if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
     Promise.all(modulePaths.map(function (path) {
       return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
-    })).then(injectCombined).catch(function (err) {
+    })).then(function (texts) {
+      injectCombined(texts);
+      // 核心脚本已求值，立刻拉第二波（splash ~4s 内应完成）
+      loadDeferredModules();
+    }).catch(function (err) {
       try {
         injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        loadDeferredModules();
       } catch (fallbackErr) {
         showLoaderFailure(fallbackErr || err);
       }
@@ -256,6 +299,7 @@
   } else {
     try {
       injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+      loadDeferredModules();
     } catch (err) {
       showLoaderFailure(err);
     }

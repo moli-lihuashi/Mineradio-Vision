@@ -2417,7 +2417,10 @@ function checkKugouCloudlistIdentityGuard() {
   }
   if (/OIlwieks28dk2k092lksi2UIkp/.test(serverText)) fail('standard android salt must not reappear in server.js (identity drift)');
   if (/DIAG7QOELSYoIJvTFJhMpe1s/.test(serverText)) fail('standard RSA key must not reappear in server.js (identity drift)');
-  if (!/KUGOU_LITE_APPID: KUGOU_APPID/.test(serverText)) fail('server.js must alias the lite identity constants from kugou-api.js');
+  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源
+  if (!/KUGOU_LITE_APPID/.test(serverText) || !/KUGOU_ID\.APPID/.test(serverText)) {
+    fail('server.js must reuse the lite identity constants from kugou-api.js (KUGOU_ID getters)');
+  }
   if (!/setKugouDfidPersistHook\(/.test(serverText)) fail('server.js must register the dfid persist hook (avoid per-launch device registration)');
   // 2026-08-31：dfid 死门控回归 — WithCloudlistDevice 必须无条件 ensure，不得再依赖未设置的 opts.router
   if (/opts\.router\s*!==\s*['"]cloudlist\.service\.kugou\.com['"]/.test(kugouApiText)) {

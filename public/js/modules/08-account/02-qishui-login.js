@@ -1,17 +1,10 @@
 // ============================================================
 //  汽水音乐登录（本机 PC 会话导入 + Token 粘贴）
 // ============================================================
-var qishuiLoginStatus = {
-  provider: 'qishui', loggedIn: false, configured: false, preview: false,
-  nickname: '汽水音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none',
-  isVip: false, isSvip: false, playbackKeyReady: false, playbackMode: 'recommend-match',
-  searchReady: false, webSession: false, cookieReady: false, tokenConfigured: false, publicCatalog: false
-};
-var qishuiLoginWasLoggedIn = false;
-var qishuiLoginAutoRefreshTimer = null;
-var qishuiOAuthBusy = false;
-var qishuiTokenBusy = false;
-var qishuiManualCookieOpen = false;
+// qishuiLoginStatus / qishuiLoginWasLoggedIn / qishuiLoginAutoRefreshTimer /
+// qishuiOAuthBusy / qishuiTokenBusy / qishuiManualCookieOpen 的 var 声明已挪到
+// 主波 00-state/12a-audio-login-globals.js（boot 期急切读写；此处声明会在延迟波
+// 求值时把运行态覆盖回默认值，且主波引用会 ReferenceError → 白屏）。
 
 function normalizeQishuiLoginStatus(info) {
   var fallback = {

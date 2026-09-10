@@ -1,12 +1,77 @@
 // =============================================================================
 // FX 绑定 / 货架 / 沉浸模式 / 镜头模式
 // =============================================================================
+// 拆分说明（启动性能）：
+// - A/B 全局交互：boot 必绑（快捷键、toggleFx 等，不依赖面板 DOM）
+// - C 面板 DOM：idle 预绑 + 首次打开兜底；视觉生效由 setPreset/syncFxUniforms 独立完成
+var fxPanelDomBound = false;
+var fxGlobalInteractionsBound = false;
 
+function bindFxGlobalInteractions() {
+  if (fxGlobalInteractionsBound) return;
+  fxGlobalInteractionsBound = true;
+  bindHotkeySettings();
+}
+
+function ensureFxPanelDomBound() {
+  if (fxPanelDomBound) return true;
+  if (!window.__fxPanelDomModulesReady) return false;
+  bindFxPanelDom();
+  return fxPanelDomBound;
+}
+
+function scheduleFxPanelDomBind() {
+  var attempts = 0;
+  var run = function () {
+    attempts += 1;
+    try {
+      if (window.__fxPanelDomModulesReady) {
+        bindFxPanelDom();
+      } else if (attempts < 40) {
+        // 延迟波尚未注入完成，稍后重试（splash ~4s + fetch）
+        setTimeout(run, 150);
+      }
+    } catch (e) {
+      console.warn('[FxPanel] deferred bind failed', e);
+      if (attempts < 40) setTimeout(run, 300);
+    }
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 4000 });
+  } else {
+    setTimeout(run, 800);
+  }
+}
+
+// 延迟波注入完成钩子（index-loader 调用）
+window.__onDeferredModulesReady = function () {
+  try {
+    if (!fxPanelDomBound) bindFxPanelDom();
+  } catch (e) {
+    console.warn('[FxPanel] bind after deferred ready failed', e);
+  }
+  try {
+    // boot 时只能打到 stub；真实现就绪后再跑一次迁移（函数内部有 once 守卫）
+    if (typeof migratePerformanceQualityTowardAutoOnce === 'function') {
+      migratePerformanceQualityTowardAutoOnce();
+    }
+  } catch (e) {
+    console.warn('[FxPanel] perf quality migrate failed', e);
+  }
+};
+
+// 兼容旧调用：全局 + 面板一次绑齐（boot 已改为只调 A/B）
 function bindFxPanel() {
+  bindFxGlobalInteractions();
+  bindFxPanelDom();
+}
+
+function bindFxPanelDom() {
+  if (fxPanelDomBound) return;
+  if (!window.__fxPanelDomModulesReady) return;
   liftFxFloatingPopups();
   organizeFxPanel();
   relabelFxPanelControls();
-  bindHotkeySettings();
   buildPresetGrid();
   renderUserFxArchives();
   buildLyricColorControls();
@@ -318,6 +383,7 @@ function bindFxPanel() {
   updateFxInputs();
   initFxParticleFireSlider();
   scheduleFxParticleFireRefresh();
+  fxPanelDomBound = true;
 }
 function toggleFx(key) {
   if (isDevelopmentLockedFx(key)) {
@@ -405,6 +471,18 @@ function toggleFxPanel(force) {
     showToast('开启 DIY 玩家模式后可打开视觉控制台');
     return;
   }
+  // 打开前确保面板 DOM 已绑定（idle 未完成时兜底）
+  if (force !== false) {
+    ensureFxPanelDomBound();
+    // 面板刚显示时 clientWidth 才准；下一帧再校准 --prism-fill
+    requestAnimationFrame(function () {
+      try {
+        if (window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncFills === 'function') {
+          window.MineradioPrismalChrome.syncFills();
+        }
+      } catch (_) {}
+    });
+  }
   var currentlyOpen = el.classList.contains('show') || el.classList.contains('peek');
   if (peekTimers && peekTimers.fx) { clearTimeout(peekTimers.fx); peekTimers.fx = null; }
   fxPanelPinned = false;
@@ -447,6 +525,14 @@ function toggleFxPanelPin(e) {
     toggleFxPanel(false);
     return;
   }
+  ensureFxPanelDomBound();
+  requestAnimationFrame(function () {
+    try {
+      if (window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncFills === 'function') {
+        window.MineradioPrismalChrome.syncFills();
+      }
+    } catch (_) {}
+  });
   if (peekTimers && peekTimers.fx) { clearTimeout(peekTimers.fx); peekTimers.fx = null; }
   closePlayerQuickMenu();
   el.classList.remove('closing', 'peek');

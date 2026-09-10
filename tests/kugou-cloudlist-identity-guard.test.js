@@ -107,10 +107,12 @@ test('dfid registration infrastructure must be wired for persistence', () => {
 });
 
 test('server.js must reuse the lite identity from kugou-api.js with zero standard-identity drift', () => {
-  assert.match(serverSource, /KUGOU_LITE_APPID: KUGOU_APPID/);
-  assert.match(serverSource, /KUGOU_LITE_CLIENTVER: KUGOU_CLIENTVER/);
-  assert.match(serverSource, /KUGOU_LITE_ANDROID_SALT: KUGOU_ANDROID_SIGN_KEY/);
-  assert.match(serverSource, /KUGOU_LITE_GATEWAY_UA: KUGOU_ANDROID_UA/);
+  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源
+  assert.match(serverSource, /KUGOU_LITE_APPID/);
+  assert.match(serverSource, /KUGOU_LITE_CLIENTVER/);
+  assert.match(serverSource, /KUGOU_LITE_ANDROID_SALT/);
+  assert.match(serverSource, /KUGOU_LITE_GATEWAY_UA/);
+  assert.match(serverSource, /KUGOU_ID\.(APPID|CLIENTVER|ANDROID_SIGN_KEY|ANDROID_UA|WEB_SIGN_KEY)/);
   assert.doesNotMatch(serverSource, new RegExp(STANDARD_ANDROID_SALT), 'standard android salt must not reappear in server.js');
   assert.doesNotMatch(serverSource, new RegExp(STANDARD_RSA_KEY_MARK), 'standard RSA key must not reappear in server.js');
 });

@@ -5,14 +5,31 @@ function parseCombinedIndexModules() {
   const publicDir = path.join(appRoot, 'public');
   const loaderPath = path.join(publicDir, 'js', 'index-loader.js');
   const loader = fs.readFileSync(loaderPath, 'utf8');
-  const match = loader.match(/const modulePaths = \[([\s\S]*?)\n\s*\]/);
-  if (!match) fail('modulePaths not found in public/js/index-loader.js');
-  const modulePaths = [...match[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const coreStart = loader.indexOf('const modulePaths');
+  if (coreStart < 0) fail('modulePaths not found in public/js/index-loader.js');
+  const deferredStart = loader.indexOf('const deferredModulePaths');
+  const coreSrc = deferredStart > coreStart ? loader.slice(coreStart, deferredStart) : loader.slice(coreStart);
+  // concat 链会拆成多段数组，统一抽 'js/modules/...' 路径
+  const modulePaths = [...coreSrc.matchAll(/'(js\/modules\/[^']+)'/g)].map(m => m[1]);
+  if (!modulePaths.length) fail('modulePaths parsed empty');
   const combined = modulePaths
     .map(modulePath => fs.readFileSync(path.join(publicDir, modulePath), 'utf8'))
     .join('\n');
   new Function(combined);
   console.log(`[OK] Combined classic script parses. Modules: ${modulePaths.length}.`);
+
+  if (deferredStart >= 0) {
+    const deferredSrc = loader.slice(deferredStart, loader.indexOf('];', deferredStart) + 2);
+    const deferredPaths = [...deferredSrc.matchAll(/'(js\/modules\/[^']+)'/g)].map(m => m[1]);
+    if (!deferredPaths.length) fail('deferredModulePaths parsed empty');
+    const overlap = deferredPaths.filter(p => modulePaths.includes(p));
+    if (overlap.length) fail('deferred modules overlap core modulePaths: ' + overlap.join(', '));
+    const deferredCombined = deferredPaths
+      .map(modulePath => fs.readFileSync(path.join(publicDir, modulePath), 'utf8'))
+      .join('\n');
+    new Function(deferredCombined);
+    console.log(`[OK] Deferred classic script parses. Modules: ${deferredPaths.length}.`);
+  }
 }
 
 function scanForbiddenMarkers() {

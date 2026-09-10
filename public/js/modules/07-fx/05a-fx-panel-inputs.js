@@ -53,6 +53,24 @@ function setRange(id, value) {
     ? coverParticleCountLabel(value)
     : (id === 'fx-lyricweight' || id === 'fx-glassaberration' || id === 'fx-lyrictiltx' || id === 'fx-lyrictilty' || id === 'fx-shelfangle' ? String(Math.round(Number(value) || 0)) : Number(value).toFixed(id === 'fx-lyricspacing' ? 3 : 2));
   if (id === 'fx-particlecount') updateFxParticleFireSliderVisual(value);
+  // 程序化改 value 不会触发 input 事件；必须同步 --prism-fill，否则蓝色进度条会停在旧位置
+  syncPrismalRangeFill(el);
+}
+
+function syncPrismalRangeFill(el) {
+  try {
+    if (window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncRangeFill === 'function') {
+      window.MineradioPrismalChrome.syncRangeFill(el);
+    }
+  } catch (_) {}
+}
+
+function syncPrismalAllRangeFills() {
+  try {
+    if (window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncFills === 'function') {
+      window.MineradioPrismalChrome.syncFills();
+    }
+  } catch (_) {}
 }
 function updateDevelopmentFxControls() {
   [
@@ -399,6 +417,8 @@ function updateFxInputs() {
   updateRippleColorControls();
   applyControlGlassChromaticOffset();
   syncFxUniforms();
+  // 批量回填后统一校准蓝色进度条（setRange 单点已同步；这里兜底漏网 + 面板刚布局完成时的 trackW）
+  syncPrismalAllRangeFills();
 }
 function animateFxResetButton(btn) {
   if (!btn || !window.gsap) return;
