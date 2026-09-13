@@ -203,17 +203,18 @@ async function showLoginModal(opts) {
   openGsapModal(modal);
   var drawer = document.getElementById('login-auth-drawer');
   if (drawer) drawer.classList.add('show');
-  updateLoginProviderUi();
-  await refreshQr();
+  // updateLoginProviderUi / refreshQr 在延迟波（03-login-modal-flows）
+  if (typeof updateLoginProviderUi === 'function') updateLoginProviderUi();
+  if (typeof refreshQr === 'function') await refreshQr();
 }
 function closeLoginModal() {
-  stopQrPoll();
+  if (typeof stopQrPoll === 'function') stopQrPoll();
   closeGsapModal(document.getElementById('login-modal'));
 }
 function setLoginProvider(provider, silent) {
   loginProvider = (provider === 'qq' || provider === 'kugou' || provider === 'qishui' || provider === 'spotify') ? provider : 'netease';
-  updateLoginProviderUi();
-  if (!silent && document.getElementById('login-modal').classList.contains('show')) refreshQr();
+  if (typeof updateLoginProviderUi === 'function') updateLoginProviderUi();
+  if (!silent && document.getElementById('login-modal').classList.contains('show') && typeof refreshQr === 'function') refreshQr();
 }
 function loginProviderBusy(provider) {
   if (provider === 'qq') return !!qqWebLoginBusy;

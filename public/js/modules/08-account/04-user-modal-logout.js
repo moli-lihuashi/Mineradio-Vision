@@ -189,7 +189,8 @@ async function logoutActiveAccount() {
     return;
   }
   if (activeAccountProvider === 'qishui') {
-    await logoutQishuiAccount();
+    // logoutQishuiAccount 在延迟波 02-qishui-login.js
+    if (typeof logoutQishuiAccount === 'function') await logoutQishuiAccount();
     dualAccountMode = false;
     activeAccountProvider = firstLoggedProvider();
     renderUserBtn();

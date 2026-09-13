@@ -11,6 +11,7 @@
     "test": "node scripts/run-tests.js",
     "test:unit": "node scripts/run-tests.js unit",
     "test:quick": "node scripts/run-tests.js quick",
+    "smoke:deferred": "node scripts/smoke-deferred-boot.js",
     "build:win": "electron-builder --win nsis",
     "build:win:dir": "electron-builder --win dir",
     "build:win:internal-beta": "electron-builder --config electron-builder.internal-beta.json --win nsis --publish never",

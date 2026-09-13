@@ -225,6 +225,123 @@
     return '//# sourceURL=mineradio-' + path + '\n' + text;
   }
 
+  // 开屏进度：真实就绪只设 target；显示值按时间门禁 + 缓动推进，
+  // 避免本地缓存命中时瞬间 100%「像没加载」。
+  var splashLoadState = {
+    target: 0,
+    shown: 0,
+    label: '加载模块…',
+    startedAt: 0,
+    minFillMs: 1500,
+    raf: 0,
+    lastTs: 0,
+    done: false
+  };
+
+  function splashLoadEnsureStarted() {
+    if (!splashLoadState.startedAt) splashLoadState.startedAt = performance.now();
+  }
+
+  function splashLoadPaint() {
+    var pct = splashLoadState.shown;
+    var track = document.getElementById('splash-load-track');
+    var fill = document.getElementById('splash-load-fill');
+    var pctEl = document.getElementById('splash-load-pct');
+    var labelEl = document.getElementById('splash-load-label');
+    var done = pct >= 99.95 && splashLoadState.target >= 100;
+    if (fill) {
+      fill.style.width = (done ? 100 : pct).toFixed(2) + '%';
+      if (done) {
+        fill.setAttribute('data-done', '1');
+        fill.removeAttribute('data-active');
+      } else {
+        fill.removeAttribute('data-done');
+        if (pct > 0.5) fill.setAttribute('data-active', '1');
+        else fill.removeAttribute('data-active');
+      }
+    }
+    if (track) {
+      if (done) track.classList.add('is-done');
+      else track.classList.remove('is-done');
+    }
+    if (pctEl) pctEl.textContent = done ? '100' : String(Math.min(99, Math.round(pct)));
+    if (labelEl) labelEl.textContent = splashLoadState.label;
+    window.__mineradioBootLoadPct = pct;
+  }
+
+  function splashLoadStopLoop() {
+    if (splashLoadState.raf) {
+      try { cancelAnimationFrame(splashLoadState.raf); } catch (_) {}
+      splashLoadState.raf = 0;
+    }
+  }
+
+  function splashLoadTick(ts) {
+    splashLoadState.raf = 0;
+    var now = typeof ts === 'number' ? ts : performance.now();
+    var dt = splashLoadState.lastTs ? Math.min(64, now - splashLoadState.lastTs) : 16;
+    splashLoadState.lastTs = now;
+    splashLoadEnsureStarted();
+    var elapsed = now - splashLoadState.startedAt;
+    // 时间门禁：最短 minFillMs 内最多走到 100%，防止瞬时跳满
+    var timeGate = Math.min(100, (elapsed / splashLoadState.minFillMs) * 100);
+    var goal = Math.min(splashLoadState.target, timeGate);
+    // 缓动追赶 goal（约 1s 内跟上，且每秒至少前进一点，保证「有动作」）
+    var ease = 1 - Math.pow(0.001, dt / 1000);
+    var step = Math.max(0.04 * (dt / 16), ease * (goal - splashLoadState.shown));
+    if (splashLoadState.shown < goal) {
+      splashLoadState.shown = Math.min(goal, splashLoadState.shown + step);
+    } else if (splashLoadState.shown > goal) {
+      splashLoadState.shown = goal;
+    }
+    // 接近终点且 target 已 100 → 吸附
+    if (splashLoadState.target >= 100 && splashLoadState.shown > 99.2) {
+      splashLoadState.shown = 100;
+    }
+    splashLoadPaint();
+    var needMore = splashLoadState.shown < 99.99 || splashLoadState.target < 100 || elapsed < splashLoadState.minFillMs;
+    if (needMore && !splashLoadState.done) {
+      splashLoadState.raf = requestAnimationFrame(splashLoadTick);
+    } else {
+      splashLoadPaint();
+    }
+  }
+
+  function splashLoadStartLoop() {
+    splashLoadEnsureStarted();
+    if (!splashLoadState.raf) splashLoadState.raf = requestAnimationFrame(splashLoadTick);
+  }
+
+  /** 设置真实目标进度（0–100）与文案；显示值会平滑爬升 */
+  function setSplashLoadProgress(pct, label) {
+    try {
+      pct = Math.max(0, Math.min(100, Number(pct) || 0));
+      if (pct > splashLoadState.target) splashLoadState.target = pct;
+      if (label) splashLoadState.label = label;
+      splashLoadStartLoop();
+    } catch (_) {}
+  }
+
+  function markCoreModulesReady() {
+    window.__mineradioCoreModulesReady = true;
+    setSplashLoadProgress(100, '就绪');
+    // 等显示值爬到 100 再允许进入（与 splash 最短时长对齐）
+    var waitSnap = function () {
+      if (splashLoadState.shown >= 99.5 || performance.now() - (splashLoadState.startedAt || performance.now()) > splashLoadState.minFillMs + 400) {
+        splashLoadState.shown = 100;
+        splashLoadPaint();
+        splashLoadState.done = true;
+        splashLoadStopLoop();
+        try {
+          if (typeof window.tryMarkSplashReadyFromBoot === 'function') window.tryMarkSplashReadyFromBoot();
+        } catch (_) {}
+        return;
+      }
+      requestAnimationFrame(waitSnap);
+    };
+    requestAnimationFrame(waitSnap);
+  }
+
   function injectCombined(texts) {
     var script = document.createElement('script');
     script.text = texts.join('\n') + '\n//# sourceURL=mineradio-index-modules.js\n';
@@ -282,15 +399,28 @@
 
   // 优先并行 fetch；失败时回退同步 XHR。无论哪种路径都合并为单个 script，避免分块打断 function 提升。
   if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
+    splashLoadState.startedAt = performance.now();
+    setSplashLoadProgress(1, '加载模块…');
+    var coreDone = 0;
+    var coreTotal = modulePaths.length || 1;
     Promise.all(modulePaths.map(function (path) {
-      return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
+      return fetchModuleText(path).then(function (text) {
+        coreDone += 1;
+        setSplashLoadProgress(6 + (coreDone / coreTotal) * 70, '加载模块 ' + coreDone + '/' + coreTotal);
+        return wrapModuleText(path, text);
+      });
     })).then(function (texts) {
+      setSplashLoadProgress(78, '初始化…');
       injectCombined(texts);
-      // 核心脚本已求值，立刻拉第二波（splash ~4s 内应完成）
+      setSplashLoadProgress(88, '启动中…');
+      markCoreModulesReady();
       loadDeferredModules();
     }).catch(function (err) {
       try {
+        setSplashLoadProgress(40, '回退加载…');
         injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        setSplashLoadProgress(88, '启动中…');
+        markCoreModulesReady();
         loadDeferredModules();
       } catch (fallbackErr) {
         showLoaderFailure(fallbackErr || err);
@@ -298,7 +428,11 @@
     });
   } else {
     try {
+      splashLoadState.startedAt = performance.now();
+      setSplashLoadProgress(20, '加载模块…');
       injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+      setSplashLoadProgress(88, '启动中…');
+      markCoreModulesReady();
       loadDeferredModules();
     } catch (err) {
       showLoaderFailure(err);

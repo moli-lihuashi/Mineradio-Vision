@@ -14,6 +14,8 @@ var splashSoundFallbackArmed = false;
 var splashTimer = null;
 var reduceSplashMotion = false;
 var splashReadyToEnter = false;
+var splashPendingEnter = false;
+var splashShownAt = 0;
 // 树枝生长 + 粒子飘散专用状态
 var splashBranches = [];        // L 系统生成的树枝段数组
 var splashParticles = [];       // 从枝桠末端飘散的音符/星芒粒子
@@ -534,6 +536,40 @@ function markSplashReadyToEnter() {
   s.setAttribute('role', 'button');
   s.setAttribute('tabindex', '0');
   s.setAttribute('aria-label', '点击进入 Mineradio');
+  // 用户在 ready 前已点过：立刻进入
+  if (splashPendingEnter) {
+    splashPendingEnter = false;
+    requestSplashEnterNow();
+  }
+}
+
+function requestSplashEnterNow() {
+  // 模块未就绪时只记录意图，不提前进入
+  if (!window.__mineradioCoreModulesReady && !splashReadyToEnter) {
+    splashPendingEnter = true;
+    return;
+  }
+  try { playMineradioIntroSound(); } catch (_) {}
+  if (splashReadyToEnter) dismissSplash();
+  else splashPendingEnter = true;
+}
+
+function tryMarkSplashReadyFromBoot() {
+  if (splashReadyToEnter) return;
+  // 必须等 index-loader 注入完主波（__mineradioCoreModulesReady）才能给「点击进入」
+  if (!window.__mineradioCoreModulesReady) {
+    if (splashTimer) clearTimeout(splashTimer);
+    splashTimer = setTimeout(tryMarkSplashReadyFromBoot, 80);
+    return;
+  }
+  var minMs = reduceSplashMotion ? 900 : 1500;
+  var elapsed = splashShownAt ? (performance.now() - splashShownAt) : 0;
+  if (elapsed < minMs) {
+    if (splashTimer) clearTimeout(splashTimer);
+    splashTimer = setTimeout(tryMarkSplashReadyFromBoot, Math.max(50, minMs - elapsed));
+    return;
+  }
+  markSplashReadyToEnter();
 }
 
 function initSplashDomBindings() {
@@ -542,11 +578,11 @@ function initSplashDomBindings() {
   var s = document.getElementById('splash');
   if (!s) return;
   markAppPerf('dom-content-loaded');
+  splashShownAt = performance.now();
   armSplashSoundFallback();
   prewarmHomeWallpaperPreview();
   function requestSplashEnter() {
-    playMineradioIntroSound();
-    if (splashReadyToEnter) dismissSplash();
+    requestSplashEnterNow();
   }
   s.addEventListener('click', requestSplashEnter);
   document.addEventListener('keydown', function(e){
@@ -556,13 +592,12 @@ function initSplashDomBindings() {
       requestSplashEnter();
     }
   });
-  if (reduceSplashMotion) {
-    s.classList.add('reduce-motion');
-    splashTimer = setTimeout(markSplashReadyToEnter, 900);
-    return;
-  }
+  // 最短展示：与进度条 minFillMs 对齐，保证能看见爬升
+  var minMs = reduceSplashMotion ? 900 : 1500;
+  if (reduceSplashMotion) s.classList.add('reduce-motion');
   playMineradioIntroSound();
-  splashTimer = setTimeout(markSplashReadyToEnter, 4000);
+  if (splashTimer) clearTimeout(splashTimer);
+  splashTimer = setTimeout(tryMarkSplashReadyFromBoot, minMs);
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initSplashDomBindings);
@@ -614,19 +649,24 @@ applyWallpaperModeState(false);
 setShelfMode(fx.shelf);
 applyStartupStarfieldPreset();
 applyPlaylistPanelPinState(false);
-if (fx.floatLayer) {
-  try { createFloatLayer(); } catch (err) { console.warn('[boot] createFloatLayer failed:', err); }
-}
-if (fx.particleLyrics && !isClassicPresetActive()) {
-  try { createLyricsParticles(); } catch (err) { console.warn('[boot] createLyricsParticles failed:', err); }
-}
-if (fx.backCover) {
-  try { createBackCoverLayer(); } catch (err) { console.warn('[boot] createBackCoverLayer failed:', err); }
-}
+// 重资产初始化挪到首帧后，缩短 splash 内同步阻塞
+scheduleUiWarmTask(function(){
+  if (fx.floatLayer) {
+    try { createFloatLayer(); } catch (err) { console.warn('[boot] createFloatLayer failed:', err); }
+  }
+  if (fx.particleLyrics && !isClassicPresetActive()) {
+    try { createLyricsParticles(); } catch (err) { console.warn('[boot] createLyricsParticles failed:', err); }
+  }
+  if (fx.backCover) {
+    try { createBackCoverLayer(); } catch (err) { console.warn('[boot] createBackCoverLayer failed:', err); }
+  }
+}, 0);
 initIdleGuideCanvas();
 } catch (bootErr) {
   console.error('[boot] startup block failed (continuing to main-loop):', bootErr);
 }
+// 主波 boot 主路径跑完：若已过最短 splash 时长则立刻可点进（不再干等 4s）
+try { tryMarkSplashReadyFromBoot(); } catch (_) {}
 function bootstrapStartupLoginStatus() {
   startupLoginStatusPromise = Promise.all([
     typeof refreshLoginStatus === 'function' ? refreshLoginStatus() : Promise.resolve(null),

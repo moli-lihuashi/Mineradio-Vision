@@ -1,6 +1,6 @@
 const { appRoot, runElectron, jsCheckFiles, runNodeSyntaxCheck } = require('./helpers');
 const { runPlaybackAudioGraphRegressionCheck, runPlaybackSourceFallbackTransactionCheck, runQQVipEntitlementRegressionCheck, runLoginEasterEggGateRegressionCheck, runSpotifyApiResilienceRegressionCheck, runPlatformAccountSyncGuardCheck, runHomeDailyRecommendationRegressionCheck, runQishuiProviderDistributionRegressionCheck } = require('./regression-checks');
-const { parseCombinedIndexModules, scanForbiddenMarkers } = require('./module-parse');
+const { parseCombinedIndexModules, scanForbiddenMarkers, checkDeferredEagerDependencyGuard, smokeCoreEvalNoReferenceError } = require('./module-parse');
 const { checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard } = require('./guards');
 const { runElectronRuntimeCheck, runMainStartupRecoveryCheck } = require('./electron-runtime');
 
@@ -75,6 +75,8 @@ async function main() {
   await maybe('runPlatformAccountSyncGuardCheck', runPlatformAccountSyncGuardCheck);
   await maybe('runHomeDailyRecommendationRegressionCheck', runHomeDailyRecommendationRegressionCheck);
   await maybe('parseCombinedIndexModules', parseCombinedIndexModules);
+  await maybe('checkDeferredEagerDependencyGuard', checkDeferredEagerDependencyGuard);
+  await maybe('smokeCoreEvalNoReferenceError', smokeCoreEvalNoReferenceError);
   await maybe('scanForbiddenMarkers', scanForbiddenMarkers);
   await maybe('checkMainWindowChrome', checkMainWindowChrome);
   await maybe('checkBackgroundTransparencyControlsGuard', checkBackgroundTransparencyControlsGuard);

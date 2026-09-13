@@ -78,17 +78,69 @@ var handCanvas = null, handCanvasCtx = null;
 // 平滑系数 (越小越平滑, 但反应越慢)
 var HAND_SMOOTH_ALPHA = 0.35;
 
+// MediaPipe CDN：jsdelivr 国内常不可达，准备 jsdelivr / unpkg 回退
+var MEDIPIPE_SCRIPT_CDNS = [
+  'https://cdn.jsdelivr.net/npm',
+  'https://unpkg.com',
+];
+var MEDIPIPE_HANDS_CDN_BASE = null; // 成功加载 hands.js 的 CDN 根，locateFile 复用
+
+function waitForPredicate(fn, timeoutMs, intervalMs) {
+  return new Promise(function (resolve) {
+    var t0 = Date.now();
+    var tick = function () {
+      var ok = false;
+      try { ok = !!fn(); } catch (_) { ok = false; }
+      if (ok) return resolve(true);
+      if (Date.now() - t0 >= (timeoutMs || 8000)) return resolve(false);
+      setTimeout(tick, intervalMs || 80);
+    };
+    tick();
+  });
+}
+
+async function ensureGestureLibsReady() {
+  // loadScriptOnce 在延迟波 08-account/07-dynamic-libs.js；等它就绪再拉 CDN
+  var ready = await waitForPredicate(function () { return typeof loadScriptOnce === 'function'; }, 8000, 60);
+  if (!ready) throw new Error('GESTURE_LIBS_NOT_READY');
+}
+
+async function loadMediapipeFromCdns(relPaths) {
+  var lastErr = null;
+  for (var c = 0; c < MEDIPIPE_SCRIPT_CDNS.length; c++) {
+    var base = MEDIPIPE_SCRIPT_CDNS[c];
+    try {
+      for (var i = 0; i < relPaths.length; i++) {
+        await loadScriptOnce(base + '/' + relPaths[i]);
+      }
+      MEDIPIPE_HANDS_CDN_BASE = base + '/@mediapipe/hands';
+      return base;
+    } catch (e) {
+      lastErr = e;
+      console.warn('[Gesture] CDN failed:', base, e && e.message);
+    }
+  }
+  throw lastErr || new Error('MEDIPIPE_CDN_UNREACHABLE');
+}
+
 async function startGestureControl() {
   if (gestureActive) return;
   showToast('正在加载手势识别…');
   try {
-    await loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
-    await loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
+    await ensureGestureLibsReady();
+    await loadMediapipeFromCdns([
+      '@mediapipe/camera_utils/camera_utils.js',
+      '@mediapipe/hands/hands.js',
+    ]);
+    if (typeof Hands !== 'function' || typeof Camera !== 'function') {
+      throw new Error('MEDIPIPE_GLOBALS_MISSING');
+    }
     gestureVideo = document.createElement('video');
     gestureVideo.playsInline = true; gestureVideo.muted = true;
     gestureVideo.style.display = 'none';
     document.body.appendChild(gestureVideo);
-    gestureHands = new Hands({ locateFile: function(f){ return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + f; } });
+    var handsBase = MEDIPIPE_HANDS_CDN_BASE || 'https://cdn.jsdelivr.net/npm/@mediapipe/hands';
+    gestureHands = new Hands({ locateFile: function(f){ return handsBase + '/' + f; } });
     // modelComplexity:1 比 0 更稳定, 但仍流畅. 提高 confidence 减少误检
     gestureHands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
     gestureHands.onResults(function(res){
@@ -109,7 +161,20 @@ async function startGestureControl() {
     showGestureHUD('待命', 0, '把手放进视野');
   } catch (e) {
     console.warn('Gesture failed:', e);
-    showToast('手势启动失败 (需要摄像头权限)');
+    var msg = String((e && e.message) || e);
+    if (msg === 'GESTURE_LIBS_NOT_READY') {
+      showToast('手势组件加载中，请 1 秒后再点一次');
+    } else if (msg === 'MEDIPIPE_CDN_UNREACHABLE' || /Failed to load|network|net::/i.test(msg)) {
+      showToast('手势模型下载失败（网络/CDN），请检查网络后重试');
+    } else if (msg === 'MEDIPIPE_GLOBALS_MISSING') {
+      showToast('手势模型脚本异常，请重试或重启应用');
+    } else if (/Permission|NotAllowed|NotFound|NotReadable/i.test(msg)) {
+      showToast('手势启动失败 (需要摄像头权限)');
+    } else {
+      showToast('手势启动失败');
+    }
+    try { if (gestureVideo) gestureVideo.remove(); } catch (_) {}
+    gestureVideo = null; gestureHands = null; gestureCamera = null; gestureActive = false;
     fx.cam = 'off';
     document.querySelectorAll('#cam-seg button').forEach(function(b){ b.classList.toggle('active', b.dataset.cam === 'off'); });
   }

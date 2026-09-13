@@ -25,6 +25,12 @@
 - 面板 DOM 绑定延后到 idle / 首次打开（bindFxGlobalInteractions + scheduleFxPanelDomBind），视觉仍由 setPreset 独立生效。
 - 修复 Prismal 玻璃滑块：程序化改 value 时同步填充，解决蓝色进度条停在旧位置的问题。
 - 清理：移除 public/liquidglass.js 旧残留与嵌套重复的 sonic-topography 副本（减少约 2.2MB 资源与 914KB 预览图）。
+- 开屏（Splash）重做：新增真实加载进度条（细轨 + 玻璃墨珠进度点 + 彗尾 + 百分比与状态文案），进度按「真实就绪 + 时间门禁 + 缓动推进」呈现，避免本地缓存命中时瞬间 100%；完成后墨珠落定过冲回弹 + 涟漪 + 整轨氛围光。
+- 开屏进入流程：记录 ready 前的点击意图（splashPendingEnter），模块就绪后立即进入，解决提前点击无效；新增 requestSplashEnterNow / tryMarkSplashReadyFromBoot。
+- 延迟加载健壮性：动态库加载记录状态（loading / ok / error），失败后允许重试、加载中复用同一节点；登录与退出流程对延迟波函数增加 typeof 守卫，避免未就绪时中断。
+- 手势识别（MediaPipe）CDN 回退：jsdelivr 不可达时自动切换 unpkg 备用源。
+- 首屏 vendor 脚本（morphicons / raindrop-fx / weather-canvas）改为 defer 加载，减少首屏阻塞。
+- 工程工具：新增 smoke:deferred 延迟启动冒烟测试；quick-check 模块解析改为按 loader 分波解析。
 
 ## v3.0.0
 
