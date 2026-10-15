@@ -117,6 +117,16 @@ function setLyricMaterialColor(mat, color) {
   else if (mat.color) mat.color.copy(color);
   mat.needsUpdate = true;
 }
+/* ────────────────────────────────────────────────────────────────────────────
+ * ⚠ 本文件（07）里的 applyLyricPaletteToMesh / effectiveLyricPalette / setStageLyricPalette
+ *   都是【死代码】：index-loader.js 把所有模块合并成同一 script 求值以保留函数提升，
+ *   同作用域重名函数后声明者胜出；加载顺序 07(第 77 行) → 10(第 79 行)，所以 10 覆盖本文件。
+ *   真正生效的是 10-lyrics-mask-shaders.js 里的同名函数。
+ *   保留本份是为了「加载顺序一旦变化（例如退 legacy 合并策略）语义不退化」，
+ *   因此这三处的语义改动必须与 10 同步。
+ *   本文件里唯一真正生效的是 applyStageLyricPaletteNow（10 没有同名函数），
+ *   但它只被本文件那份死掉的 setStageLyricPalette 调用 —— 即运行期不会被触发。
+ * ──────────────────────────────────────────────────────────────────────────── */
 function applyLyricPaletteToMesh(mesh) {
   if (!mesh || !mesh.userData || !mesh.userData.lyric) return;
   var pal = stageLyrics.palette || {};
@@ -166,7 +176,8 @@ function effectiveLyricPalette(pal) {
     secondary: src.secondary || '#9cffdf',
     highlight: src.highlight || '#eef7ff',
     shadow: src.shadow || 'rgba(2,8,12,0.42)',
-    glow: src.glow || 'rgba(143,233,255,0.34)'
+    glow: src.glow || 'rgba(143,233,255,0.34)',
+    glowColor: src.glowColor || null
   };
   if (fx.lyricHighlightMode === 'custom') {
     var hi = lyricPaletteFromHex(fx.lyricHighlightColor);

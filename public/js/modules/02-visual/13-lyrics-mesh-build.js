@@ -310,6 +310,32 @@ function updateLyricMeshProgressTrack(mesh, progress, opts) {
 function setLyricTrackTarget(mesh, payload) {
   if (!mesh || !mesh.userData || !mesh.userData.lyric || !payload) return false;
   var data = mesh.userData.lyric;
+  // 显示模式/行数是实时设置，而 data.displayMode / data.trackVisibleRadius 只是建 mesh
+  // 那一刻的快照。用户切模式或拖「显示行数」滑块后，轨道 mesh 只会被本函数重新指向新行，
+  // 若不在这里同步，行窗口会永久停在建轨时的模式（典型症状：三行建的轨道之后永远只显示
+  // 3 行，滑块拖到 10 行也没反应）。见 08-lyrics-display-modes.js lyricTrackDisplayModeFor。
+  if (data.usesTrack) {
+    var liveDisplayMode = typeof lyricTrackDisplayModeFor === 'function'
+      ? lyricTrackDisplayModeFor(data)
+      : data.displayMode;
+    if (liveDisplayMode && liveDisplayMode !== data.displayMode) {
+      data.displayMode = liveDisplayMode;
+      // 显示模式变了 → 行窗口/行数都变了，露字是重新开始的，看门狗的计时点必须重置，
+      // 否则 900ms 的「露字超时」会把刚切完设置的重建误判成卡死（见 14-stage-lyrics-rendering.js）。
+      mesh.userData.lyricRevealWatchAt = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+    }
+    if (typeof lyricTrackVisibleRadiusFor === 'function') {
+      var liveRadius = lyricTrackVisibleRadiusFor(liveDisplayMode || data.displayMode);
+      if (isFinite(liveRadius) && Math.abs(liveRadius - Number(data.trackVisibleRadius)) > 0.001) {
+        data.trackVisibleRadius = liveRadius;
+        if (data.trackPersistent && typeof ensureStageLyricPersistentTrackRows === 'function') {
+          ensureStageLyricPersistentTrackRows(mesh, Number(payload.trackIndex) || 0, { reason: 'display-mode-change' });
+        }
+      }
+    }
+  }
   if (!data.usesTrack || !data.rowLayers || !data.rowLayers.length) return false;
   if (!data.trackPersistent && !payload.trackLightweight && data.trackLightweight) return false;
   if (!payload.trackKey || data.trackKey !== payload.trackKey) return false;

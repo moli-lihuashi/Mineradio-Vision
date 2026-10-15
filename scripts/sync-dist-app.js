@@ -1,15 +1,21 @@
 'use strict';
 /**
- * Sync latest source into the single packaged app:
- *   dist/Mineradio/resources/app
+ * Sync latest source into the packaged app:
+ *   dist/Mineradio/resources/app            （默认目标，用户日常启动的就是它）
  *
- * Prefer this after frontend/main/server edits instead of keeping dual dist trees.
+ * 可选：第 1 个参数指定别的 app 目录，用来把并行存在的另一份打包树一起刷新，
+ * 例如 dist/win-unpacked/resources/app（electron-builder 的 unpacked 输出，
+ * 它与 dist/Mineradio 是两棵独立的树，只同步一棵会让「启动哪个 exe」决定看到新代码还是老代码）。
+ *   node scripts/sync-dist-app.js dist/win-unpacked/resources/app
  */
 const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const app = path.join(root, 'dist', 'Mineradio', 'resources', 'app');
+const targetArg = process.argv[2];
+const app = targetArg
+  ? path.resolve(root, targetArg)
+  : path.join(root, 'dist', 'Mineradio', 'resources', 'app');
 
 function copyFile(src, dst) {
   fs.mkdirSync(path.dirname(dst), { recursive: true });
@@ -94,4 +100,8 @@ if (fs.existsSync(nativeIdx)) {
 }
 
 console.log('synced', files, 'files ->', app);
-console.log('run:', path.join(root, 'dist', 'Mineradio', 'Mineradio.exe'));
+if (targetArg) {
+  console.log('note: 这是额外目标；默认目标仍是 dist/Mineradio/resources/app');
+} else {
+  console.log('run:', path.join(root, 'dist', 'Mineradio', 'Mineradio.exe'));
+}

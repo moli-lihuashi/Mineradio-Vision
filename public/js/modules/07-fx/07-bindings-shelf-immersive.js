@@ -165,6 +165,8 @@ function bindFxPanelDom() {
       if (pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY') fx[pair[1]] = Math.round(clampRange(fx[pair[1]], -84, 84));
       if (pair[1] === 'lyricCustomLines') {
         fx.lyricCustomLines = Math.round(clampRange(fx.lyricCustomLines, 1, 10));
+        // 用户显式改行数 → 解除瞬态 fail-open 的会话锁/冷却，否则锁死后拖滑块毫无反应。
+        if (typeof resetStageLyricRowLayersLatch === 'function') resetStageLyricRowLayersLatch('lyricCustomLines');
         if (typeof scheduleLyricCustomLinesRebuild === 'function') scheduleLyricCustomLinesRebuild();
       }
       if (pair[1] === 'lyricGlitchPower') fx.lyricGlitchPower = clampRange(fx.lyricGlitchPower, 0.14, 1.0);

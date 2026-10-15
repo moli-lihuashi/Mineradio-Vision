@@ -637,7 +637,10 @@ function parseYrcText(text) {
   return finalizeLyricLineDurations(lines);
 }
 function renderLyrics() {
-  // v8: 歌词渲染由 stageLyrics 在每帧 tickLyricsParticles 里推动
+  // v8: 歌词渲染由 stageLyrics 在每帧 tickLyricsParticles 里推动。
+  // 换歌交接（借鉴 Folia 的两帧交接）：旧行不硬清，交给下一帧 showStageLine 走 outgoing 淡出，
+  // 避免切歌 / 换歌词源瞬间「旧词消失 → 空窗 → 新词出现」的闪断。
+  if (typeof handoffStageLyricsForNewTrack === 'function' && handoffStageLyricsForNewTrack()) return;
   clearStageLyrics();
 }
 function toggleLyricsPanel(force) {

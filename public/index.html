@@ -337,6 +337,10 @@ try {
     <button id="sleep-timer-start" type="button" onclick="startSleepTimerFromUi()">开始定时</button>
     <button id="sleep-timer-cancel" type="button" onclick="cancelSleepTimer(true)">取消</button>
   </div>
+  <div class="quick-menu-divider"></div>
+  <div class="quick-menu-section-title">休息提醒</div>
+  <button type="button" id="quick-menu-break-reminder-toggle" class="quick-menu-toggle on" onclick="toggleBreakReminderEnabled()" aria-pressed="true" title="连续聆听累计到间隔后，整屏浮出一层休息提示"><span>久听休息提醒</span><span class="dot"></span></button>
+  <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
 </div>
 
 <button id="fx-fab" title="视觉控制台" onclick="toggleFxPanelPin(event)">
@@ -929,6 +933,19 @@ try {
       <div class="fx-seg" id="close-behavior-seg" title="点击右上角关闭按钮时的行为">
         <button data-close-behavior="exit">直接退出</button>
         <button data-close-behavior="tray">后台托盘</button>
+      </div>
+      <div class="fx-section-label">休息提醒</div>
+      <div class="fx-toggle-grid">
+        <div class="fx-toggle on" id="t-breakReminderEnabled" onclick="toggleBreakReminderEnabled()" title="连续聆听累计到间隔后，整屏浮出一层休息提示；暂停满 10 分钟视为已经休息，计数归零"><span>久听休息提醒</span><span class="dot"></span></div>
+      </div>
+      <div class="fx-seg break-reminder-interval-seg" id="break-reminder-interval-seg" role="group" aria-label="休息提醒间隔" title="连续聆听多久后提醒一次">
+        <button type="button" data-break-reminder-interval="30" onclick="setBreakReminderInterval(30)">30 分</button>
+        <button type="button" data-break-reminder-interval="45" onclick="setBreakReminderInterval(45)">45 分</button>
+        <button type="button" data-break-reminder-interval="60" class="active" onclick="setBreakReminderInterval(60)">60 分</button>
+        <button type="button" data-break-reminder-interval="90" onclick="setBreakReminderInterval(90)">90 分</button>
+      </div>
+      <div class="break-reminder-panel-row">
+        <button class="fx-mini-btn ghost" type="button" onclick="previewBreakReminder()">预览提示</button>
       </div>
       <div class="fx-section-label">缓存目录</div>
       <div class="cache-storage-panel" id="cache-storage-panel">
@@ -1532,6 +1549,25 @@ try {
       <button type="button" onclick="closeVisualGuide(true)">跳过</button>
       <div id="visual-guide-progress" class="visual-guide-progress"></div>
       <button id="visual-guide-next" class="primary" type="button" onclick="nextVisualGuideStep()">下一步</button>
+    </div>
+  </div>
+</div>
+
+<!-- 休息提醒：连续聆听到达间隔后整屏浮出（逻辑见 js/modules/10-shell/06-break-reminder.js） -->
+<div id="break-reminder" role="dialog" aria-modal="true" aria-labelledby="break-reminder-title" aria-hidden="true">
+  <div class="break-reminder-scrim"></div>
+  <button id="break-reminder-close" class="break-reminder-close" type="button" onclick="snoozeBreakReminder()" aria-label="稍后再提醒">×</button>
+  <div class="break-reminder-body">
+    <div id="break-reminder-title" class="break-reminder-title">想休息一下吗？</div>
+    <p class="break-reminder-text">
+      <span id="break-reminder-text-lead"></span>
+      <span>再喜欢的歌，也值得留一点力气慢慢听，</span>
+      <span>Mineradio 会一直在这儿等你回来。</span>
+    </p>
+    <div id="break-reminder-hint" class="break-reminder-hint">按 Esc 或点击空白处，稍后再提醒</div>
+    <div class="break-reminder-actions">
+      <button id="break-reminder-snooze" class="break-reminder-btn" type="button" onclick="snoozeBreakReminder()">再听 20 分钟</button>
+      <button id="break-reminder-rest" class="break-reminder-btn primary" type="button" onclick="restBreakReminder()">好，我去休息</button>
     </div>
   </div>
 </div>

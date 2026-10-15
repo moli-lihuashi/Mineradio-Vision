@@ -30,6 +30,25 @@ var presetIcons = [
   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="12" r="5" fill="currentColor" opacity="0.85"/><path d="M14 9h6M14 12h5M14 15h4" stroke-width="1.5"/></svg>',
 ];
 var presetDisplayOrder = [0, 5, 10, 4, 2, 1, 3, 6, 7, 8, 9, 11];
+
+// presetMeta 就位 → 把「视觉预设索引上限」校正为真实长度，并把加载期被夹坏的 fx.preset 修回来。
+// 00-state/12a 与 12d 比本文件先执行（见 index-loader 的加载顺序），那时 presetMeta 还不存在，
+// 只能用 VISUAL_PRESET_MAX_INDEX 的宽松上界兜底，于是新增预设会被夹到旧上限上。
+// 这里是一次性收口，保证「新增一个预设想让它能存住」不再需要改任何常量。
+VISUAL_PRESET_MAX_INDEX = presetMeta.length - 1;
+(function correctStartupVisualPreset() {
+  if (typeof fx === 'undefined' || !fx) return;
+  try {
+    var raw = JSON.parse(localStorage.getItem(LYRIC_LAYOUT_STORE_KEY) || '{}') || {};
+    if (raw.preset == null) return;
+    var want = Math.round(Number(raw.preset));
+    if (!isFinite(want)) return;
+    want = Math.max(0, Math.min(presetMeta.length - 1, want));
+    // 与 readSavedLyricLayout / readSavedPlaybackVisualPreset 保持同一套旧档迁移规则
+    if (want === 3 && raw.visualPresetSchema !== VISUAL_PRESET_SCHEMA) want = 5;
+    if (fx.preset !== want) fx.preset = want;
+  } catch (_) {}
+})();
 var lyricColorPresets = [
   { name:'雾蓝', color:'#a9b8c8' },
   { name:'银蓝', color:'#9db8cf' },

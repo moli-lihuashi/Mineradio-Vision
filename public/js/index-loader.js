@@ -168,6 +168,7 @@
     'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
     'js/modules/10-shell/01-splash-and-boot.js',
     'js/modules/10-shell/05-startup-bindings.js',
+    'js/modules/10-shell/06-break-reminder.js',
     'js/modules/11-main-loop.js'
   ]);
 

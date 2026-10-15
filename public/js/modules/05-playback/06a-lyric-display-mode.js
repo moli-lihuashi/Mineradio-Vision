@@ -3,6 +3,9 @@ function setLyricDisplayMode(mode) {
   var valid = ['single', 'dual', 'triple', 'cinema', 'custom'];
   if (valid.indexOf(mode) < 0) mode = fx.lyricDisplayMode || 'dual';
   fx.lyricDisplayMode = mode;
+  // 用户显式改行数模式 = 明确要求重排行层。解除瞬态 fail-open 的会话锁/冷却，
+  // 否则一旦被误判锁死，这里改什么都不会生效（表现为「调高行数也还是 3 行」）。
+  if (typeof resetStageLyricRowLayersLatch === 'function') resetStageLyricRowLayersLatch('setLyricDisplayMode');
   var seg = document.getElementById('lyric-display-mode-seg');
   if (seg) {
     Array.from(seg.querySelectorAll('button')).forEach(function(b) {
@@ -28,6 +31,8 @@ function setLyricTranslationMode(mode) {
   var valid = ['off', 'current', 'dual', 'multi'];
   if (valid.indexOf(mode) < 0) mode = fx.lyricTranslationMode || 'off';
   fx.lyricTranslationMode = mode;
+  // 翻译模式决定行距（slotStep），同样会重排行层，一并解除锁/冷却。
+  if (typeof resetStageLyricRowLayersLatch === 'function') resetStageLyricRowLayersLatch('setLyricTranslationMode');
   var seg = document.getElementById('lyric-translation-mode-seg');
   if (seg) {
     Array.from(seg.querySelectorAll('button')).forEach(function(b) {
@@ -44,22 +49,14 @@ function setLyricMotionStyle(style) {
   var valid = ['float', 'smooth', 'glass', 'shine', 'glitch'];
   if (valid.indexOf(style) < 0) style = fx.lyricMotionStyle || 'float';
   fx.lyricMotionStyle = style;
-  var seg = document.getElementById('lyric-motion-style-seg');
-  if (seg) {
-    Array.from(seg.querySelectorAll('button')).forEach(function(b) {
-      b.classList.toggle('active', b.getAttribute('data-motion') === style);
-    });
-  }
-  var glitch = document.getElementById('lyric-glitch-controls');
-  if (glitch) glitch.style.display = style === 'glitch' ? '' : 'none';
+  syncLyricSegmentActive();
   saveLyricLayout();
   showToast('歌词动画: ' + ({ float: '漂浮', smooth: '柔滑', glass: '玻璃', shine: '线光', glitch: '故障' })[style] || style);
 }
 function syncLyricSegmentActive() {
   var map = [
     ['lyric-display-mode-seg', 'data-mode', fx.lyricDisplayMode || 'dual'],
-    ['lyric-translation-mode-seg', 'data-translation', fx.lyricTranslationMode || 'off'],
-    ['lyric-motion-style-seg', 'data-motion', fx.lyricMotionStyle || 'float']
+    ['lyric-translation-mode-seg', 'data-translation', fx.lyricTranslationMode || 'off']
   ];
   map.forEach(function(item) {
     var seg = document.getElementById(item[0]);
@@ -68,12 +65,18 @@ function syncLyricSegmentActive() {
       b.classList.toggle('active', b.getAttribute(item[1]) === item[2]);
     });
   });
+  var motionSeg = document.getElementById('lyric-motion-style-seg');
+  if (motionSeg) {
+    Array.from(motionSeg.querySelectorAll('button')).forEach(function(b) {
+      b.classList.toggle('active', b.getAttribute('data-motion') === (fx.lyricMotionStyle || 'float'));
+    });
+  }
   var customSlider = document.getElementById('fx-lyriccustomlines');
   if (customSlider && customSlider.parentElement) {
     customSlider.parentElement.style.display = (fx.lyricDisplayMode === 'custom') ? '' : 'none';
   }
   var glitchBox = document.getElementById('lyric-glitch-controls');
-  if (glitchBox) glitchBox.style.display = (fx.lyricMotionStyle === 'glitch') ? '' : 'none';
+  if (glitchBox) glitchBox.style.display = ((fx.lyricMotionStyle || 'float') === 'glitch') ? '' : 'none';
 }
 function computeLyricMotion(style, t, seed) {
   var power = Number(fx.lyricGlitchPower) || 0.5;

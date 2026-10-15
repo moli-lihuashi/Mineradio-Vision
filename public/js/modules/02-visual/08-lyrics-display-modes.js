@@ -38,18 +38,61 @@ function lyricDisplayOffsetsForMode(mode) {
   for (var i = 0; i < count; i++) offsets.push(i - activeSlot);
   return offsets;
 }
+/**
+ * 行层轨道（track）的「显示模式」必须以实时 fx 为准，不能用建 mesh 时的快照。
+ *
+ * 踩坑（症状：自定义行数最多 3 行 / 拖行数滑块没反应）：
+ *   data.displayMode 是建 mesh 那一刻对 payload.mode 的快照
+ *   （13-lyrics-mesh-build.js 写 data.displayMode ← rowLayerBundle.displayMode
+ *    ← 12-lyrics-row-layers.js 的 state.payload.mode）。
+ *   用户切「单行/双行/三行/沉浸/自定」或拖动「显示行数」滑块时，轨道 mesh 只是被
+ *   setLyricTrackTarget() 重新指向新行，data.displayMode 从不更新；而
+ *   lyricLineAllowedForDisplayMode() 正好用它决定哪些行允许显示（不允许的行
+ *   contextAlpha→0、visibleFade→0、mesh.visible=false、行窗口不补建）。
+ *   于是「三行时建的轨道」之后永远只显示 3 行 —— 无论滑块拖到几行。
+ *
+ * 只对 usesTrack 的轨道 mesh 采用实时值；legacy（单行/预告）路径保持原快照语义。
+ */
+function lyricTrackDisplayModeFor(data) {
+  if (data && data.usesTrack && fx && fx.lyricDisplayMode) {
+    return normalizeLyricDisplayMode(fx.lyricDisplayMode);
+  }
+  return normalizeLyricDisplayMode((data && data.displayMode) || (fx && fx.lyricDisplayMode));
+}
+/** 轨道可见半径同样跟随实时模式/行数，否则新行数的行会被 visibleFade 渐隐为 0 */
+function lyricTrackVisibleRadiusFor(mode) {
+  return Math.max(0.85, lyricDisplayLineCountForMode(mode) * 0.50 * lyricPrimarySlotStepValue());
+}
 function normalizeLyricMotionStyle(style) {
   style = String(style || 'float');
   return STAGE_LYRIC_MOTION_STYLES[style] ? style : 'float';
 }
+/**
+ * 统一的 fx 数值读取：fx → fxDefaults → 显式兜底，且任何非有限值都退回兜底。
+ * 历史坑：fxDefaults 里从来没有 lyricContextOpacity / lyricContextSpread /
+ * lyricTranslationGap 等字段，而 fx.<字段> 也没有任何 UI/预设会写它，
+ * 于是 clampRange(undefined, min, max) === NaN 会一路污染：
+ *   entry.alpha → row.targetAlpha → contextAlpha → uOpacity →
+ *   gl_FragColor = vec4(color, alpha * uOpacity) → 整行不可见。
+ * 表现就是「自定义行数失效、永远只显示当前行」。此函数是该类污染的收敛点。
+ */
+function lyricFxNumber(key, fallback, min, max) {
+  var raw;
+  if (fx && fx[key] != null) raw = Number(fx[key]);
+  else if (fxDefaults && fxDefaults[key] != null) raw = Number(fxDefaults[key]);
+  else raw = Number(fallback);
+  if (!isFinite(raw)) raw = Number(fallback);
+  if (!isFinite(raw)) raw = min;
+  return clampRange(raw, min, max);
+}
 function lyricContextOpacityValue() {
-  return clampRange(fx && fx.lyricContextOpacity == null ? fxDefaults.lyricContextOpacity : Number(fx && fx.lyricContextOpacity), 0.25, 1);
+  return lyricFxNumber('lyricContextOpacity', 0.62, 0.25, 1);
 }
 function lyricContextSpreadValue() {
-  return clampRange(fx && fx.lyricContextSpread == null ? fxDefaults.lyricContextSpread : Number(fx && fx.lyricContextSpread), 0.60, 2.40);
+  return lyricFxNumber('lyricContextSpread', 1.30, 0.60, 2.40);
 }
 function lyricTranslationGapValue() {
-  return clampRange(fx && fx.lyricTranslationGap == null ? fxDefaults.lyricTranslationGap : Number(fx && fx.lyricTranslationGap), 0.28, 2.20);
+  return lyricFxNumber('lyricTranslationGap', 0.62, 0.28, 2.20);
 }
 function lyricTranslationVisualGapValue() {
   var gap = lyricTranslationGapValue();
@@ -112,31 +155,39 @@ function lyricTranslationVirtualIndex(parentIndex) {
   return lyricPrimaryVirtualIndex(parentIndex) + lyricTranslationVisualGapValue();
 }
 function lyricTranslationScaleValue() {
-  return clampRange(fx && fx.lyricTranslationScale == null ? fxDefaults.lyricTranslationScale : Number(fx && fx.lyricTranslationScale), 0.46, 1.12);
+  return lyricFxNumber('lyricTranslationScale', 0.78, 0.46, 1.12);
 }
 function lyricTranslationOpacityValue() {
-  return clampRange(fx && fx.lyricTranslationOpacity == null ? fxDefaults.lyricTranslationOpacity : Number(fx && fx.lyricTranslationOpacity), 0.20, 1);
+  return lyricFxNumber('lyricTranslationOpacity', 0.66, 0.20, 1);
 }
 function lyricEdgeFadeValue() {
-  return clampRange(fx && fx.lyricEdgeFade == null ? fxDefaults.lyricEdgeFade : Number(fx && fx.lyricEdgeFade), 0, 1);
+  return lyricFxNumber('lyricEdgeFade', 0.30, 0, 1);
 }
 function lyricMotionSoftnessValue() {
-  return clampRange(fx && fx.lyricMotionSoftness == null ? fxDefaults.lyricMotionSoftness : Number(fx && fx.lyricMotionSoftness), 0.15, 1.2);
+  // 注意：fxDefaults 里从来没有 lyricMotionSoftness 字段（历史遗留），
+  // 直接读会让 clampRange 收到 undefined → 返回 NaN，
+  // 进而污染整个 motion profile。这里给出稳定默认值并对非有限值兜底。
+  return lyricFxNumber('lyricMotionSoftness', 0.70, 0.15, 1.2);
+}
+/** 非有限值兜底：任何 NaN/Infinity 都不能流进 shader uniform（会导致整片元变黑） */
+function lyricProfileFinite(value, fallback) {
+  var n = Number(value);
+  return isFinite(n) ? n : fallback;
 }
 function lyricGlitchIntensityValue() {
-  return clampRange(fx && fx.lyricGlitchIntensity == null ? fxDefaults.lyricGlitchIntensity : Number(fx && fx.lyricGlitchIntensity), 0, 1.5);
+  return lyricFxNumber('lyricGlitchIntensity', 0.55, 0, 1.5);
 }
 function lyricGlitchSliceValue() {
-  return clampRange(fx && fx.lyricGlitchSlice == null ? fxDefaults.lyricGlitchSlice : Number(fx && fx.lyricGlitchSlice), 0, 1.4);
+  return lyricFxNumber('lyricGlitchSlice', 0.55, 0, 1.4);
 }
 function lyricGlitchChromaValue() {
-  return clampRange(fx && fx.lyricGlitchChroma == null ? fxDefaults.lyricGlitchChroma : Number(fx && fx.lyricGlitchChroma), 0, 1.6);
+  return lyricFxNumber('lyricGlitchChroma', 0.75, 0, 1.6);
 }
 function lyricGlitchRateValue() {
-  return clampRange(fx && fx.lyricGlitchRate == null ? fxDefaults.lyricGlitchRate : Number(fx && fx.lyricGlitchRate), 0.45, 2.2);
+  return lyricFxNumber('lyricGlitchRate', 1.0, 0.45, 2.2);
 }
 function lyricGlitchJitterValue() {
-  return clampRange(fx && fx.lyricGlitchJitter == null ? fxDefaults.lyricGlitchJitter : Number(fx && fx.lyricGlitchJitter), 0, 1.8);
+  return lyricFxNumber('lyricGlitchJitter', 0.55, 0, 1.8);
 }
 function lyricMotionProfile() {
   var style = normalizeLyricMotionStyle(fx && fx.lyricMotionStyle);
@@ -150,6 +201,10 @@ function lyricMotionProfile() {
     contextDrift: 0.060,
     edgeBoost: 1.0,
     sweep: 0.62,
+    // 扫光形状：前沿亮唇宽度 / 已唱区余晖拖尾宽度 / 前沿峰值强度（相对 uFeather 的倍数）
+    sweepLead: 1.5,
+    sweepTail: 2.0,
+    sweepPeak: 1.0,
     shimmer: 0.24,
     glitch: 0.0,
     glitchSlice: 0.0,
@@ -161,21 +216,42 @@ function lyricMotionProfile() {
     floatAmp: 1.0
   };
   if (style === 'smooth') {
-    profile.enter = 0.72; profile.exit = 0.62; profile.slide = 0.24; profile.progressEase *= 0.72; profile.contextDrift = 0.030; profile.edgeBoost = 0.62; profile.sweep = 0.18; profile.shimmer = 0.05; profile.glowLift = 0.74; profile.floatAmp = 0.55;
+    profile.enter = 0.72; profile.exit = 0.62; profile.slide = 0.24; profile.progressEase *= 0.72; profile.contextDrift = 0.030; profile.edgeBoost = 0.62; profile.sweep = 0.18; profile.sweepLead = 1.2; profile.sweepTail = 3.2; profile.sweepPeak = 0.72; profile.shimmer = 0.05; profile.glowLift = 0.74; profile.floatAmp = 0.55;
   } else if (style === 'float') {
-    profile.enter = 0.86; profile.exit = 0.76; profile.slide = 0.54; profile.progressEase *= 0.66; profile.contextDrift = 0.120; profile.edgeBoost = 1.04; profile.sweep = 0.36; profile.shimmer = 0.14; profile.glowLift = 1.16; profile.floatAmp = 1.45;
+    profile.enter = 0.86; profile.exit = 0.76; profile.slide = 0.54; profile.progressEase *= 0.66; profile.contextDrift = 0.120; profile.edgeBoost = 1.04; profile.sweep = 0.36; profile.sweepLead = 1.7; profile.sweepTail = 2.3; profile.sweepPeak = 1.05; profile.shimmer = 0.14; profile.glowLift = 1.16; profile.floatAmp = 1.45;
   } else if (style === 'shine') {
-    profile.enter = 0.50; profile.exit = 0.44; profile.slide = 0.34; profile.progressEase *= 1.02; profile.contextDrift = 0.052; profile.edgeBoost = 1.42; profile.sweep = 1.22; profile.shimmer = 0.34; profile.glowLift = 1.30; profile.floatAmp = 0.82;
+    profile.enter = 0.50; profile.exit = 0.44; profile.slide = 0.34; profile.progressEase *= 1.02; profile.contextDrift = 0.052; profile.edgeBoost = 1.42; profile.sweep = 1.22; profile.sweepLead = 1.0; profile.sweepTail = 1.3; profile.sweepPeak = 1.90; profile.shimmer = 0.34; profile.glowLift = 1.30; profile.floatAmp = 0.82;
   } else if (style === 'glitch') {
-    profile.enter = 0.40; profile.exit = 0.36; profile.slide = 0.30; profile.progressEase *= 1.24; profile.contextDrift = 0.035; profile.edgeBoost = 1.18; profile.sweep = 0.54; profile.shimmer = 0.28; profile.glitch = lyricGlitchIntensityValue(); profile.glitchSlice = lyricGlitchSliceValue(); profile.glitchChroma = lyricGlitchChromaValue(); profile.glitchRate = lyricGlitchRateValue(); profile.glitchJitter = lyricGlitchJitterValue(); profile.glitchCameraBind = !!(fx && fx.lyricGlitchCameraBind); profile.glowLift = 1.08 + profile.glitch * 0.10; profile.floatAmp = 0.70;
+    profile.enter = 0.40; profile.exit = 0.36; profile.slide = 0.30; profile.progressEase *= 1.24; profile.contextDrift = 0.035; profile.edgeBoost = 1.18; profile.sweep = 0.54; profile.sweepLead = 1.9; profile.sweepTail = 1.5; profile.sweepPeak = 1.45; profile.shimmer = 0.28; profile.glitch = lyricGlitchIntensityValue(); profile.glitchSlice = lyricGlitchSliceValue(); profile.glitchChroma = lyricGlitchChromaValue(); profile.glitchRate = lyricGlitchRateValue(); profile.glitchJitter = lyricGlitchJitterValue(); profile.glitchCameraBind = !!(fx && fx.lyricGlitchCameraBind); profile.glowLift = 1.08 + profile.glitch * 0.10; profile.floatAmp = 0.70;
   } else if (style === 'quick') {
-    profile.enter = 0.36; profile.exit = 0.32; profile.slide = 0.22; profile.progressEase *= 1.34; profile.contextDrift = 0.034; profile.edgeBoost = 0.70; profile.sweep = 0.28; profile.shimmer = 0.10; profile.glowLift = 0.86; profile.floatAmp = 0.62;
+    profile.enter = 0.36; profile.exit = 0.32; profile.slide = 0.22; profile.progressEase *= 1.34; profile.contextDrift = 0.034; profile.edgeBoost = 0.70; profile.sweep = 0.28; profile.sweepLead = 2.6; profile.sweepTail = 1.0; profile.sweepPeak = 1.25; profile.shimmer = 0.10; profile.glowLift = 0.86; profile.floatAmp = 0.62;
   } else {
-    profile.enter = 0.62; profile.exit = 0.52; profile.slide = 0.38; profile.progressEase *= 0.90; profile.contextDrift = 0.066; profile.edgeBoost = 1.18; profile.sweep = 0.72; profile.shimmer = 0.22; profile.glowLift = 1.0; profile.floatAmp = 1.0;
+    profile.enter = 0.62; profile.exit = 0.52; profile.slide = 0.38; profile.progressEase *= 0.90; profile.contextDrift = 0.066; profile.edgeBoost = 1.18; profile.sweep = 0.72; profile.sweepLead = 1.5; profile.sweepTail = 2.0; profile.sweepPeak = 1.08; profile.shimmer = 0.22; profile.glowLift = 1.0; profile.floatAmp = 1.0;
   }
   profile.enter *= soft;
   profile.exit *= soft;
   profile.slide *= clampRange(0.80 + soft * 0.35, 0.75, 1.28);
   profile.progressEase = clampRange(profile.progressEase / clampRange(soft, 0.35, 1.2), 0.08, 0.72);
+  // 柔性越高 → 前沿更钝、余晖拖尾更长（“亮过几个字再衰减”的观感强度随柔性变化）
+  profile.sweepLead *= clampRange(0.70 + soft * 0.50, 0.70, 1.32);
+  profile.sweepTail *= clampRange(0.60 + soft * 0.72, 0.60, 1.48);
+  // 出口统一兜底：进入 shader 的字段一律保证有限
+  profile.sweep = lyricProfileFinite(profile.sweep, 0.62);
+  profile.sweepLead = lyricProfileFinite(profile.sweepLead, 1.5);
+  profile.sweepTail = lyricProfileFinite(profile.sweepTail, 2.0);
+  profile.sweepPeak = lyricProfileFinite(profile.sweepPeak, 1.0);
+  profile.shimmer = lyricProfileFinite(profile.shimmer, 0.24);
+  profile.edgeBoost = lyricProfileFinite(profile.edgeBoost, 1.0);
+  profile.glowLift = lyricProfileFinite(profile.glowLift, 1.0);
+  profile.glitch = lyricProfileFinite(profile.glitch, 0);
+  profile.glitchSlice = lyricProfileFinite(profile.glitchSlice, 0);
+  profile.glitchChroma = lyricProfileFinite(profile.glitchChroma, 0);
+  profile.glitchRate = lyricProfileFinite(profile.glitchRate, 1);
+  profile.enter = lyricProfileFinite(profile.enter, 0.54);
+  profile.exit = lyricProfileFinite(profile.exit, 0.46);
+  profile.slide = lyricProfileFinite(profile.slide, 0.34);
+  profile.progressEase = lyricProfileFinite(profile.progressEase, 0.2);
+  profile.contextDrift = lyricProfileFinite(profile.contextDrift, 0.06);
+  profile.floatAmp = lyricProfileFinite(profile.floatAmp, 1.0);
   return profile;
 }

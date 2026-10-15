@@ -13,6 +13,16 @@ Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/
 | [**moli-lihuashi**](https://github.com/moli-lihuashi) | 架构重构、多音乐源接入、视觉系统与功能开发 |
 | **GLM**（智谱 AI） | AI 结对开发助手，参与代码实现、问题修复与文档编写 |
 
+## 界面预览与使用示例
+
+应用界面：
+
+![Mineradio Vision 应用界面](./docs/media/app-ui-2026-10-12.png)
+
+使用示例录屏（1 分 34 秒）：[▶ 播放 / 下载](./docs/media/usage-demo-2026-10-12.mp4)
+
+> 录屏是原始素材的有损压缩版（1280×800，原片 2560×1600 / 183 MB 未上传）。
+
 ## 声明
 
 - 本项目基于 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 修改，原项目采用 GPL-3.0 开源协议，本修改版同样以 GPL-3.0 发布，并保留原项目的 `LICENSE`、`NOTICE.md` 等协议声明文件。

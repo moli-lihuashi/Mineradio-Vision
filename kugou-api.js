@@ -1309,35 +1309,30 @@ async function fetchKugouVipInfo(cookie, auth) {
     const parsed = normalizeKugouVipPayloadV2(value, { userid: auth.userid });
     return parsed.isVip ? 5 * 60 * 1000 : 60 * 1000;
   }, async () => {
+    const uid = Number(String(auth.userid || '').replace(/\D/g, '')) || 0;
+    // 联合会员查询只有一条正确姿势：POST + body 里的 useridlist **数组**，且必须带 get_type。
+    // 用 GET + userids= 会被酷狗依次以 "useridlist is null" / "get_type is null" 拒掉（20010），
+    // 探针全灭 → membershipKnown=false → vipLevel='none' → 前端把会员打成「普通」。
+    // 实测可用：POST /kugouvip/v2/batch_union_vipinfo
+    //   body {"useridlist":[<uid>],"get_type":1,"busi_type":"concept"}
+    //   → {"data":{"main_vip":{"<uid>":{"is_vip":1,"vip_type":1,"vip_end_time":…,"su_vip_end_time":…}}}}
+    // get_type=1 取主会员（main_vip）、get_type=2 取概念版业务会员（busi_vip），两者互补。
+    const unionVipProbe = (path, getType) => kugouGatewayRequest(path, {
+      method: 'POST',
+      cookie,
+      params: { busi_type: 'concept' },
+      body: { useridlist: [uid], get_type: getType, busi_type: 'concept' },
+      headers: { Referer: 'https://vip.kugou.com/' },
+    });
     const attempts = [
+      () => unionVipProbe('/kugouvip/v2/batch_union_vipinfo', 1),
+      () => unionVipProbe('/kugouvip/v2/batch_union_vipinfo', 2),
+      () => unionVipProbe('/kugouvip/v1/batch_union_vipinfo', 1),
+      // 旧接口保底：近年多已 502 / params invalid，只在上面的联合会员接口全挂时兜一下
       () => kugouGatewayRequest('/v1/get_union_vip', {
         method: 'GET',
         cookie,
         params: { busi_type: 'concept' },
-        headers: { Referer: 'https://vip.kugou.com/' },
-      }),
-      () => kugouGatewayRequest('/v1/vipuser_sub', {
-        method: 'GET',
-        cookie,
-        params: { busi_type: 'concept' },
-        headers: { Referer: 'https://vip.kugou.com/' },
-      }),
-      () => kugouGatewayRequest('/kugouvip/v2/batch_union_vipinfo', {
-        method: 'GET',
-        cookie,
-        params: { busi_type: 'concept', userids: auth.userid },
-        headers: { Referer: 'https://vip.kugou.com/' },
-      }),
-      () => kugouGatewayRequest('/kugouvip/v1/batch_union_vipinfo', {
-        method: 'GET',
-        cookie,
-        params: { busi_type: 'concept', userids: auth.userid },
-        headers: { Referer: 'https://vip.kugou.com/' },
-      }),
-      () => kugouGatewayRequest('/mobile/vipinfo', {
-        method: 'GET',
-        cookie,
-        params: { plat: 0 },
         headers: { Referer: 'https://vip.kugou.com/' },
       }),
       () => kugouGatewayRequest('/v1/get_union_vip', {

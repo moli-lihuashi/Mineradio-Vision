@@ -57,3 +57,6 @@ tmp/
 *.png.tmp
 verification/
 screenshots/
+
+# Local agent workspace (CDP probes / session memory / test userdata) — 不随仓库发布
+.workbuddy/

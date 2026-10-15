@@ -68,6 +68,18 @@ function setLyricSparkColor(data, color) {
   if (data.sparkMat.uniforms && data.sparkMat.uniforms.uColor) data.sparkMat.uniforms.uColor.value.copy(color);
   else if (data.sparkMat.color) data.sparkMat.color.copy(color);
 }
+/* ────────────────────────────────────────────────────────────────────────────
+ * ⚠ 本文件（10）里的 applyLyricPaletteToMesh / effectiveLyricPalette / setStageLyricPalette
+ *   是【运行期真正生效】的那一份。
+ *
+ * index-loader.js 把所有模块合并成同一个 script 求值以保留函数提升（见其 modulePaths 注释），
+ * 于是同作用域重名函数【后声明者覆盖先声明者】。加载顺序 07(第 77 行) → 10(第 79 行)，
+ * 所以 07-lyrics-palette-three.js 里的这三个同名函数是死代码，改动不会生效。
+ * （同类坑：lyricMotionProfile 的 10 版 vs 08 版，08 在 80 行之后加载故 08 生效。）
+ *
+ * 约定：这三处的语义改动必须 07 / 10 两边同步，否则将来一旦调换加载顺序就会表现不一致。
+ * 已同步的内容：行层材质配色下发。
+ * ──────────────────────────────────────────────────────────────────────────── */
 function applyLyricPaletteToMesh(mesh) {
   if (!mesh || !mesh.userData || !mesh.userData.lyric) return;
   var pal = stageLyrics.palette || {};
@@ -83,6 +95,34 @@ function applyLyricPaletteToMesh(mesh) {
     data.textMat.needsUpdate = true;
   }
   if (data.glowMat) data.glowMat.color.copy(lyricThreeColor(pal.glowColor || pal.secondary || pal.primary, '#9cffdf', 0.36));
+  // 行层材质（12-lyrics-row-layers.js 建的逐行 mesh）。
+  // 这里原本漏了这段：行层材质只在建轨时按当时的 pal 烘焙一次，之后任何 setStageLyricPalette
+  // 都只刷到 textMat / glowMat / sparkMat，常驻行永远停在旧色。
+  // 表现成：切主题（或换封面）时只有「当前这一行」变色，别的行一动不动 —— 看着就是「主题没效果」。
+  // 07 版有这段，10 版（生效版）漏了，属于两版分叉的历史债。
+  if (data.rowLayers) {
+    data.rowLayers.forEach(function (row) {
+      if (!row || !row.mat) return;
+      if (row.glowMat) setLyricMaterialColor(row.glowMat, lyricRowGlowThreeColor(pal, !!row.isTranslation));
+      if (row.mat.uniforms) {
+        var ru = row.mat.uniforms;
+        if (ru.uBaseColor) ru.uBaseColor.value.copy(lyricThreeColor(pal.primary, '#d6f8ff', 0.38));
+        if (ru.uHiColor) ru.uHiColor.value.copy(lyricThreeColor(pal.highlight || pal.primary, '#fff0b8', 0.48));
+        if (ru.uGlowColor) ru.uGlowColor.value.copy(lyricStageGlowThreeColor(pal, '#9cffdf', 0.36));
+        if (ru.uSolarColor) ru.uSolarColor.value.copy(lyricBeatGlowThreeColor(pal, '#fff0b8', 0.50));
+        if (ru.uColor) ru.uColor.value.copy(row.isTranslation
+          ? lyricThreeColor(pal.highlight || pal.primary, '#eaf6ff', 0.42)
+          : lyricThreeColor(pal.primary || pal.secondary, '#d6f8ff', 0.34));
+        row.mat.needsUpdate = true;
+        return;
+      }
+      if (row.mat.color) {
+        row.mat.color.copy(row.isTranslation
+          ? lyricThreeColor(pal.highlight || pal.primary, '#eaf6ff', 0.42)
+          : lyricThreeColor(pal.primary || pal.secondary, '#d6f8ff', 0.34));
+      }
+    });
+  }
   if (data.sparkMat) setLyricSparkColor(data, lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#fff0b8', 0.46));
   if (data.sunMat) data.sunMat.color.copy(lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#fff0b8', 0.50));
 }
@@ -93,7 +133,8 @@ function effectiveLyricPalette(pal) {
     secondary: src.secondary || '#9cffdf',
     highlight: src.highlight || '#eef7ff',
     shadow: src.shadow || 'rgba(2,8,12,0.42)',
-    glow: src.glow || 'rgba(143,233,255,0.34)'
+    glow: src.glow || 'rgba(143,233,255,0.34)',
+    glowColor: src.glowColor || null
   };
   if (fx.lyricHighlightMode === 'custom') {
     var hi = lyricPaletteFromHex(fx.lyricHighlightColor);
@@ -111,6 +152,8 @@ function effectiveLyricPalette(pal) {
   if (!out.glowColor) out.glowColor = out.secondary;
   return out;
 }
+// 生效版：立即下发，无补间。调用方多传的 opts（如 06b 的 { durationMs: 420 }）会被忽略 ——
+// 07 版有 rAF 补间，但它被本文件覆盖，所以运行期不存在补间路径。
 function setStageLyricPalette(pal) {
   stageLyrics.palette = effectiveLyricPalette(pal);
   lyricSunColor.copy(lyricThreeColor(stageLyrics.palette.glowColor || stageLyrics.palette.secondary || stageLyrics.palette.primary, '#ffe6a4', 0.44));
@@ -118,6 +161,12 @@ function setStageLyricPalette(pal) {
   applyLyricPaletteToMesh(stageLyrics.current);
   applyLyricPaletteToMesh(stageLyrics.next);
   stageLyrics.outgoing.forEach(applyLyricPaletteToMesh);
+  // 预热 mesh 也要跟上（07 版的 applyStageLyricPaletteNow 覆盖了这里，10 版漏了）。
+  try {
+    if (typeof stageLyricPrewarm !== 'undefined' && stageLyricPrewarm && stageLyricPrewarm.mesh) {
+      applyLyricPaletteToMesh(stageLyricPrewarm.mesh);
+    }
+  } catch (_) {}
   syncSkullParticleColors();
 }
 function lyricTextPaletteFromHsl(hsl, avgL, chroma) {
@@ -629,8 +678,8 @@ function makeLyricShaderMaterialLegacy(mask, pal) {
       uMap: { value: mask.texture },
       uTime: uniforms.uTime,
       uProgress: { value: 0 },
-      uTextMin: { value: mask.textMin },
-      uTextMax: { value: mask.textMax },
+      uTextMin: { value: isFinite(mask.textMin) ? Number(mask.textMin) : 0 },
+      uTextMax: { value: isFinite(mask.textMax) ? Number(mask.textMax) : 1 },
       uOpacity: { value: 0 },
       uBaseColor: { value: lyricThreeColor(pal.primary, '#d6f8ff', 0.38) },
       uHiColor: { value: lyricThreeColor(pal.highlight || pal.primary, '#fff0b8', 0.48) },
@@ -638,22 +687,26 @@ function makeLyricShaderMaterialLegacy(mask, pal) {
       uSolarColor: { value: lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#fff0b8', 0.50) },
       uFeather: { value: lyricsHasNativeKaraoke ? 0.030 : 0.055 },
       uSolar: { value: 0 },
-      uSweep: { value: motionProfile.sweep || 0 },
-      uShimmer: { value: motionProfile.shimmer || 0 },
-      uGlitch: { value: motionProfile.glitch || 0 },
-      uGlitchSlice: { value: motionProfile.glitchSlice || 0 },
-      uGlitchChroma: { value: motionProfile.glitchChroma || 0 },
-      uGlitchRate: { value: motionProfile.glitchRate || 1 },
+      // 数值一律走 isFinite 兜底：NaN/undefined 会让片元颜色变 NaN → 文字整块变黑
+      uSweep: { value: isFinite(motionProfile.sweep) ? Number(motionProfile.sweep) : 0 },
+      uShimmer: { value: isFinite(motionProfile.shimmer) ? Number(motionProfile.shimmer) : 0 },
+      uGlitch: { value: isFinite(motionProfile.glitch) ? Number(motionProfile.glitch) : 0 },
+      uGlitchSlice: { value: isFinite(motionProfile.glitchSlice) ? Number(motionProfile.glitchSlice) : 0 },
+      uGlitchChroma: { value: isFinite(motionProfile.glitchChroma) ? Number(motionProfile.glitchChroma) : 0 },
+      uGlitchRate: { value: isFinite(motionProfile.glitchRate) ? Number(motionProfile.glitchRate) : 1 },
       uGlitchSeed: { value: Math.random() * 997.0 },
       uGlitchBurst: { value: 0 },
-      uEdgeBoost: { value: motionProfile.edgeBoost || 1 },
+      uEdgeBoost: { value: isFinite(motionProfile.edgeBoost) ? Number(motionProfile.edgeBoost) : 1 },
+      uSweepLead: { value: isFinite(motionProfile.sweepLead) ? Number(motionProfile.sweepLead) : 1.5 },
+      uSweepTail: { value: isFinite(motionProfile.sweepTail) ? Number(motionProfile.sweepTail) : 2.0 },
+      uSweepPeak: { value: isFinite(motionProfile.sweepPeak) ? Number(motionProfile.sweepPeak) : 1.0 },
       uActiveMix: { value: 1 },
     },
     vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
     fragmentShader: [
       'precision highp float;',
       'uniform sampler2D uMap;',
-      'uniform float uTime,uProgress,uTextMin,uTextMax,uOpacity,uFeather,uSolar,uSweep,uShimmer,uGlitch,uGlitchSlice,uGlitchChroma,uGlitchRate,uGlitchSeed,uGlitchBurst,uEdgeBoost,uActiveMix;',
+      'uniform float uTime,uProgress,uTextMin,uTextMax,uOpacity,uFeather,uSolar,uSweep,uShimmer,uGlitch,uGlitchSlice,uGlitchChroma,uGlitchRate,uGlitchSeed,uGlitchBurst,uEdgeBoost,uSweepLead,uSweepTail,uSweepPeak,uActiveMix;',
       'uniform vec3 uBaseColor,uHiColor,uGlowColor,uSolarColor;',
       'varying vec2 vUv;',
       'float hash(float n){ return fract(sin(n) * 43758.5453123); }',
@@ -677,7 +730,14 @@ function makeLyricShaderMaterialLegacy(mask, pal) {
       '  float denom = max(0.001, uTextMax - uTextMin);',
       '  float p = clamp((uv.x - uTextMin) / denom, 0.0, 1.0);',
       '  float filled = (1.0 - smoothstep(uProgress, uProgress + uFeather, p)) * activeMix;',
-      '  float edge = (1.0 - smoothstep(0.0, uFeather * 2.8, abs(p - uProgress))) * activeMix;',
+      '  float featherSafe = max(0.0006, uFeather);',
+      '  float ahead = p - uProgress;',
+      '  float tailSpan = max(0.0006, featherSafe * uSweepTail);',
+      '  float trailT = clamp(-ahead / tailSpan, 0.0, 1.0);',
+      '  float trailTail = pow(1.0 - trailT, 1.7) * (1.0 - step(0.0, ahead));',
+      '  float lipLead = (1.0 - smoothstep(0.0, max(0.0006, featherSafe * uSweepLead), max(0.0, ahead))) * step(0.0, ahead);',
+      '  float hotSpot = 1.0 - smoothstep(0.0, featherSafe * 0.90, abs(ahead));',
+      '  float edge = max(max(trailTail, lipLead * 0.55), hotSpot * 1.15) * uSweepPeak * activeMix;',
       '  float sweepPhase = fract(uTime * (0.28 + uSweep * 0.10));',
       '  float sweepLine = (1.0 - smoothstep(0.0, 0.080, abs((uv.x + uv.y * 0.42) - (sweepPhase * 1.42 - 0.18)))) * activeMix;',
       '  float fineLine = pow(max(0.0, sin((uv.x - uv.y * 0.18 + uTime * 0.82) * 42.0)), 24.0) * uShimmer * activeMix;',

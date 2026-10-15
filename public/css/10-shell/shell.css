@@ -647,3 +647,30 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
 #login-modal .login-provider-spotify .qq-cookie-input{
   height:36px!important;max-height:36px!important;overflow:hidden!important;resize:none!important
 }
+
+/* ===== 休息提醒（Break Reminder） ===== */
+#break-reminder{position:fixed;inset:0;z-index:9500;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .34s cubic-bezier(.16,1,.3,1),visibility 0s linear .34s}
+#break-reminder.show{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .34s cubic-bezier(.16,1,.3,1),visibility 0s}
+.break-reminder-scrim{position:absolute;inset:0;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.055),transparent 56%),rgba(5,6,9,.86);backdrop-filter:blur(30px) saturate(1.06);-webkit-backdrop-filter:blur(30px) saturate(1.06)}
+.break-reminder-close{position:absolute;top:22px;right:26px;width:34px;height:34px;display:grid;place-items:center;padding:0;border:1px solid rgba(255,255,255,.14);border-radius:50%;background:rgba(255,255,255,.06);color:rgba(255,255,255,.80);font-family:inherit;font-size:17px;line-height:1;cursor:pointer;transition:background .2s ease,border-color .2s ease,color .2s ease,transform .2s ease}
+.break-reminder-close:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.30);color:#fff;transform:scale(1.05)}
+.break-reminder-body{position:absolute;left:50%;top:50%;width:min(600px,calc(100vw - 56px));text-align:center;color:rgba(255,255,255,.94);opacity:0;transform:translate(-50%,calc(-50% + 16px));transition:opacity .38s ease,transform .48s cubic-bezier(.16,1,.3,1)}
+#break-reminder.show .break-reminder-body{opacity:1;transform:translate(-50%,-50%)}
+.break-reminder-title{font-size:clamp(20px,3.4vw,27px);font-weight:800;letter-spacing:.8px;text-shadow:0 8px 34px rgba(0,0,0,.55)}
+.break-reminder-text{margin:18px auto 0;max-width:492px;font-size:14.5px;line-height:2;color:rgba(255,255,255,.74)}
+.break-reminder-text span{display:block}
+.break-reminder-text span + span{margin-top:2px}
+.break-reminder-hint{margin-top:18px;font-size:11.5px;letter-spacing:.5px;color:rgba(255,255,255,.36)}
+.break-reminder-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:26px}
+.break-reminder-btn{min-height:38px;padding:0 22px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(255,255,255,.055);color:rgba(255,255,255,.86);font-family:inherit;font-size:13px;letter-spacing:.3px;cursor:pointer;transition:background .2s ease,border-color .2s ease,color .2s ease,transform .2s ease}
+.break-reminder-btn:hover{background:rgba(255,255,255,.12);color:#fff;transform:translateY(-1px)}
+.break-reminder-btn.primary{background:rgba(0,245,212,.14);border-color:rgba(0,245,212,.34);color:#d9fffa}
+.break-reminder-btn.primary:hover{background:rgba(0,245,212,.22);border-color:rgba(0,245,212,.50)}
+body.break-reminder-active #fx-panel,body.break-reminder-active #playlist-panel{pointer-events:none}
+/* 播放选项菜单里的状态行 + FX 控制台里的小控件 */
+.break-reminder-status{margin-top:7px;font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.42);font-variant-numeric:tabular-nums}
+.break-reminder-status.on{color:rgba(0,245,212,.70)}
+.break-reminder-status.muted{color:rgba(255,255,255,.30)}
+.break-reminder-panel-row{display:flex;align-items:center;gap:8px;margin:8px 0 4px}
+.fx-seg.disabled{opacity:.45;pointer-events:none}
+@media (max-width:720px){.break-reminder-body{width:calc(100vw - 40px)}.break-reminder-text{font-size:13.5px}.break-reminder-close{top:14px;right:14px}}

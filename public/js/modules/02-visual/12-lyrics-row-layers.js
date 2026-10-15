@@ -303,8 +303,7 @@ function beginLyricRowLayerGroupBuild(payload, mask, worldW, worldH, pal, motion
   var entries = usesTrack ? payload.trackEntries : (payload && payload.entries || []);
   var lineStepWorld = lyricTrackLineStepWorld(mask, worldH);
   var translationLineStepWorld = lyricTranslationLineStepWorld(mask, worldH);
-  var displayLineCount = lyricDisplayLineCountForMode(payload && payload.mode);
-  var visibleRadius = Math.max(0.85, displayLineCount * 0.50 * lyricPrimarySlotStepValue());
+  var visibleRadius = lyricTrackVisibleRadiusFor(payload && payload.mode);
   var textOnly = !!(payload && payload.trackTextOnly);
   var activeMesh = null;
   var activeMat = null;
@@ -403,7 +402,7 @@ function beginLyricRowLayerBuildEntry(state) {
   if (isActive) state.root.add(mesh);
   else state.contextGroup.add(mesh);
 
-  var targetAlpha = entry.alpha == null ? 1 : clampRange(Number(entry.alpha), 0, 1);
+  var targetAlpha = isFinite(Number(entry.alpha)) ? clampRange(Number(entry.alpha), 0, 1) : 1;
   if (isActive) targetAlpha = 1;
   state.pendingRow = {
     mesh: mesh,
@@ -1289,7 +1288,10 @@ function updateLyricRowLayers(data, opts) {
   var renderBase = opts.renderBase == null ? 43 : Number(opts.renderBase);
   if (!isFinite(renderBase)) renderBase = 43;
   var translationMode = normalizeLyricTranslationMode(fx && fx.lyricTranslationMode);
-  var displayMode = normalizeLyricDisplayMode(data.displayMode || (fx && fx.lyricDisplayMode));
+  // 注意：这里必须用 lyricTrackDisplayModeFor（轨道走实时 fx），
+  // 不能直接用 data.displayMode —— 后者是建 mesh 时的快照，会导致
+  // 「三行时建的轨道永远只显示 3 行」。详见 08-lyrics-display-modes.js 该函数注释。
+  var displayMode = lyricTrackDisplayModeFor(data);
   var singleLineStaticSwap = displayMode === 'single' && !data.usesTrack;
   var currentTranslationOpacity = lyricTranslationOpacityValue();
   var previewMotionLock = opts.previewMotionLock === true;
@@ -1327,7 +1329,9 @@ function updateLyricRowLayers(data, opts) {
   var initialTextRevealPending = !!(data.usesTrack && data.renderInitialTextReady !== true);
   var textureEffectsAllowed = !initialTextRevealPending;
   var persistentTrackTransparentPrewarm = !!(data.usesTrack && data.trackPersistent && !initialTextRevealPending);
-  var visibleRadiusForSnap = Math.max(1.2, Number(data.trackVisibleRadius) || 3);
+  var visibleRadiusForSnap = data.usesTrack
+    ? Math.max(1.2, lyricTrackVisibleRadiusFor(displayMode) || 3)
+    : Math.max(1.2, Number(data.trackVisibleRadius) || 3);
   var currentScrollOffset = Number(data.trackScrollOffset);
   // Progress preview only suppresses decorative drift.  It must never turn
   // the shared lyric track into an integer, per-line snap.  Once the track is
@@ -1391,6 +1395,12 @@ function updateLyricRowLayers(data, opts) {
   var qualityBuildDeferred = typeof isProgressDragPreviewActive === 'function' && isProgressDragPreviewActive();
   var lyricQualityCandidates = _lyricQualityScratch; lyricQualityCandidates.length = 0;
   var revealOffsets = lyricDisplayOffsetsForMode(displayMode);
+  // 轨道可见半径必须跟实时行数走：建 mesh 时写下的 data.trackVisibleRadius 是旧行数的
+  // 快照，用它会把新行数的行按 visibleFade 渐隐到 0（同样表现为「行数调不上去」）。
+  // 本帧只算一次，循环里复用。
+  var frameVisibleRadius = data.usesTrack
+    ? lyricTrackVisibleRadiusFor(displayMode)
+    : Math.max(0.85, Number(data.trackVisibleRadius) || 3);
   var revealPrewarmMinOffset = 0;
   var revealPrewarmMaxOffset = 0;
   for (var offsetIndex = 0; offsetIndex < revealOffsets.length; offsetIndex++) {
@@ -1409,6 +1419,12 @@ function updateLyricRowLayers(data, opts) {
     var isActive = !!row.isPrimary && (rowLineIndex != null ? rowLineIndex === presentationLineIndex : targetAbs < 0.015);
     row.delta = liveDelta;
     row.isActive = isActive;
+    // 自愈：targetAlpha 一旦是 NaN/undefined，本帧的 contextAlpha → lineOpacityTarget
+    // → mat.uniforms.uOpacity 会全变 NaN，整行直接看不见（自定义行数失效的表现）。
+    // 注意 13-lyrics-mesh-build.js 也会直接读 row.targetAlpha，所以必须写回行对象。
+    if (!isFinite(Number(row.targetAlpha))) {
+      row.targetAlpha = isActive ? 1 : (typeof lyricContextOpacityValue === 'function' ? lyricContextOpacityValue() : 0.62);
+    }
     if (isActive) activeRow = row;
     var translationFocus = 0;
     var contextAlpha = row.isTranslation
@@ -1469,7 +1485,7 @@ function updateLyricRowLayers(data, opts) {
     }
     var motionAnchor = isActive || currentTranslation;
     var rowIntro = motionAnchor ? 1 : contextIntro;
-    var visibleRadius = Math.max(0.85, Number(data.trackVisibleRadius) || 3);
+    var visibleRadius = frameVisibleRadius;
     var visibleFade = lineWindowAllowed ? (motionAnchor ? 1 : clampRange((visibleRadius + 1.10 - visibilityAbs) / 1.10, 0, 1)) : 0;
     visibleFade = visibleFade * visibleFade * (3 - 2 * visibleFade);
     var renderWindowActive = !!(lineWindowAllowed && (motionAnchor || visibleFade > 0.002));
@@ -1545,6 +1561,7 @@ function updateLyricRowLayers(data, opts) {
       }
     }
     var target = opacity * (isActive ? 1 : contextAlpha) * rowIntro * visibleFade;
+    if (!isFinite(Number(target))) target = 0;
     var depthFade = motionAnchor ? 1 : clampRange(1 - visibilityAbs * 0.055, 0.54, 1) * visibleFade;
     var yTarget = -liveDelta * lineStepWorld + (motionAnchor ? 0 : rowDrift * clampRange(0.70 + abs * 0.10, 0.65, 1.20));
     if (row.isTranslation) {
@@ -1587,9 +1604,13 @@ function updateLyricRowLayers(data, opts) {
     if (row.mat && row.mat.uniforms) {
       if (row.mat.uniforms.uOpacity) {
         var lineOpacityTarget = data.usesTrack && (initialTextRevealPending || !lineLayerVisible || !row.renderLineUploaded) ? 0 : target * depthFade;
+        // NaN 守门：uOpacity 一旦被写成 NaN，着色器里 alpha * uOpacity 变 NaN，整行消失
+        if (!isFinite(Number(lineOpacityTarget))) lineOpacityTarget = 0;
         if (initialTextRevealPending) row.mat.uniforms.uOpacity.value = 0;
         else {
-          row.mat.uniforms.uOpacity.value += (lineOpacityTarget - row.mat.uniforms.uOpacity.value) * ease;
+          var lineOpacityCurrent = Number(row.mat.uniforms.uOpacity.value);
+          if (!isFinite(lineOpacityCurrent)) lineOpacityCurrent = 0;
+          row.mat.uniforms.uOpacity.value = lineOpacityCurrent + (lineOpacityTarget - lineOpacityCurrent) * ease;
           if (trackTargetJustCommitted && lineOpacityTarget > 0.001 && row.renderLineUploaded && row.mat.uniforms.uOpacity.value < 0.004) {
             row.mat.uniforms.uOpacity.value = Math.min(lineOpacityTarget, 0.004);
           }
@@ -1608,9 +1629,12 @@ function updateLyricRowLayers(data, opts) {
       if (row.mat.uniforms.uGlitchBurst && opts.glitchPulse) row.mat.uniforms.uGlitchBurst.value = isActive ? opts.glitchPulse : opts.glitchPulse * 0.35;
     } else if (row.mat) {
       var fallbackLineOpacityTarget = data.usesTrack && (initialTextRevealPending || !lineLayerVisible || !row.renderLineUploaded) ? 0 : target * depthFade;
+      if (!isFinite(Number(fallbackLineOpacityTarget))) fallbackLineOpacityTarget = 0;
       if (initialTextRevealPending) row.mat.opacity = 0;
       else {
-        row.mat.opacity += (fallbackLineOpacityTarget - row.mat.opacity) * ease;
+        var fallbackOpacityCurrent = Number(row.mat.opacity);
+        if (!isFinite(fallbackOpacityCurrent)) fallbackOpacityCurrent = 0;
+        row.mat.opacity = fallbackOpacityCurrent + (fallbackLineOpacityTarget - fallbackOpacityCurrent) * ease;
         if (trackTargetJustCommitted && fallbackLineOpacityTarget > 0.001 && row.renderLineUploaded && row.mat.opacity < 0.004) {
           row.mat.opacity = Math.min(fallbackLineOpacityTarget, 0.004);
         }

@@ -168,7 +168,12 @@ var CUSTOM_LYRIC_STORE_KEY = 'mineradio-custom-lyrics-v1';
 var CUSTOM_LYRIC_PREF_STORE_KEY = 'mineradio-custom-lyric-prefs-v1';
 var LYRIC_LAYOUT_STORE_KEY = 'mineradio-lyric-layout-v1';
 var VISUAL_PRESET_SCHEMA = 'skull-preset-v2';
-var VISUAL_PRESET_MAX_INDEX = 11;
+// 视觉预设索引上限。真源是 presetMeta（07-fx/00-preset-archive-data.js），
+// 但 00-state 比 07-fx 先加载，加载期拿不到 presetMeta.length，只能给一个宽松上界兜底；
+// presetMeta 就位后会立刻重算成 length-1，并把已被旧上限夹坏的 fx.preset 校正回来。
+// 踩过的坑：这里曾硬编码 11 —— 真源一旦扩到 12 个预设，索引 12 一存一读就被夹回 11（经典），
+// 表现成「切了那个预设，重启后歌词变成经典播放器那个约 3 行的窗口」。
+var VISUAL_PRESET_MAX_INDEX = 24;
 var PLAYBACK_QUALITY_STORE_KEY = 'mineradio-playback-quality-v1';
 var SLEEP_TIMER_STORE_KEY = 'mineradio-sleep-timer-v1';
 var PLAYBACK_SESSION_STORE_KEY = 'mineradio-playback-session-v1';

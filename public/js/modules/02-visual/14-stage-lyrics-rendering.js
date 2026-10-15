@@ -16,6 +16,8 @@ function stageLyricWantRowLayers() {
   // eco 退回轻量 dual/triple。fail-open 会话锁优先。
   if (typeof STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF !== 'undefined' && STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF) return false;
   if (typeof ENABLE_LYRIC_ROW_LAYERS === 'undefined' || !ENABLE_LYRIC_ROW_LAYERS) return false;
+  // 瞬态失败后的冷却期：暂时不进轨道，冷却结束自动重试（不再永久锁死本会话）
+  if (typeof stageLyricRowLayersCoolingDown === 'function' && stageLyricRowLayersCoolingDown()) return false;
   if (typeof normalizeLyricDisplayMode !== 'function' || typeof buildLyricMesh !== 'function' || typeof updateLyricRowLayers !== 'function') return false;
   if (normalizeLyricDisplayMode(fx && fx.lyricDisplayMode) === 'single') return false;
   var quality = typeof resolvedPerformanceQuality === 'function' ? resolvedPerformanceQuality() : 'balanced';
@@ -105,6 +107,7 @@ function commitIncomingStageLyricTrackMesh(trackMesh, payload, redrawOnly) {
   if (!trackMesh.parent) stageLyrics.group.add(trackMesh);
   stageLyrics.current = trackMesh;
   trackMesh.userData.lyricRevealWatchAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  trackMesh.userData.lyricRevealUploadedSeen = 0;
   if (typeof initializeStageLyricPersistentTrack === 'function') {
     try { initializeStageLyricPersistentTrack(trackMesh, payload); } catch (_) {}
   }
@@ -338,19 +341,62 @@ function updateLyricMeshProgress(mesh, progress, opts) {
   mesh.userData.lastLyricProgress = progress;
 }
 
-/** P0：track 超时未露字 → 拆掉回落 legacy，并会话锁死 row-layers，避免切行再空白
+/** P0：track 超时未露字 → 拆掉回落 legacy，并锁死 row-layers，避免切行再空白
  * 注意：只锁本会话（重负载/GPU 抖动导致的一次超时不应永久关掉行层——
  * 行层永久关闭会让自定行数彻底失效，legacy 路径不读行数）。 */
 var STAGE_LYRIC_REVEAL_FAILOPEN_MS = 900;
+/**
+ * 瞬态回落（露字/透明度超时、行层异常）的冷却时长。
+ *
+ * 踩坑（症状：改完行数后「调回三行以上也只显示三行」，且调不回来）：
+ * 原实现把**所有** fail-open 都写成会话级永久锁（STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF
+ * + ENABLE_LYRIC_ROW_LAYERS=false）。而用户在播放中调整「显示行数」时，行层轨道要重建
+ * 新行数的行 + 上传贴图，这段时间 active row 的 uOpacity 本来就为 0；只要真在播放
+ * （看门狗仅在 playing && !audio.paused 时计时）且重建超过 900ms，看门狗就会误判成
+ * 「露字超时」→ 永久关掉行层 → 本会话退化成 legacy 路径（只有 current/next/next2 = 3 行）
+ * → 之后无论怎么调行数都只有 3 行，直到重启。
+ *
+ * 现在按性质分流：
+ *   - 结构性失败（0 可用行等）→ 仍然锁会话，避免一直空白闪烁；
+ *   - 瞬态超时/异常       → 只冷却一段时间，冷却期内不进轨道，过后自动重试；
+ *   - 任何显式改动歌词显示设置（行数/模式/翻译）→ 立刻解除，保证用户操作总能生效。
+ */
+var STAGE_LYRIC_ROW_LAYERS_COOLDOWN_MS = 9000;
+var stageLyricRowLayersCooldownUntil = 0;
+function stageLyricNowMsSafe() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+function stageLyricRowLayersCoolingDown() {
+  return stageLyricRowLayersCooldownUntil > 0 && stageLyricNowMsSafe() < stageLyricRowLayersCooldownUntil;
+}
+/** 解除行层锁/冷却。歌词显示设置变更时调用，保证用户操作一定能重新走轨道。 */
+function resetStageLyricRowLayersLatch(reason) {
+  STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = false;
+  stageLyricRowLayersCooldownUntil = 0;
+  try { if (typeof ENABLE_LYRIC_ROW_LAYERS !== 'undefined') ENABLE_LYRIC_ROW_LAYERS = true; } catch (_) {}
+  if (typeof window !== 'undefined' && window.__mineradioLyricRowLayersResetLog) {
+    try { window.__mineradioLyricRowLayersResetLog.push(String(reason || '')); } catch (_) {}
+  }
+  return true;
+}
+/** 只有「0 可用行」这类结构性失败才配锁整个会话 */
+function stageLyricFailOpenIsStructural(reason) {
+  return /empty-track|empty-prewarm/i.test(String(reason || ''));
+}
 function stageLyricFailOpenLegacyFromTrack(trackMesh, reason) {
   if (typeof cancelStageLyricResidentBuild === 'function') {
     try { cancelStageLyricResidentBuild(); } catch (_) {}
   }
-  try { STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = true; } catch (_) {}
-  try {
-    if (typeof ENABLE_LYRIC_ROW_LAYERS !== 'undefined') ENABLE_LYRIC_ROW_LAYERS = false;
-    // 不再写 localStorage '0'：一次性 reveal 超时只降级本会话，下次启动重试行层
-  } catch (_) {}
+  if (stageLyricFailOpenIsStructural(reason)) {
+    try { STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = true; } catch (_) {}
+    try {
+      if (typeof ENABLE_LYRIC_ROW_LAYERS !== 'undefined') ENABLE_LYRIC_ROW_LAYERS = false;
+      // 不再写 localStorage '0'：一次性 reveal 超时只降级本会话，下次启动重试行层
+    } catch (_) {}
+  } else {
+    // 瞬态：只冷却，不锁会话。否则一次抖动就把行层永久关掉（自定行数彻底失效）。
+    stageLyricRowLayersCooldownUntil = stageLyricNowMsSafe() + STAGE_LYRIC_ROW_LAYERS_COOLDOWN_MS;
+  }
   var idx = stageLyrics && stageLyrics.currentIdx;
   var text = '';
   try {
@@ -658,6 +704,42 @@ function refreshCurrentLyricStyle() {
   } catch (err) {
     console.warn('[lyrics] refreshCurrentLyricStyle failed:', err);
   }
+}
+
+/**
+ * 换歌交接（借鉴 Folia 的 two-frame handoff 思想）：
+ * 切歌 / 换歌词源时不硬清旧行，只重置「行身份」，把已上屏的 mesh 留给下一帧的 showStageLine
+ * 去走 outgoing 交接 —— 旧行快速淡出、新行就绪后淡入，切歌不再出现「旧词瞬灭 → 空窗 → 新词」的闪断。
+ *
+ * 之所以能这样接：行层 mesh 的整体 alpha 通道是 `data.textMat.uniforms.uOpacity`，
+ * tickMesh 的非 current 分支会把 `(1-a)*0.72*outgoing` 写进去，所以即便旧行的
+ * `lyricRevealSuccessor` 为空（新旧行对不上），它也会照常整体淡出，不会变成幽灵节点。
+ *
+ * 返回 true 表示已接管，调用方不要再 clearStageLyrics；没有可见行时返回 false 走原硬清。
+ */
+function handoffStageLyricsForNewTrack() {
+  if (!stageLyrics) return false;
+  if (!stageLyrics.current && !stageLyrics.next && !stageLyrics.next2) return false;
+  // 旧歌的构建任务必须停掉，否则 resident / warmup 会继续往旧轨里补行
+  if (typeof cancelStageLyricResidentBuild === 'function') {
+    try { cancelStageLyricResidentBuild(); } catch (_) {}
+  }
+  if (typeof clearStageLyricFullTrackWarmup === 'function') {
+    try { clearStageLyricFullTrackWarmup(); } catch (_) {}
+  }
+  if (typeof disposeStageLyricPrewarmMesh === 'function') {
+    try { disposeStageLyricPrewarmMesh(); } catch (_) {}
+  }
+  // 只重置「行身份」，不碰 mesh：下一帧 tickLyricsParticles 里 currentIdx(-1) !== newIdx
+  // 必定触发 showStageLine，由 commitIncomingStageLyricTrackMesh 把旧行推入 outgoing 淡出。
+  stageLyrics.currentIdx = -1;
+  stageLyrics.nextIdx = -1;
+  stageLyrics.next2Idx = -1;
+  stageLyrics.currentText = '';
+  stageLyrics.nextText = '';
+  stageLyrics.next2Text = '';
+  stageLyrics.currentPayload = null;
+  return true;
 }
 
 function clearStageLyrics() {
@@ -977,25 +1059,44 @@ function updateStageLyrics3D(dt) {
       // 暂停/未播放时不累计 fail-open 计时：此时露字本来就不会推进，
       // 累计只会造成「刚加载就暂停」的歌 900ms 后误报并锁死本会话。
       var actuallyPlayingReveal = !!(playing && audio && !audio.paused && !audio.ended);
-      if (!actuallyPlayingReveal) mesh.userData.lyricRevealWatchAt = nowReveal;
+      // 重建进行中同样不累计：用户改「显示行数/模式」后轨道要补建新行 + 上传贴图，
+      // 这段时间 active row 的 uOpacity 本来就是 0，计时会被误判成「露字超时」。
+      // 重置计时点，等重建收尾后重新起算。
+      var trackRebuildInFlight = !!(
+        dataEarly.trackPendingPayload ||
+        (typeof stageLyricResidentBuild !== 'undefined' && stageLyricResidentBuild &&
+         stageLyricResidentBuild.job && stageLyricResidentBuild.job.mesh === mesh)
+      );
+      if (!actuallyPlayingReveal || trackRebuildInFlight) mesh.userData.lyricRevealWatchAt = nowReveal;
       else if (!mesh.userData.lyricRevealWatchAt) mesh.userData.lyricRevealWatchAt = nowReveal;
-      var revealWait = nowReveal - mesh.userData.lyricRevealWatchAt;
       var revealPending = dataEarly.renderInitialTextReady !== true;
       var opaqueEnough = false;
-      if (!revealPending && dataEarly.rowLayers && dataEarly.rowLayers.length) {
+      var uploadedTotal = 0;
+      if (dataEarly.rowLayers && dataEarly.rowLayers.length) {
         for (var oi = 0; oi < dataEarly.rowLayers.length; oi++) {
           var orow = dataEarly.rowLayers[oi];
-          if (!orow || !orow.isActive) continue;
+          if (!orow) continue;
+          if (orow.renderLineUploaded) uploadedTotal += 1;
+          if (opaqueEnough || !orow.isActive) continue;
           var omat = orow.mat;
           var opv = omat && omat.uniforms && omat.uniforms.uOpacity
             ? Number(omat.uniforms.uOpacity.value) || 0
             : (omat ? Number(omat.opacity) || 0 : 0);
-          if (opv > 0.04) { opaqueEnough = true; break; }
+          if (opv > 0.04) opaqueEnough = true;
         }
       }
+      // 露字仍在推进（已上传行数变多）→ 说明只是「慢」，不是「卡死」，计时重新起算。
+      // 自定 10 行 + 多行翻译是 20 个行材质要建 + 上传，慢机器上完全可能超过 900ms。
+      if (uploadedTotal > (Number(mesh.userData.lyricRevealUploadedSeen) || 0)) {
+        mesh.userData.lyricRevealUploadedSeen = uploadedTotal;
+        mesh.userData.lyricRevealWatchAt = nowReveal;
+      }
+      var revealWait = nowReveal - mesh.userData.lyricRevealWatchAt;
+      // 首屏露字给更宽的窗口；只有「已露字但活跃行不透明」才用 900ms
+      var revealDeadline = revealPending ? STAGE_LYRIC_REVEAL_FAILOPEN_MS * 3 : STAGE_LYRIC_REVEAL_FAILOPEN_MS;
       if (typeof stageLyricTrackRevealReady === 'function' && stageLyricTrackRevealReady(mesh) && opaqueEnough) {
         // reveal-ready：已露字，不 fail-open
-      } else if (revealWait > STAGE_LYRIC_REVEAL_FAILOPEN_MS && (revealPending || !opaqueEnough)) {
+      } else if (revealWait > revealDeadline && (revealPending || !opaqueEnough)) {
         mesh.userData._lyricFailOpenDone = true;
         try {
           stageLyricFailOpenLegacyFromTrack(mesh, revealPending ? 'reveal-timeout' : 'opacity-timeout');
@@ -1019,8 +1120,8 @@ function updateStageLyrics3D(dt) {
           readability: shelfDetailLyricProfile.readability,
           contextIntro: 1,
           shownProgress: shownProgressTrack,
-          contextDrift: 0.02,
-          style: (fx && fx.lyricMotionStyle) || 'float',
+          contextDrift: (lyricMotionProfile().contextDrift != null ? Number(lyricMotionProfile().contextDrift) : 0.02) || 0.02,
+          style: ((fx && fx.lyricMotionStyle) || 'float'),
           time: t,
           seed: Number(mesh.userData.seed) || 0,
           jitterX: 0,
@@ -1063,7 +1164,8 @@ function updateStageLyrics3D(dt) {
       mesh.scale.setScalar(Math.max(0.84, 0.98 - upT * 0.12));
       return upT < 1;
     }
-    var a = Math.min(1, mesh.userData.age / (isCurrent ? (isNextLine ? 0.72 : (mesh.userData.state === 'promote' ? 0.34 : 0.46)) : 0.34));
+    var _enterScale = lyricFastEntranceScale(lyricLineSpanSeconds(stageLyrics.currentIdx >= 0 ? stageLyrics.currentIdx : 0));
+    var a = Math.min(1, mesh.userData.age / ((isCurrent ? (isNextLine ? 0.72 : (mesh.userData.state === 'promote' ? 0.34 : 0.46)) : 0.34) * _enterScale));
     if (isNextLine && mesh.userData.state === 'rise') a = mesh.userData.riseT || 0;
     a = a * a * (3 - 2 * a);
     var data = mesh.userData.lyric || {};
@@ -1140,7 +1242,9 @@ function updateStageLyrics3D(dt) {
         data.sun.rotation.z += Math.sin(t * 0.32 + seed) * 0.010 * sunPulse;
       }
       var roleOff = lyricMeshRoleOffsets(meshRole);
-      var motion = computeLyricMotion(fx.lyricMotionStyle || 'float', t, seed);
+      // 运动风格：走用户手选的 fx.lyricMotionStyle。
+      // computeLyricMotion 决定 breathe/位移/辉光脉冲，是「看得见」的那一层。
+      var motion = computeLyricMotion((fx.lyricMotionStyle || 'float'), t, seed);
       var breathe = motion.breathe;
       var rotZAdd = motion.rotZAdd;
       var posXAdd = motion.posXAdd;
@@ -1155,11 +1259,16 @@ function updateStageLyrics3D(dt) {
         }
       }
       // 动态更新 shader uniforms（扫光/闪烁/边缘高光随样式变化）
+      // 全部走 isFinite 兜底：NaN 进 shader 会让文字整块变黑（歌词“消失”的经典原因）
       if (data.textMat && data.textMat.uniforms) {
         var _mp = lyricMotionProfile();
-        if (data.textMat.uniforms.uSweep) data.textMat.uniforms.uSweep.value = _mp.sweep;
-        if (data.textMat.uniforms.uShimmer) data.textMat.uniforms.uShimmer.value = _mp.shimmer;
-        if (data.textMat.uniforms.uEdgeBoost) data.textMat.uniforms.uEdgeBoost.value = _mp.edgeBoost;
+        var _u = data.textMat.uniforms;
+        if (_u.uSweep && isFinite(_mp.sweep)) _u.uSweep.value = Number(_mp.sweep);
+        if (_u.uShimmer && isFinite(_mp.shimmer)) _u.uShimmer.value = Number(_mp.shimmer);
+        if (_u.uEdgeBoost && isFinite(_mp.edgeBoost)) _u.uEdgeBoost.value = Number(_mp.edgeBoost);
+        if (_u.uSweepLead && isFinite(_mp.sweepLead)) _u.uSweepLead.value = Number(_mp.sweepLead);
+        if (_u.uSweepTail && isFinite(_mp.sweepTail)) _u.uSweepTail.value = Number(_mp.sweepTail);
+        if (_u.uSweepPeak && isFinite(_mp.sweepPeak)) _u.uSweepPeak.value = Number(_mp.sweepPeak);
       }
       if (skullMouthLyrics) {
         var mouthMeshY = -0.070 + Math.sin(t * 0.50 + seed) * 0.018 + Math.sin(t * 1.12 + seed) * 0.006;
@@ -1206,7 +1315,7 @@ function updateStageLyrics3D(dt) {
         } else if (isNextLine && mesh.userData.state === 'rise') {
           var spawnOff = lyricMeshSpawnOffset(meshRole);
           var nextOff = lyricMeshRoleOffsets(meshRole);
-          mesh.userData.riseT = Math.min(1, (mesh.userData.riseT || 0) + dt / 0.72);
+          mesh.userData.riseT = Math.min(1, (mesh.userData.riseT || 0) + dt / (0.72 * _enterScale));
           var rt = mesh.userData.riseT;
           rt = rt * rt * (3 - 2 * rt);
           var targetY = spawnOff.y + (nextOff.y - spawnOff.y) * rt + breathe * 0.22 * rt;
@@ -1256,8 +1365,8 @@ function updateStageLyrics3D(dt) {
           readability: shelfDetailOpen ? shelfDetailLyricProfile.readability : 0.58,
           contextIntro: 1,
           shownProgress: mesh.userData.lastLyricProgress || 0,
-          contextDrift: 0.02,
-          style: (fx && fx.lyricMotionStyle) || 'float',
+          contextDrift: (lyricMotionProfile().contextDrift != null ? Number(lyricMotionProfile().contextDrift) : 0.02) || 0.02,
+          style: ((fx && fx.lyricMotionStyle) || 'float'),
           time: t,
           seed: Number(mesh.userData.floatSeed) || 0,
           jitterX: 0,
@@ -1296,6 +1405,26 @@ function updateStageLyrics3D(dt) {
       stageLyrics.outgoing.splice(i, 1);
     }
   }
+}
+
+/** 取某行的可用时长（到下一行开始，或行自身 duration） */
+function lyricLineSpanSeconds(index) {
+  if (!lyricsLines || !lyricsLines.length) return 4.8;
+  var line = lyricsLines[index];
+  if (!line) return 4.8;
+  var next = lyricsLines[index + 1];
+  var start = Number(line.t) || 0;
+  var end = next && Number(next.t) > start ? Number(next.t) : start + (Number(line.duration) || 4.8);
+  return Math.max(0.18, end - start);
+}
+
+/** 短行（快速连唱）入场时长压缩：行时长越短，入场/落位越快。
+ *  对应 Folia glowWordTiming 的时序契约，解决“词已唱过、入场动画还没放完”。 */
+function lyricFastEntranceScale(span) {
+  span = Number(span);
+  if (!isFinite(span) || span <= 0) return 1;
+  if (span >= 0.90) return 1;
+  return clampRange(0.42 + (span - 0.26) * 0.95, 0.42, 1.0);
 }
 
 function getLyricLineProgress(line, nextLine, now) {

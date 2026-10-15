@@ -516,7 +516,7 @@ function ensureStageLyricPersistentTrackRows(mesh, targetIndex, options) {
   var last = lyricsLines.length - 1;
   targetIndex = Math.max(0, Math.min(last, Math.round(Number(targetIndex) || 0)));
   var residentRowMap = stageLyricPersistentResidentRowMap(data);
-  var offsets = lyricDisplayOffsetsForMode(data.displayMode || (fx && fx.lyricDisplayMode));
+  var offsets = lyricDisplayOffsetsForMode(lyricTrackDisplayModeFor(data));
   var minOffset = 0;
   var maxOffset = 0;
   for (var oi = 0; oi < offsets.length; oi++) {
@@ -618,7 +618,7 @@ function trimStageLyricPersistentTrackRows(mesh, targetIndex, options) {
   var data = mesh && mesh.userData && mesh.userData.lyric;
   if (!data || !data.trackPersistent || !Array.isArray(data.rowLayers) || !data.rowLayers.length || !lyricsLines || !lyricsLines.length) return false;
   targetIndex = Math.max(0, Math.min((lyricsLines && lyricsLines.length ? lyricsLines.length - 1 : 0), Math.round(Number(targetIndex) || 0)));
-  var offsets = lyricDisplayOffsetsForMode(data.displayMode || (fx && fx.lyricDisplayMode));
+  var offsets = lyricDisplayOffsetsForMode(lyricTrackDisplayModeFor(data));
   var minOffset = 0;
   var maxOffset = 0;
   for (var oi = 0; oi < offsets.length; oi++) {
@@ -745,7 +745,7 @@ function ensureStageLyricVisibleTextRunwaySync(mesh, targetIndex) {
   var last = lyricsLines.length - 1;
   targetIndex = Math.max(0, Math.min(last, Math.round(Number(targetIndex) || 0)));
   if (!isFinite(targetIndex)) targetIndex = 0;
-  var offsets = lyricDisplayOffsetsForMode(data.displayMode || (fx && fx.lyricDisplayMode));
+  var offsets = lyricDisplayOffsetsForMode(lyricTrackDisplayModeFor(data));
   var minOffset = 0;
   var maxOffset = 0;
   for (var oi = 0; oi < offsets.length; oi++) {
@@ -937,7 +937,7 @@ function stageLyricPersistentTargetRowsReady(mesh, targetIndex, options) {
   var data = mesh && mesh.userData && mesh.userData.lyric;
   if (!data || !data.trackPersistent || !lyricsLines || !lyricsLines.length) return false;
   targetIndex = Math.max(0, Math.min(lyricsLines.length - 1, Math.round(Number(targetIndex) || 0)));
-  var offsets = lyricDisplayOffsetsForMode(data.displayMode || (fx && fx.lyricDisplayMode));
+  var offsets = lyricDisplayOffsetsForMode(lyricTrackDisplayModeFor(data));
   var required = {};
   for (var oi = 0; oi < offsets.length; oi++) {
     var lineIndex = targetIndex + Math.round(Number(offsets[oi]) || 0);
