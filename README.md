@@ -1,27 +1,39 @@
 # Mineradio Vision
 
-Mineradio Vision 是基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 修改而来的 Windows 桌面沉浸式音乐播放器，**仅供学习交流使用**。
+**Windows 桌面沉浸式音乐播放器** —— 电影镜头、粒子视觉、歌词舞台、3D 歌单架；接入**网易云音乐 / QQ 音乐 / 酷狗音乐 / 汽水音乐 / Spotify** 五个平台，支持账号登录、歌单同步、桌面歌词与酷狗 KRC 加密歌词解密。
 
-在原项目当前版本 v2.1.0 的歌词舞台、粒子视觉、3D 歌单架、电影镜头、完整桌面模式与多平台接入基础上，本版本进行了大规模架构重构与功能扩展：QQ Cookie 自动续期、酷狗 KRC 歌词解密、LiquidGlass 液态玻璃视觉系统，Sonic Topography 音域回响预设，桌面歌词，天气雨滴，原生 C++ BPM 分析等。
+![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
+![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
+![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-3.0.1-success?style=flat-square)
 
-当前版本：`3.0.1`
+![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-10-12.webp)
 
-## Contributors
+*上面是歌词舞台的实际运行画面；完整 1 分 34 秒使用示例：[▶ 播放 / 下载](./docs/media/usage-demo-2026-10-12.mp4)*
 
-| Contributor | Role |
-| --- | --- |
-| [**moli-lihuashi**](https://github.com/moli-lihuashi) | 架构重构、多音乐源接入、视觉系统与功能开发 |
-| **GLM**（智谱 AI） | AI 结对开发助手，参与代码实现、问题修复与文档编写 |
+## 为什么会有这个版本
 
-## 界面预览与使用示例
+Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused) 并停止更新，本仓库在停止维护的上游基础上继续开发：保留其歌词舞台、粒子视觉、电影镜头与 3D 歌单架，同时做了大规模架构重构与功能扩展。
 
-应用界面：
+| 对比项 | 上游 Mineradio | Mineradio Vision（本仓库） |
+| --- | --- | --- |
+| 维护状态 | 2026-09-21 起停更，仓库改名 `Mineradio-paused` | 持续维护中，最近更新 2026-10-16 |
+| 音乐平台 | 上游原有接入能力 | 网易云 / QQ / **酷狗** / 汽水 / **Spotify** 五源统一登录、歌单同步与账号状态 |
+| 酷狗链路 | — | KRC 加密歌词解密（krc1 XOR + zlib）、翻译歌词显示修复、云歌单 dfid 设备身份修复、歌单顺序同步、VIP 状态同步 |
+| QQ 登录 | 授权失效需重新登录 | Cookie 失效自动判定 + 服务端静默续期，失败才提示重登 |
+| 视觉系统 | 歌词舞台 / 粒子 / 电影镜头 / 3D 歌单架 | 追加 LiquidGlass 液态玻璃、Sonic Topography 音域回响、独立桌面歌词窗口、天气雨滴、像素伙伴桌宠 |
+| 性能工程 | — | 原生 C++ BPM 分析加速、前端延迟波懒加载启动、按 P95 帧时间自适应降级 |
+| 细节体验 | — | 久听休息提醒（连续聆听计时 + 整屏休息提示）、开屏真实加载进度 |
+
+## 下载安装
+
+- **Windows 安装包（推荐）**：[Mineradio-3.0.1-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.0.1/Mineradio-3.0.1-Setup.exe) —— 2026-10-16 构建，包含本仓库最新代码
+- 免安装便携版：[Mineradio-Vision-v3.0.1-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.0.1/Mineradio-Vision-v3.0.1-portable-win-x64.zip)（2026-08-29 构建）
+- 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
+
+## 界面预览
 
 ![Mineradio Vision 应用界面](./docs/media/app-ui-2026-10-12.png)
-
-使用示例录屏（1 分 34 秒）：[▶ 播放 / 下载](./docs/media/usage-demo-2026-10-12.mp4)
-
-> 录屏是原始素材的有损压缩版（1280×800，原片 2560×1600 / 183 MB 未上传）。
 
 ## 声明
 
@@ -111,3 +123,10 @@ npm run build:win
 原项目 Copyright (C) XxHuberrr，本项目继续采用 GPL-3.0 授权，详见 [LICENSE](./LICENSE) 与 [NOTICE.md](./NOTICE.md)。
 
 MR Logo、Mineradio 名称、界面视觉设计与原创视觉表达归原作者所有；第三方依赖和第三方服务分别遵循其各自授权与服务条款。
+
+## Contributors
+
+| Contributor | Role |
+| --- | --- |
+| [**moli-lihuashi**](https://github.com/moli-lihuashi) | 架构重构、多音乐源接入、视觉系统与功能开发 |
+| **GLM**（智谱 AI） | AI 结对开发助手，参与代码实现、问题修复与文档编写 |
