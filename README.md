@@ -30,6 +30,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 | 前端延迟波懒加载（第二波模块） | 无（单波加载） | 有 |
 | 久听休息提醒 | 无 | 有 |
 | 登录包跨设备同步（导出 / 扫码互传） | 无 | 有 |
+| 崩溃诊断 / 崩溃风暴退避 | 部分（基础 `render-process-gone` 钩子与 `featureStatus` 读取） | 有（崩溃时间戳、子进程崩溃记录、本地 minidump、指数退避，本仓库实现） |
 | 本地音乐库 / 内置歌单库 | 有 | **尚未合并** |
 | Sonic Workshop 预设 | 有 | **尚未合并** |
 | cuefield 过渡引擎 / 自动化测试 | 13 个模块 / 54 个测试 | 8 个模块 / 24 个测试 |
