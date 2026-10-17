@@ -13,7 +13,7 @@
 
 ## 为什么会有这个版本
 
-Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused)，README 写明「长期停更」。本仓库从较早的快照（上游 v2.1.0 + 酷狗修改版）继续维护，并陆续把上游后续版本的部分实现同步回来 —— 例如汽水扫码登录 v6 与上游是同一份代码。
+Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused)，README 写明「长期停更」。本仓库在该项目基础上继续维护，并陆续把上游后续版本的部分实现同步回来 —— 例如汽水扫码登录 v6 与上游是同一份代码（原实现无法正常播放音乐，因此合并上游实现）。
 
 下面的差异都按两边仓库的实际代码核对过（不含主观描述）；「无」指该仓库里没有对应实现。
 
@@ -21,7 +21,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 | --- | --- | --- |
 | 维护状态 | 2026-09-21 停更 | 持续维护中 |
 | 五源接入（网易云 / QQ / 酷狗 / 汽水 / Spotify） | 有 | 有 |
-| 汽水扫码登录 v6 / 音频解密 | 有 | 有（同步自上游的同一份实现） |
+| 汽水扫码登录 v6 / 音频解密 | 有 | 有（合并上游 v2.2.0，修复原实现无法正常播放） |
 | 酷狗 KRC 加密歌词解密（XOR + zlib） | 无 | 有 |
 | QQ Cookie 自动续期（`QQConnectLogin`） | 无 | 有 |
 | LiquidGlass 液态玻璃 | 无 | 有 |
@@ -57,7 +57,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 
 ## 本版本的主要增强
 
-相比原项目当前版本（v2.1.0），本修改版的主要优势与扩展：
+本版本相对上游的主要增强：
 
 ### 音乐源与账号
 
@@ -80,7 +80,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 - **玻璃控件体系**：FX / 登录滑动玻璃选中胶囊、音量玻璃滑块，按下放大、松开弹簧缩回的质感交互。
 - **morphicons 图标形变动画**：播放 / 暂停、播放顺序、音量档位图标平滑形变切换（[guillermolg00/morphicons](https://github.com/guillermolg00/morphicons) MIT 许可）。
 - **登录页单页布局**：「平台 → 方式 → 操作」流程化设计，多平台统一登录管理。
-- 继承原项目 v2.1.0 的歌词舞台、粒子舞台、电影镜头、3D 歌单架、Wallpaper Engine 集成、完整桌面模式等核心视觉体验。
+- 继承上游的歌词舞台、粒子舞台、电影镜头、3D 歌单架、Wallpaper Engine 集成、完整桌面模式等核心视觉体验。
 
 ### 架构与工程
 
