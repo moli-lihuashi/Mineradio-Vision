@@ -32,10 +32,10 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 | 登录包跨设备同步（导出 / 扫码互传） | 无 | 有 |
 | 崩溃诊断 / 崩溃风暴退避 | 部分（基础 `render-process-gone` 钩子与 `featureStatus` 读取） | 有（崩溃时间戳、子进程崩溃记录、本地 minidump、指数退避，本仓库实现） |
 | 本地音乐库 / 内置歌单库 | 有 | **尚未合并** |
-| Sonic Workshop 预设 | 有 | **尚未合并** |
+| Sonic Workshop 预设（本仓库名「音域回响」） | 有（`vendor/sonic-workshop`，预设槽位 8） | 有（`sonic-topography/`，预设槽位 10；同一项目，桥接拆成 html + js + css） |
 | cuefield 过渡引擎 / 自动化测试 | 13 个模块 / 54 个测试 | 8 个模块 / 24 个测试 |
 
-> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游在本地音乐库、内置歌单库、Sonic Workshop、文档与测试覆盖上更完整，这些还没有合并过来。
+> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游在本地音乐库、内置歌单库、文档与测试覆盖上更完整，这些还没有合并过来。
 
 ## 下载安装
 
