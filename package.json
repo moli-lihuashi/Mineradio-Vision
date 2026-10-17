@@ -1,7 +1,7 @@
 {
   "name": "mineradio",
   "productName": "Mineradio",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "沉浸式音乐播放器，融合天气电台、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Mineradio",
   "main": "desktop/main.js",
@@ -36,6 +36,7 @@
       "public/**/*",
       "build/**/*",
       "cuefield/**/*",
+      "cuefield-next/**/*",
       "server/**/*",
       "server.js",
       "dj-analyzer.js",

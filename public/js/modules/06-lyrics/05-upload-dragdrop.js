@@ -60,6 +60,14 @@ document.addEventListener('click', function(e) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeUploadPanel();
 });
+// 本地导入的 blob URL：同一时刻只保留「当前曲目」这一份。
+// 不释放的话，反复导入大文件会持续累积 blob 引用（audio 元素只持有最新 src，
+// 旧 URL 不会再被任何地方用到）。
+var _localAudioObjectUrl = '';
+function releaseLocalAudioObjectUrl(url) {
+  if (!url || url === _localAudioObjectUrl) return;
+  try { URL.revokeObjectURL(url); } catch (e) {}
+}
 function handleFiles(files) {
   var audioFile = null, imgFile = null;
   for (var i = 0; i < files.length; i++) {
@@ -69,7 +77,9 @@ function handleFiles(files) {
   }
   if (audioFile) {
     finalizeListenSession(false);
+    var prevLocalObjectUrl = _localAudioObjectUrl;
     var url = URL.createObjectURL(audioFile);
+    _localAudioObjectUrl = url;
     var localTitle = audioFile.name.replace(/\.[^.]+$/, '');
     trackSwitchToken++;
     resetCuefieldAutoMix('track-switch');
@@ -125,6 +135,8 @@ function handleFiles(files) {
     applyPreferredLyricsForCurrent(true);
     document.getElementById('trial-banner').classList.remove('show');
     audio.load();
+    // 新曲已接管 audio.src，旧 blob 可以释放了（早于此释放可能打断仍在读旧 URL 的分析）
+    releaseLocalAudioObjectUrl(prevLocalObjectUrl);
     playAudio().then(function(ok){
       if (ok && currentLocalSong && currentLocalSong.localUrl === url) beginListenSession(currentLocalSong, null);
     });

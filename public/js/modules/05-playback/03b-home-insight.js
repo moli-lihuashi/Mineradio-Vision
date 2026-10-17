@@ -94,7 +94,7 @@ function buildInsightDockHtml() {
     html += '<div class="home-insight-section"><div class="home-insight-section-title">最常听</div>';
     for (var i = 0; i < topSongs.length; i++) {
       var s = topSongs[i];
-      html += '<div class="home-insight-row" onclick="closeHomeInsightDock(); runHomeSearch(' + JSON.stringify(s.name) + ')">';
+      html += '<div class="home-insight-row" onclick="closeHomeInsightDock(); runHomeSearch(' + escAttr(JSON.stringify(s.name)) + ')">';
       html += '<div class="home-insight-rank">' + (i + 1) + '</div>';
       var cover = s.cover ? (typeof coverUrlWithSize === 'function' ? coverUrlWithSize(s.cover, 64) : s.cover) : '';
       html += '<div class="home-insight-row-art"' + (cover ? (' style="background-image:url(\'' + escAttr(cover) + '\')"') : '') + '></div>';
@@ -109,7 +109,7 @@ function buildInsightDockHtml() {
     html += '<div class="home-insight-section"><div class="home-insight-section-title">顶曲风</div>';
     for (var j = 0; j < topArtists.length; j++) {
       var a = topArtists[j];
-      html += '<div class="home-insight-row" onclick="closeHomeInsightDock(); runHomeSearch(' + JSON.stringify(a.name) + ')">';
+      html += '<div class="home-insight-row" onclick="closeHomeInsightDock(); runHomeSearch(' + escAttr(JSON.stringify(a.name)) + ')">';
       html += '<div class="home-insight-rank">' + (j + 1) + '</div>';
       html += '<div class="home-insight-row-art home-insight-artist-art">' + escHtml((a.name || '?').charAt(0)) + '</div>';
       html += '<div class="home-insight-row-info"><div class="home-insight-row-name">' + escHtml(a.name || '未知') + '</div>';

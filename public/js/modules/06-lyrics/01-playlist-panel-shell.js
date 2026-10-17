@@ -403,6 +403,8 @@ function queueRowsHtml(options) {
   var range = queueVirtualRange(total, options || queuePanelWindowOptions(), QUEUE_ROW_STEP, QUEUE_VIRTUAL_OVERSCAN);
   queueVirtualState.start = range.start;
   queueVirtualState.end = range.end;
+  queueVirtualState.total = total;
+  queueVirtualState.idx = currentIdx;
   var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (range.start * QUEUE_ROW_STEP) + 'px"></div>';
   html += playQueue.slice(range.start, range.end).map(function(song, localIndex){
     return queueItemHtml(song, range.start + localIndex);
@@ -416,6 +418,8 @@ function miniQueueRowsHtml(options) {
   var range = queueVirtualRange(total, options || miniQueueWindowOptions(), MINI_QUEUE_ROW_STEP, MINI_QUEUE_VIRTUAL_OVERSCAN);
   miniQueueVirtualState.start = range.start;
   miniQueueVirtualState.end = range.end;
+  miniQueueVirtualState.total = total;
+  miniQueueVirtualState.idx = currentIdx;
   var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (range.start * MINI_QUEUE_ROW_STEP) + 'px"></div>';
   html += playQueue.slice(range.start, range.end).map(function(song, localIndex){
     return miniQueueItemHtml(song, range.start + localIndex);
@@ -433,6 +437,12 @@ function scheduleQueuePanelVirtualRender() {
   queueVirtualState.raf = requestAnimationFrame(function(){
     queueVirtualState.raf = 0;
     if (queueViewTab !== 'queue' || !playQueue.length) return;
+    // 窗口差分：range/总数/当前项都没变就直接跳过，别每帧全量重建 innerHTML
+    var range = queueVirtualRange(playQueue.length, queuePanelWindowOptions(), QUEUE_ROW_STEP, QUEUE_VIRTUAL_OVERSCAN);
+    if (range.start === queueVirtualState.start && range.end === queueVirtualState.end
+      && queueVirtualState.total === playQueue.length && queueVirtualState.idx === currentIdx) return;
+    queueVirtualState.total = playQueue.length;
+    queueVirtualState.idx = currentIdx;
     renderQueuePanelRows();
   });
 }
@@ -443,6 +453,11 @@ function scheduleMiniQueueVirtualRender() {
     if (!miniQueueOpen || !playQueue.length) return;
     var $list = document.getElementById('mini-queue-list');
     if (!$list) return;
+    var range = queueVirtualRange(playQueue.length, miniQueueWindowOptions(), MINI_QUEUE_ROW_STEP, MINI_QUEUE_VIRTUAL_OVERSCAN);
+    if (range.start === miniQueueVirtualState.start && range.end === miniQueueVirtualState.end
+      && miniQueueVirtualState.total === playQueue.length && miniQueueVirtualState.idx === currentIdx) return;
+    miniQueueVirtualState.total = playQueue.length;
+    miniQueueVirtualState.idx = currentIdx;
     $list.innerHTML = miniQueueRowsHtml(miniQueueWindowOptions());
   });
 }

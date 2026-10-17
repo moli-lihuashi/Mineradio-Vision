@@ -749,7 +749,19 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
     if (token !== beatMapToken) { hideBeatChip(); return null; }
     if (options.prefetch) hideBeatChip();
     else showBeatChip('节奏缓冲中…');
-    return { kicks: kicks, beats: beats, pulseBeats: pulseBeats, cameraBeats: cameraBeats, gridStep: gridStep, tempoSource: musicTempoBeats.length >= 4 ? 'music-tempo' : 'local', analysisProfile: analysisProfile.id || 'default', duration: buffer.duration, visualBeatCount: visualBeatCount, analyzedAt: Date.now() };
+    // 音高/和声画像：cuefield v2 的 musicalEvidence 全靠它（没有它 4 个 recipe 永远不 eligible）。
+    // 单独 try：画像失败绝不能把整份 beatmap 弄丢。
+    var musicalProfile = null;
+    if (options.skipMusicalProfile !== true) {
+      try {
+        musicalProfile = await analyzeMusicalProfile(buffer, token);
+      } catch (mpErr) {
+        console.warn('musical profile failed:', mpErr && mpErr.message || mpErr);
+        musicalProfile = null;
+      }
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+    }
+    return { kicks: kicks, beats: beats, pulseBeats: pulseBeats, cameraBeats: cameraBeats, gridStep: gridStep, tempoSource: musicTempoBeats.length >= 4 ? 'music-tempo' : 'local', analysisProfile: analysisProfile.id || 'default', duration: buffer.duration, visualBeatCount: visualBeatCount, analyzedAt: Date.now(), musicalProfile: musicalProfile };
   } catch (e) {
     console.warn('beat analysis failed:', e);
     hideBeatChip();
@@ -757,4 +769,408 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   } finally {
     beatMapBusy = false;
   }
+}
+
+// ===================== 音高 / 和声画像（musicalProfile） =====================
+// 干吗用的：cuefield v2 的 cuefield-next/musical-profile.js 要靠 pitchClassProfile + key + intervalProfile
+// 才能算出 harmonicSimilarity / keyCompatibility。没有这个字段，recipe-planner 的 musicalEvidence 恒为
+// false —— 4 个 recipe（musical-commonality / melody / harmonic-match / 反 harmonic-clash）永远不 eligible，
+// transition-window-planner 的窗口排序也拿不到 ±0.06 的音乐性加分。也就是说那 8KB 一直空转。
+//
+// 上游靠 basic-pitch 的音符事件（pitchMidi / start / duration）。我们没有那套模型，也没有它的 weight 文件，
+// 所以这里换成 chroma：逐帧 FFT → 12 音级能量累积 → 调性模板匹配。字段里用 source 标明来源，
+// 不和上游的 'basic-pitch' 混在一起；noteCount 在本实现里表示「检测到的音高变化次数」（不是音符事件数），
+// 消费方只拿它当质量门槛（>=12）和密度参考，语义等价。
+var MUSICAL_PROFILE_SAMPLE_RATE = 11025;
+var MUSICAL_PROFILE_FFT_SIZE = 4096;
+var MUSICAL_PROFILE_MIN_HZ = 65;
+var MUSICAL_PROFILE_MAX_HZ = 1600;
+var MUSICAL_PROFILE_WINDOW_SEC = 16;
+var MUSICAL_PROFILE_MAX_WINDOWS = 32;
+// 谱峰模式：只统计局部极大谱线（>= 帧内最强的 12%）。关掉它就退回「全 bin 求和」，
+// 留着这个开关是因为它是关键参数，探针需要 A/B（见 .workbuddy/harness/verify-musical-profile-live.js）。
+var musicalProfilePeakOnly = true;
+var MUSICAL_PROFILE_PEAK_MIN_SHARE = 0.12;
+var MUSICAL_KEY_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+var MUSICAL_KEY_MINOR = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+var MUSICAL_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+var musicalProfileFftTable = null;
+
+function musicalProfileRound(value, digits) {
+  var p = Math.pow(10, digits == null ? 4 : digits);
+  var n = Number(value);
+  if (!isFinite(n)) return 0;
+  return Math.round(n * p) / p;
+}
+
+function musicalProfileNormalize(list) {
+  var total = 0;
+  var i;
+  for (i = 0; i < list.length; i++) total += Math.max(0, list[i] || 0);
+  var out = [];
+  for (i = 0; i < list.length; i++) {
+    out.push(total > 0 ? musicalProfileRound(Math.max(0, list[i] || 0) / total, 4) : 0);
+  }
+  return out;
+}
+
+function musicalProfileCosine(first, second) {
+  var dot = 0;
+  var a = 0;
+  var b = 0;
+  var n = Math.min(first.length, second.length);
+  for (var i = 0; i < n; i++) {
+    var x = first[i] || 0;
+    var y = second[i] || 0;
+    dot += x * y;
+    a += x * x;
+    b += y * y;
+  }
+  return a > 0 && b > 0 ? dot / Math.sqrt(a * b) : 0;
+}
+
+// 调性匹配必须用相关系数，不能用余弦：Krumhansl 模板是「全正数」的，余弦对任何非负 chroma
+// 都给高分——实测白噪声能拿到 fit=0.96，等于没有判别力。减掉均值后噪声≈0、有调性 0.6~0.9。
+function musicalProfileCorrelation(first, second) {
+  var n = Math.min(first.length, second.length);
+  if (!n) return 0;
+  var i;
+  var meanA = 0;
+  var meanB = 0;
+  for (i = 0; i < n; i++) {
+    meanA += first[i] || 0;
+    meanB += second[i] || 0;
+  }
+  meanA /= n;
+  meanB /= n;
+  var num = 0;
+  var varA = 0;
+  var varB = 0;
+  for (i = 0; i < n; i++) {
+    var x = (first[i] || 0) - meanA;
+    var y = (second[i] || 0) - meanB;
+    num += x * y;
+    varA += x * x;
+    varB += y * y;
+  }
+  return varA > 0 && varB > 0 ? num / Math.sqrt(varA * varB) : 0;
+}
+
+function musicalProfileFft(n) {
+  if (musicalProfileFftTable && musicalProfileFftTable.n === n) return musicalProfileFftTable;
+  var bits = Math.round(Math.log(n) / Math.LN2);
+  var rev = new Uint16Array(n);
+  for (var i = 0; i < n; i++) {
+    var r = 0;
+    for (var b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b);
+    rev[i] = r;
+  }
+  var win = new Float32Array(n);
+  for (var j = 0; j < n; j++) win[j] = 0.5 - 0.5 * Math.cos(2 * Math.PI * j / (n - 1));
+  // 旋转因子必须预计算：蝶形里现算 Math.cos/sin 是「2400 帧 × 5120 次三角函数」，
+  // 实测能把整轨分析从 0.4s 拖到 4.2s。预表之后只剩乘加。
+  var cosTable = new Array(bits + 1);
+  var sinTable = new Array(bits + 1);
+  for (var size = 2, level = 1; size <= n; size <<= 1, level++) {
+    var half = size >> 1;
+    var cosRow = new Float32Array(half);
+    var sinRow = new Float32Array(half);
+    for (var k = 0; k < half; k++) {
+      var ang = -2 * Math.PI * k / size;
+      cosRow[k] = Math.cos(ang);
+      sinRow[k] = Math.sin(ang);
+    }
+    cosTable[level] = cosRow;
+    sinTable[level] = sinRow;
+  }
+  musicalProfileFftTable = { n: n, rev: rev, win: win, cosTable: cosTable, sinTable: sinTable };
+  return musicalProfileFftTable;
+}
+
+function musicalProfileFftInPlace(re, im, table) {
+  var n = table.n;
+  var i;
+  for (i = 0; i < n; i++) {
+    var j = table.rev[i];
+    if (j > i) {
+      var tr = re[i]; re[i] = re[j]; re[j] = tr;
+      var ti = im[i]; im[i] = im[j]; im[j] = ti;
+    }
+  }
+  for (var size = 2, level = 1; size <= n; size <<= 1, level++) {
+    var half = size >> 1;
+    var cosRow = table.cosTable[level];
+    var sinRow = table.sinTable[level];
+    for (var start = 0; start < n; start += size) {
+      for (var k = 0; k < half; k++) {
+        var wr = cosRow[k];
+        var wi = sinRow[k];
+        var a = start + k;
+        var b = a + half;
+        var xr = re[b] * wr - im[b] * wi;
+        var xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr;
+        im[b] = im[a] - xi;
+        re[a] += xr;
+        im[a] += xi;
+      }
+    }
+  }
+}
+
+function musicalProfileEstimateKey(pitchClassProfile) {
+  var candidates = [];
+  var modes = [['major', MUSICAL_KEY_MAJOR], ['minor', MUSICAL_KEY_MINOR]];
+  for (var m = 0; m < modes.length; m++) {
+    var mode = modes[m][0];
+    var template = modes[m][1];
+    for (var root = 0; root < 12; root++) {
+      var rotated = [];
+      for (var pc = 0; pc < 12; pc++) rotated.push(template[(pc - root + 12) % 12]);
+      candidates.push({ root: root, mode: mode, score: musicalProfileCorrelation(pitchClassProfile, rotated) });
+    }
+  }
+  candidates.sort(function (a, b) { return b.score - a.score; });
+  var best = candidates[0] || { root: 0, mode: 'major', score: 0 };
+  var second = candidates[1] || { score: 0 };
+  return {
+    root: best.root,
+    mode: best.mode,
+    name: MUSICAL_NOTE_NAMES[best.root] + ' ' + best.mode,
+    confidence: musicalProfileRound(Math.max(0, Math.min(1, (best.score - second.score) * 4)), 3),
+    margin: musicalProfileRound(best.score - second.score, 3),
+    fit: musicalProfileRound(best.score, 3)
+  };
+}
+
+function musicalProfileIntervals(contour) {
+  var buckets = [];
+  var i;
+  for (i = 0; i < 25; i++) buckets.push(0);
+  for (i = 1; i < contour.length; i++) {
+    var delta = Math.max(-12, Math.min(12, contour[i] - contour[i - 1]));
+    buckets[delta + 12] += 1;
+  }
+  return musicalProfileNormalize(buckets);
+}
+
+function musicalProfileDominant(chroma) {
+  var bestPc = 0;
+  var bestVal = -1;
+  var total = 0;
+  for (var i = 0; i < 12; i++) {
+    var v = chroma[i] || 0;
+    if (v > bestVal) { bestVal = v; bestPc = i; }
+    total += v;
+  }
+  return { pc: bestPc, share: total > 0 ? bestVal / total : 0 };
+}
+
+// confidence 必须诚实：高了会把噪声当和声证据，低了会让 evidence 恒 false 又变成死代码。
+// 两个独立来源：
+//   1) key.fit —— chroma 与最佳调性模板的**相关系数**（不是余弦；余弦对全正模板没判别力）。
+//      实测：白噪声 0.55、纯鼓 0.57、真实混音 0.80、干净三和弦 0.85+。所以下限 0.45、跨度 0.45。
+//   2) tonalShare —— 12 音级里前 3 的占比。实测：白噪声 0.29、纯鼓 0.40、真实混音 0.42、干净和弦 0.47+。
+//      下限 0.28、跨度 0.20。
+// 两者都乘覆盖率（分析帧数 / 每秒 4 帧），半首歌或解码失败不会假装有证据。
+// 纯鼓那条靠 cuefield 的 noteCount>=12 再兜一层（鼓点没有音高变化，noteCount 恒 0）。
+var MUSICAL_PROFILE_FIT_FLOOR = 0.45;
+var MUSICAL_PROFILE_FIT_SPAN = 0.45;
+var MUSICAL_PROFILE_TONAL_FLOOR = 0.28;
+var MUSICAL_PROFILE_TONAL_SPAN = 0.2;
+function musicalProfileConfidence(key, pitchClassProfile, frames, duration) {
+  var sorted = pitchClassProfile.slice().sort(function (a, b) { return b - a; });
+  var tonalShare = (sorted[0] || 0) + (sorted[1] || 0) + (sorted[2] || 0);
+  var coverage = Math.min(1, frames / Math.max(24, (duration || 0) * 4));
+  var fitPart = Math.max(0, Math.min(1, (toNumberSafe(key.fit) - MUSICAL_PROFILE_FIT_FLOOR) / MUSICAL_PROFILE_FIT_SPAN));
+  var tonalPart = Math.max(0, Math.min(1, (tonalShare - MUSICAL_PROFILE_TONAL_FLOOR) / MUSICAL_PROFILE_TONAL_SPAN));
+  return {
+    confidence: musicalProfileRound(Math.max(0, Math.min(1, (fitPart * 0.55 + tonalPart * 0.45) * coverage)), 3),
+    tonalShare: musicalProfileRound(tonalShare, 3),
+    coverage: musicalProfileRound(coverage, 3)
+  };
+}
+
+function toNumberSafe(value) {
+  var n = Number(value);
+  return isFinite(n) ? n : 0;
+}
+
+async function analyzeMusicalProfile(buffer, token) {
+  if (!buffer || !buffer.length || !buffer.sampleRate) return null;
+  var srcRate = buffer.sampleRate;
+  var channels = buffer.numberOfChannels || 1;
+  var length = buffer.length;
+  var channelData = [];
+  for (var c = 0; c < channels; c++) channelData.push(buffer.getChannelData(c));
+
+  // 盒式平均降采样到 ~11kHz：chroma 只关心 1.6kHz 以下，直接抽取会混叠，先做块平均。
+  // 不额外建 mono 整轨数组（4 分钟 44.1k 就是 42MB），边降采样边混音。
+  var decim = Math.max(1, Math.round(srcRate / MUSICAL_PROFILE_SAMPLE_RATE));
+  var rate = srcRate / decim;
+  var outLen = Math.floor(length / decim);
+  if (outLen < MUSICAL_PROFILE_FFT_SIZE * 2) return null;
+  var pcm = new Float32Array(outLen);
+  var scale = 1 / (decim * channels);
+  for (var i = 0; i < outLen; i++) {
+    var base = i * decim;
+    var acc = 0;
+    for (var k = 0; k < decim; k++) {
+      var pos = base + k;
+      for (var ch = 0; ch < channels; ch++) acc += channelData[ch][pos];
+    }
+    pcm[i] = acc * scale;
+  }
+
+  var table = musicalProfileFft(MUSICAL_PROFILE_FFT_SIZE);
+  var n = table.n;
+  var hop = Math.max(256, Math.round(rate * 0.1));
+  var frameCount = pcm.length > n ? Math.floor((pcm.length - n) / hop) + 1 : 0;
+  if (frameCount < 8) return null;
+
+  var binHz = rate / n;
+  var minBin = Math.max(1, Math.floor(MUSICAL_PROFILE_MIN_HZ / binHz));
+  var maxBin = Math.min((n >> 1) - 1, Math.ceil(MUSICAL_PROFILE_MAX_HZ / binHz));
+  var binClass = new Int8Array(maxBin + 1);
+  var binClassCount = new Int16Array(12);
+  for (var bin = minBin; bin <= maxBin; bin++) {
+    var hz = bin * binHz;
+    var midi = 69 + 12 * (Math.log(hz / 440) / Math.LN2);
+    var pcIndex = ((Math.round(midi) % 12) + 12) % 12;
+    binClass[bin] = pcIndex;
+    binClassCount[pcIndex] += 1;
+  }
+  // 每个音级覆盖的 bin 数差得很远（65~130Hz 一个半音才几个 bin，1kHz 以上几十个）。
+  // 不除权的话白噪声都会被算成「有调性」，chroma 全是低频段的形状。按 sqrt(覆盖数) 归一到每音级等权。
+  var binWeight = new Float32Array(maxBin + 1);
+  for (bin = minBin; bin <= maxBin; bin++) {
+    binWeight[bin] = 1 / Math.sqrt(Math.max(1, binClassCount[binClass[bin]]));
+  }
+
+  var totalChroma = [];
+  for (i = 0; i < 12; i++) totalChroma.push(0);
+  var frameChromas = new Array(frameCount);
+  var contour = [];
+  var lastPc = -1;
+  var re = new Float32Array(n);
+  var im = new Float32Array(n);
+  var magBuf = new Float32Array(maxBin - minBin + 2);
+
+  for (var f = 0; f < frameCount; f++) {
+    var off = f * hop;
+    for (i = 0; i < n; i++) {
+      re[i] = pcm[off + i] * table.win[i];
+      im[i] = 0;
+    }
+    musicalProfileFftInPlace(re, im, table);
+    var chroma = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var energy = 0;
+    var frameMax = 0;
+    for (bin = minBin; bin <= maxBin; bin++) {
+      var rawMag = Math.sqrt(re[bin] * re[bin] + im[bin] * im[bin]);
+      magBuf[bin - minBin] = rawMag;
+      energy += rawMag;
+      if (rawMag > frameMax) frameMax = rawMag;
+    }
+    // 只取谱峰（局部极大且不低于帧内最大的 12%），不要把谱线之间的噪声地板也算进 chroma。
+    // 直接求和会把宽带噪声（鼓、齿音、气声）灌满 12 个音级，实测真实电子曲 keyFit 只有 0.55，
+    // 和纯白噪声（0.54）分不开。取峰之后噪声帧几乎不贡献，和声帧只留基频与强谐波。
+    var peakGate = frameMax * MUSICAL_PROFILE_PEAK_MIN_SHARE;
+    for (bin = minBin; bin <= maxBin; bin++) {
+      var mag = magBuf[bin - minBin];
+      if (musicalProfilePeakOnly) {
+        var prevMag = magBuf[bin - minBin - 1] || 0;
+        var nextMag = magBuf[bin - minBin + 1] || 0;
+        if (!(mag >= prevMag && mag > nextMag)) continue;
+        if (mag < peakGate) continue;
+      }
+      chroma[binClass[bin]] += mag * binWeight[bin];
+    }
+    frameChromas[f] = chroma;
+    for (i = 0; i < 12; i++) totalChroma[i] += chroma[i];
+    // 旋律轮廓（音级级近似）：本帧音级足够集中才算一次「音高变化」，否则当噪声跳过
+    if (energy > 1e-4) {
+      var dominant = musicalProfileDominant(chroma);
+      if (dominant.share >= 0.24 && dominant.pc !== lastPc) {
+        contour.push(dominant.pc + 60);
+        lastPc = dominant.pc;
+      }
+    }
+    if ((f & 255) === 255) {
+      // 用 yieldToPaint 而不是 yieldToIdle：主界面一直在 rAF 渲染，
+      // requestIdleCallback 会被拖到 1200ms 超时才回调，实测 1255 帧的分析被 idle 等待拖成 3.7s。
+      await yieldToPaint();
+      if (token !== beatMapToken) return null;
+    }
+  }
+
+  var pitchClassProfile = musicalProfileNormalize(totalChroma);
+  var key = musicalProfileEstimateKey(pitchClassProfile);
+  var intervalProfile = musicalProfileIntervals(contour);
+  var quality = musicalProfileConfidence(key, pitchClassProfile, frameCount, buffer.duration);
+
+  // 局部窗口：cuefield 的 compareLocalMusicalWindows 需要 windows[{start,duration,confidence,noteCount,...}]，
+  // 用来判断「切出点附近」的和声是否兼容，而不是整首歌平均。
+  // 短音频（试听片段）要缩短窗口，否则 framesPerWindow 比总帧数还大，windows 恒空。
+  var frameStepSec = hop / rate;
+  var windowSeconds = buffer.duration >= 48 ? MUSICAL_PROFILE_WINDOW_SEC : Math.max(3, buffer.duration / 4);
+  var framesPerWindow = Math.max(8, Math.round(windowSeconds / frameStepSec));
+  var windows = [];
+  for (var w = 0; w < frameChromas.length && windows.length < MUSICAL_PROFILE_MAX_WINDOWS; w += framesPerWindow) {
+    var slice = frameChromas.slice(w, w + framesPerWindow);
+    if (slice.length < Math.max(4, Math.floor(framesPerWindow * 0.5))) continue;
+    var sum = [];
+    for (i = 0; i < 12; i++) sum.push(0);
+    var windowContour = [];
+    var windowLastPc = -1;
+    for (var s = 0; s < slice.length; s++) {
+      var frameChroma = slice[s];
+      var frameEnergy = 0;
+      for (i = 0; i < 12; i++) {
+        sum[i] += frameChroma[i];
+        frameEnergy += frameChroma[i];
+      }
+      if (frameEnergy > 1e-4) {
+        var frameDominant = musicalProfileDominant(frameChroma);
+        if (frameDominant.share >= 0.24 && frameDominant.pc !== windowLastPc) {
+          windowContour.push(frameDominant.pc + 60);
+          windowLastPc = frameDominant.pc;
+        }
+      }
+    }
+    var windowProfile = musicalProfileNormalize(sum);
+    var windowKey = musicalProfileEstimateKey(windowProfile);
+    var windowQuality = musicalProfileConfidence(windowKey, windowProfile, slice.length, windowSeconds);
+    windows.push({
+      start: musicalProfileRound((w * hop) / rate, 3),
+      duration: musicalProfileRound((slice.length * hop) / rate, 3),
+      confidence: windowQuality.confidence,
+      noteCount: windowContour.length,
+      pitchClassProfile: windowProfile,
+      intervalProfile: musicalProfileIntervals(windowContour),
+      key: { root: windowKey.root, mode: windowKey.mode, name: windowKey.name, confidence: windowKey.confidence }
+    });
+  }
+
+  return {
+    source: 'chroma-fft-v1',
+    noteCount: contour.length,
+    noteDensity: musicalProfileRound(buffer.duration > 0 ? contour.length / buffer.duration : 0, 3),
+    pitchClassProfile: pitchClassProfile,
+    intervalProfile: intervalProfile,
+    key: { root: key.root, mode: key.mode, name: key.name, confidence: key.confidence },
+    confidence: quality.confidence,
+    windows: windows,
+    debug: {
+      frameCount: frameCount,
+      srcRate: srcRate,
+      rate: musicalProfileRound(rate, 1),
+      decim: decim,
+      keyMargin: key.margin,
+      keyFit: key.fit,
+      tonalShare: quality.tonalShare,
+      coverage: quality.coverage,
+      contourCount: contour.length
+    }
+  };
 }

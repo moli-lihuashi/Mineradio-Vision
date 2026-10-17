@@ -218,12 +218,47 @@
         return result.toString();
       }
 
+      // decision.url 来自上游响应，直接 appendChild(<script>) 等于把「响应链路」
+      // 当成可信代码来源：响应被篡改 = 在持有登录 cookie 的窗口里执行任意 JS。
+      // 因此只允许 https + 白名单域；官方若换 CDN，用
+      // MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS=host1,host2 追加（主进程会注入到
+      // window.__mineradioVerifyScriptHosts），拒绝时错误信息带上被拦的域名。
+      const VERIFY_SCRIPT_HOST_ALLOWLIST = [
+        'api.qishui.com',
+        'bff-pc.qishui.com',
+        'verify.zijieapi.com',
+        'auth.zijieapi.com',
+      ];
+      function verifyScriptHostAllowed(hostname) {
+        const host = String(hostname || '').toLowerCase();
+        if (!host) return false;
+        const extra = String(window.__mineradioVerifyScriptHosts || '')
+          .split(',')
+          .map(item => item.trim().toLowerCase())
+          .filter(Boolean);
+        return VERIFY_SCRIPT_HOST_ALLOWLIST.concat(extra)
+          .some(item => host === item || host.endsWith('.' + item));
+      }
+
       function loadVerifyScript(url) {
         return new Promise((resolve, reject) => {
+          let parsed = null;
+          try { parsed = new URL(String(url)); } catch (_) {}
+          if (!parsed || parsed.protocol !== 'https:') {
+            reject(new Error(`二次验证组件必须使用 https：${safeUrl(url)}`));
+            return;
+          }
+          if (!verifyScriptHostAllowed(parsed.hostname)) {
+            reject(new Error(
+              `二次验证组件域名不在白名单：${parsed.hostname}` +
+              '（确认域名可信后可设置 MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS 追加）',
+            ));
+            return;
+          }
           const script = document.createElement('script');
           script.type = 'text/javascript';
           script.crossOrigin = 'anonymous';
-          script.src = url;
+          script.src = parsed.toString();
           script.onload = resolve;
           script.onerror = () => reject(new Error(`二次验证组件加载失败：${safeUrl(url)}`));
           document.head.appendChild(script);

@@ -374,6 +374,9 @@ function refreshQQVipStatusNow(reason) {
 function startQQLoginStatusAutoRefresh() {
   if (qqLoginAutoRefreshTimer) clearInterval(qqLoginAutoRefreshTimer);
   qqLoginAutoRefreshTimer = setInterval(function () {
+    // 后台隐藏或从未登录时不轮询：省去每 45s 一次的无谓请求（笔记本电量/后台流量）
+    if (document.hidden) return;
+    if (!qqLoginStatus.loggedIn && !qqLoginWasLoggedIn) return;
     refreshQQLoginStatus({ reason: 'auto' }).catch(function (e) { console.warn('QQ login auto refresh failed:', e); });
   }, 45000);
   if (startQQLoginStatusAutoRefresh._boundFocusRefresh) return;
@@ -486,6 +489,8 @@ async function refreshKugouLoginStatus() {
 function startKugouLoginStatusAutoRefresh() {
   if (kugouLoginAutoRefreshTimer) clearInterval(kugouLoginAutoRefreshTimer);
   kugouLoginAutoRefreshTimer = setInterval(function () {
+    if (document.hidden) return;
+    if (!kugouLoginStatus.loggedIn && !kugouLoginWasLoggedIn) return;
     refreshKugouLoginStatus().catch(function (e) { console.warn('Kugou login auto refresh failed:', e); });
   }, 45000);
 }
@@ -551,6 +556,8 @@ async function refreshQishuiLoginStatus() {
 function startQishuiLoginStatusAutoRefresh() {
   if (qishuiLoginAutoRefreshTimer) clearInterval(qishuiLoginAutoRefreshTimer);
   qishuiLoginAutoRefreshTimer = setInterval(function () {
+    if (document.hidden) return;
+    if (!qishuiLoginStatus.loggedIn && !qishuiLoginWasLoggedIn) return;
     refreshQishuiLoginStatus().catch(function (e) { console.warn('Qishui login auto refresh failed:', e); });
   }, 45000);
 }
@@ -620,6 +627,8 @@ async function refreshSpotifyLoginStatus() {
 function startSpotifyLoginStatusAutoRefresh() {
   if (spotifyLoginAutoRefreshTimer) clearInterval(spotifyLoginAutoRefreshTimer);
   spotifyLoginAutoRefreshTimer = setInterval(function () {
+    if (document.hidden) return;
+    if (!spotifyLoginStatus.loggedIn && !spotifyLoginWasLoggedIn) return;
     refreshSpotifyLoginStatus().catch(function (e) { console.warn('Spotify login auto refresh failed:', e); });
   }, 45000);
 }

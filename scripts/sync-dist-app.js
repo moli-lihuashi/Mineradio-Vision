@@ -19,6 +19,14 @@ const app = targetArg
 
 function copyFile(src, dst) {
   fs.mkdirSync(path.dirname(dst), { recursive: true });
+  // 目标可能带 ReadOnly 属性（如 npm tarball 的权限位被上一次同步带进来），
+  // 直接覆盖只读文件会 EPERM。先清掉目标只读位再拷。
+  try {
+    if (fs.existsSync(dst)) {
+      const st = fs.statSync(dst);
+      if (!(st.mode & 0o200)) fs.chmodSync(dst, st.mode | 0o200);
+    }
+  } catch (_) {}
   fs.copyFileSync(src, dst);
 }
 
@@ -88,7 +96,8 @@ const decryptorSrc = path.join(root, 'qishui-audio-decryptor');
 if (fs.existsSync(decryptorSrc)) files += copyTree(decryptorSrc, path.join(app, 'qishui-audio-decryptor'));
 
 // Optional trees if present in pack / source
-for (const dir of ['server', 'cuefield', 'build', 'qishui-auth-v6']) {
+// cuefield-next = 上游 19 模块的 v2 过渡引擎，由 server/routes/update.js 惰性 require（engine:'v2'），漏同步会让该分支恒回落 v1。
+for (const dir of ['server', 'cuefield', 'cuefield-next', 'build', 'qishui-auth-v6']) {
   const src = path.join(root, dir);
   const dst = path.join(app, dir);
   if (fs.existsSync(src)) files += copyTree(src, dst);

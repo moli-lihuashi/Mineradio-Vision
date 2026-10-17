@@ -119,11 +119,16 @@ function run() {
     const discoverySrc = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'qishui-local-session-discovery.js'), 'utf8');
     assert(discoverySrc.includes('discoverQishuiClientDataRoots'));
     assert(discoverySrc.includes('discoverQishuiCookieStores'));
-    assert(importSrc.includes('localSessionDiagnostics: imported.diagnostics || null'));
+    // 契约变更（2026-10-17）：导入结果改为把 diagnostics 原样挂在返回值上（调用方自行读取），
+    // 不再拼成 localSessionDiagnostics 字段。
+    assert(importSrc.includes('return Object.assign({}, result || {}, { diagnostics })'), 'import result must carry diagnostics');
     assert(importSrc.includes("mode: 'sodamusic-local-session'"));
     assert(importSrc.includes("console.log('[QishuiLocalSession]', JSON.stringify(diagnostics))"));
     assert(main.includes('qishui-local-session-import') || main.includes('openQishuiMusicLoginWindow'));
-    assert(main.includes('qishui-music-open-login'));
+    // 契约变更（2026-10-17）：旧的 qishui-music-open-login IPC 已随本机导入窗口下线，
+    // 登录改走扫码桥；主进程现在持久化 QISHUI_QR_CONFIG_FILE，并保留清理登录态的 IPC。
+    assert(main.includes('QISHUI_QR_CONFIG_FILE'), 'desktop must persist the Qishui QR login config');
+    assert(main.includes('qishui-music-clear-login'), 'desktop must keep the clear-login IPC');
     assert(main.includes('QISHUI_COOKIE_FILE'));
 
     const migrationListStart = main.indexOf('const APP_OWNED_MIGRATION_FILES');

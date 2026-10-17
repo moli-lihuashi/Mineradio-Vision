@@ -94,26 +94,6 @@
       rootSelector: '#fx-panel',
       glassSelector: '#fx-panel'
     },
-    // 搜索结果面板
-    searchResults: {
-      blurAmount: 0.60,
-      refraction: 0.15,
-      chromAberration: 0.0,
-      edgeHighlight: 0.10,
-      specular: 0.04,
-      fresnel: 0.9,
-      cornerRadius: 16,
-      zRadius: 9,
-      shadowOpacity: 0.36,
-      shadowSpread: 18,
-      shadowOffsetY: 3,
-      saturation: 0.30,
-      brightness: 0.03,
-      tintStrength: 0.0,
-      bevelMode: 0,
-      rootSelector: '#search-results',
-      glassSelector: '#search-results .search-result'
-    },
     // 底部播放控件栏：胶囊 + 双界面折射；弱描边避免塑料白边
     bottomBar: {
       blurAmount: 0.72,

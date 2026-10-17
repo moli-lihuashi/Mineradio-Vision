@@ -295,6 +295,19 @@ class QishuiAuthRuntime {
       true,
     );
     await this.window.loadURL(this.assetBase + 'security_host.html');
+    // decision.url 的域名白名单可由环境变量追加（官方换 CDN 时不必改代码）。
+    // 用 did-finish-load 也覆盖后续重载，避免页面刷新后白名单丢失。
+    const extraVerifyScriptHosts = String(process.env.MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS || '').trim();
+    if (extraVerifyScriptHosts) {
+      const injectVerifyHosts = () => {
+        this.window.webContents.executeJavaScript(
+          `window.__mineradioVerifyScriptHosts = ${JSON.stringify(extraVerifyScriptHosts)}; true`,
+          true,
+        ).catch(() => {});
+      };
+      this.window.webContents.on('did-finish-load', injectVerifyHosts);
+      injectVerifyHosts();
+    }
     await this.waitForBdms();
     this.browserInfo = await this.window.webContents.executeJavaScript('window.__qishuiBrowserInfo()', true);
     updateConfig({ msToken: this.msToken });

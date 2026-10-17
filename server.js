@@ -189,6 +189,9 @@ const APP_PACKAGE = readPackageInfo();
 const APP_VERSION = process.env.MINERADIO_VERSION || APP_PACKAGE.version || '0.9.11';
 const UPDATE_CONFIG = readUpdateConfig(APP_PACKAGE);
 const PATCH_MAX_BYTES = 12 * 1024 * 1024;
+// 安装包下载累计字节硬上限：content-length 可能撒谎或缺失，恶意/异常上游不能写满磁盘。
+// Electron 安装包量级在 100~200MB，800MB 留足余量同时挡住无限流。
+const UPDATE_INSTALLER_MAX_BYTES = 800 * 1024 * 1024;
 const PATCH_ALLOWED_ROOTS = new Set(['public']);
 const PATCH_STATIC_EXTENSIONS = new Set([
   '.html', '.js', '.css', '.json', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
@@ -426,6 +429,24 @@ function tryDecryptSafeStorage(buf) {
   } catch (_) {}
   return '';
 }
+// 凭据落盘加密（与 desktop/secret-store.js 同格式："MR" + safeStorage 密文）。
+// 返回 null 表示本机拿不到可用加密后端。
+function tryEncryptSafeStorage(text) {
+  try {
+    if (!_safeStorageRef) {
+      _safeStorageRef = require('electron').safeStorage || null;
+    }
+    if (_safeStorageRef && _safeStorageRef.isEncryptionAvailable && _safeStorageRef.isEncryptionAvailable()) {
+      const enc = Buffer.from(_safeStorageRef.encryptString(String(text || '')));
+      return Buffer.concat([Buffer.from([ENCRYPTED_PREFIX_BYTE0, ENCRYPTED_PREFIX_BYTE1]), enc]);
+    }
+  } catch (_) {}
+  return null;
+}
+// 明文兜底是显式开发开关，默认关闭：加密不可用时宁可这次会话不落盘。
+function plaintextCookieAllowed() {
+  return process.env.MINERADIO_ALLOW_PLAINTEXT_COOKIE === '1';
+}
 let readCookieFile = (filePath) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return '';
@@ -435,6 +456,12 @@ let readCookieFile = (filePath) => {
       const dec = tryDecryptSafeStorage(buf.subarray(2));
       if (dec) return dec;
       cookieDebugLog('readCookieFile: encrypted cookie unreadable (safeStorage unavailable): ' + filePath);
+      return '';
+    }
+    // 无 "MR" 前缀 = 明文。默认路径下 fail-closed：只有显式允许明文（开发态）
+    // 才把它当凭据用，避免「加密形同虚设」。
+    if (!plaintextCookieAllowed()) {
+      cookieDebugLog('readCookieFile: plaintext cookie ignored (encryption unavailable): ' + filePath);
       return '';
     }
     return buf.toString('utf8').trim();
@@ -451,8 +478,20 @@ let writeCookieFile = (filePath, content) => {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return;
     }
-    fs.writeFileSync(filePath, value, 'utf8');
-    cookieDebugLog('writeCookieFile(default) OK: ' + filePath + ' len=' + value.length);
+    // 默认写入器（未经 desktop 注入时使用）：能加密就加密，加密不可用就拒绝落盘。
+    const enc = tryEncryptSafeStorage(value);
+    if (enc) {
+      fs.writeFileSync(filePath, enc);
+      cookieDebugLog('writeCookieFile(default) OK(encrypted): ' + filePath + ' len=' + value.length);
+      return;
+    }
+    if (plaintextCookieAllowed()) {
+      fs.writeFileSync(filePath, value, 'utf8');
+      cookieDebugLog('writeCookieFile(default) OK(plaintext, allowed by env): ' + filePath + ' len=' + value.length);
+      return;
+    }
+    cookieDebugLog('writeCookieFile(default) REFUSED: encryption unavailable, plaintext not allowed: ' + filePath);
+    console.warn('[Cookie] encryption unavailable, credential NOT persisted (set MINERADIO_ALLOW_PLAINTEXT_COOKIE=1 only for dev):', filePath);
   } catch (e) {
     cookieDebugLog('writeCookieFile(default) FAILED: ' + filePath + ' ' + e.message);
     console.warn('[Cookie] write failed:', filePath, e.message);
@@ -482,6 +521,22 @@ function saveQQCookie(c) {
   qqCookie = normalizeCookieHeader(c) || rawCookieFallback(c);
   writeCookieFile(QQ_COOKIE_FILE, qqCookie);
 }
+// QQ cookie 写保护：
+// 1) withQQCookieWriteLock 序列化「读-改-写」，后台刷新在锁内重读最新值再合并，
+//    防止基于旧读取的写回冲掉用户刚手动保存的新值；
+// 2) qqCookieEpoch 代际校验，手动保存/登出即递增，在途刷新写回前发现代际变化就放弃写回，
+//    防止旧刷新结果把已登出的账号又写活。
+let qqCookieWriteChain = Promise.resolve();
+function withQQCookieWriteLock(fn) {
+  const run = qqCookieWriteChain.then(fn, fn);
+  qqCookieWriteChain = run.then(() => {}, () => {});
+  return run;
+}
+let qqCookieEpoch = 0;
+function bumpQQCookieEpoch() {
+  qqCookieEpoch += 1;
+  return qqCookieEpoch;
+}
 
 let kugouCookie = readCookieFile(KUGOU_COOKIE_FILE);
 function saveKugouCookie(c) {
@@ -492,15 +547,9 @@ function saveKugouCookie(c) {
     writeCookieFile(KUGOU_COOKIE_FILE, kugouCookie);
     cookieDebugLog('saveKugouCookie write OK');
   } catch (e) {
-    cookieDebugLog('saveKugouCookie write THREW: ' + e.message + ' — trying plaintext fallback');
-    try {
-      if (kugouCookie && KUGOU_COOKIE_FILE) {
-        fs.writeFileSync(KUGOU_COOKIE_FILE, kugouCookie, 'utf8');
-        cookieDebugLog('saveKugouCookie plaintext fallback OK');
-      }
-    } catch (e2) {
-      cookieDebugLog('saveKugouCookie plaintext fallback FAILED: ' + e2.message);
-    }
+    // 不再明文兜底：加密写入失败时凭据只保留在内存里，不落盘
+    cookieDebugLog('saveKugouCookie write THREW: ' + e.message + ' — credential kept in memory only');
+    console.warn('[Cookie] kugou credential NOT persisted:', e.message);
   }
 }
 
@@ -512,15 +561,9 @@ function saveQishuiCookie(c) {
     writeCookieFile(QISHUI_COOKIE_FILE, qishuiCookie);
     cookieDebugLog('saveQishuiCookie write OK');
   } catch (e) {
-    cookieDebugLog('saveQishuiCookie write THREW: ' + e.message + ' — trying plaintext fallback');
-    try {
-      if (qishuiCookie && QISHUI_COOKIE_FILE) {
-        fs.writeFileSync(QISHUI_COOKIE_FILE, qishuiCookie, 'utf8');
-        cookieDebugLog('saveQishuiCookie plaintext fallback OK');
-      }
-    } catch (e2) {
-      cookieDebugLog('saveQishuiCookie plaintext fallback FAILED: ' + e2.message);
-    }
+    // 不再明文兜底：加密写入失败时凭据只保留在内存里，不落盘
+    cookieDebugLog('saveQishuiCookie write THREW: ' + e.message + ' — credential kept in memory only');
+    console.warn('[Cookie] qishui credential NOT persisted:', e.message);
   }
 }
 
@@ -1447,6 +1490,12 @@ function ensureMirrorCanBeVerified(job, candidate) {
   if (job.sha256 || job.sha512) return;
   throw updateError('MIRROR_HASH_MISSING', 'Mirror download skipped because no digest is available');
 }
+// 致命错误：不再尝试剩余镜像（同一资产在各线路上一样会超限/一样大），直接终局
+function fatalUpdateError(code, message) {
+  const err = updateError(code, message);
+  err.updateFatal = true;
+  return err;
+}
 async function downloadUpdateAssetWithMirrors(job) {
   const tmpPath = job.filePath + '.download';
   const candidates = Array.isArray(job.downloadCandidates) && job.downloadCandidates.length
@@ -1468,6 +1517,10 @@ async function downloadUpdateAssetWithMirrors(job) {
       if (!resp.ok) throw updateError('HTTP_' + resp.status, 'HTTP ' + resp.status);
 
       const totalHeader = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+      // 声称的大小就超限：直接拒，不必开始写盘（致命：换镜像也一样大）
+      if (totalHeader > UPDATE_INSTALLER_MAX_BYTES) {
+        throw fatalUpdateError('UPDATE_FILE_TOO_LARGE', '安装包超过大小上限 (' + Math.round(totalHeader / 1048576) + 'MB)');
+      }
       job.total = totalHeader || job.expectedSize || job.total || 0;
       job.progress = 0;
       job.updatedAt = Date.now();
@@ -1476,12 +1529,15 @@ async function downloadUpdateAssetWithMirrors(job) {
 
       const writer = fs.createWriteStream(tmpPath);
       const reader = resp.body.getReader();
+      let receivedOverLimit = false;
       try {
         while (true) {
           const chunk = await reader.read();
           if (chunk.done) break;
           const buf = Buffer.from(chunk.value);
           job.received += buf.length;
+          // 累计硬上限：content-length 撒谎/缺失时的真实护栏
+          if (job.received > UPDATE_INSTALLER_MAX_BYTES) { receivedOverLimit = true; break; }
           speedWindowBytes += buf.length;
           const now = Date.now();
           if (now - speedWindowAt >= 900) {
@@ -1504,6 +1560,11 @@ async function downloadUpdateAssetWithMirrors(job) {
         writer.end();
         await once(writer, 'finish').catch(() => {});
       }
+      if (receivedOverLimit) {
+        // 先关流再删临时文件（Windows 上占用中 unlink 会 EBUSY）
+        try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
+        throw fatalUpdateError('UPDATE_FILE_TOO_LARGE', '安装包超过大小上限 (' + Math.round(UPDATE_INSTALLER_MAX_BYTES / 1048576) + 'MB)，已中断');
+      }
 
       await verifyUpdateFile(tmpPath, job);
       if (fs.existsSync(job.filePath)) fs.unlinkSync(job.filePath);
@@ -1521,6 +1582,8 @@ async function downloadUpdateAssetWithMirrors(job) {
       job.failedAttempts = failures.slice(-6);
       job.message = i < candidates.length - 1 ? ((candidate.label || '当前线路') + '失败，正在切换线路') : info.reason;
       job.updatedAt = Date.now();
+      // 致命错误（如体积超限）：换线路无意义，直接终局，不再继续下载其余镜像
+      if (err && err.updateFatal) { setUpdateJobError(job, err, '下载失败：' + info.reason); return; }
       if (i >= candidates.length - 1) setUpdateJobError(job, err, '下载失败：' + info.reason);
     }
   }
@@ -1640,7 +1703,10 @@ function writePatchFile(job, file) {
   return rel;
 }
 function assertPatchSignature(payload) {
-  if (!UPDATE_PUBKEY_PEM) return;
+  // fail-closed：未配置公钥时拒绝应用补丁，而不是跳过校验。
+  // 补丁会直接写入安装目录（public/ 下的 HTML/JS），无签名校验等于给供应链投毒开后门。
+  // 需要启用补丁更新时，必须在启动环境设置 MINERADIO_UPDATE_PUBKEY_PEM（见 build/patch-sign.js）。
+  if (!UPDATE_PUBKEY_PEM) throw new Error('PATCH_SIGNATURE_UNCONFIGURED');
   const signature = String(payload.signature || payload.sig || '').trim();
   if (!signature) throw new Error('PATCH_SIGNATURE_MISSING');
   const signedPayload = Object.assign({}, payload);
@@ -4160,6 +4226,7 @@ async function refreshQQCookieSession(opts) {
 
   qqCookieRefreshPromise = (async () => {
     refreshQQConfiguredCookieStore();
+    const epochAtStart = qqCookieEpoch; // 代际基线：期间发生手动保存/登出则放弃写回
     const cookieObj = qqCookieObject();
     const uin = qqCookieUin(cookieObj);
     const musicKey = qqCookiePlaybackKey(cookieObj) || qqCookieMusicKey(cookieObj);
@@ -4226,8 +4293,39 @@ async function refreshQQCookieSession(opts) {
           // Same key from musickey path — still accept, but try refresh_token next if available.
           // Prefer a changed key when possible; accept same key as soft renew.
         }
-        const merged = applyQQMusicKeyFields(cookieObj, extracted.musicKey, extracted);
-        saveQQCookie(serializeCookieObject(merged));
+        if (epochAtStart !== qqCookieEpoch) {
+          // 刷新在途期间用户手动保存或登出过：放弃写回，别把用户新状态覆盖掉
+          console.log('[QQLogin] cookie refresh superseded by newer manual save/logout; write-back skipped');
+          const current = await getQQLoginInfo({ autoRenew: false, skipStoreReload: true });
+          return {
+            ok: !!(current && current.loggedIn && !current.authExpired),
+            refreshed: false,
+            reason: 'superseded',
+            info: current,
+          };
+        }
+        // 锁内重读最新 cookie 再合并写入，防旧读取值冲掉手动保存的新值
+        let supersededWhileQueued = false;
+        await withQQCookieWriteLock(async () => {
+          // 上面校验完到拿到锁之间若发生手动保存/登出（代际已变），同样放弃写回
+          if (epochAtStart !== qqCookieEpoch) {
+            supersededWhileQueued = true;
+            return;
+          }
+          const freshCookieObj = qqCookieObject();
+          const mergedFresh = applyQQMusicKeyFields(freshCookieObj, extracted.musicKey, extracted);
+          saveQQCookie(serializeCookieObject(mergedFresh));
+        });
+        if (supersededWhileQueued) {
+          console.log('[QQLogin] cookie refresh superseded while queued on write lock; write-back skipped');
+          const current = await getQQLoginInfo({ autoRenew: false, skipStoreReload: true });
+          return {
+            ok: !!(current && current.loggedIn && !current.authExpired),
+            refreshed: false,
+            reason: 'superseded',
+            info: current,
+          };
+        }
         qqCookieLastRefreshAt = Date.now();
         const info = await getQQLoginInfo({ autoRenew: false, skipStoreReload: true });
         const ok = !!(info && info.loggedIn && !info.authExpired);
@@ -4434,8 +4532,21 @@ async function assertProxyableMediaUrl(raw, label) {
   return parsed.toString();
 }
 
-async function fetchProxiedMedia(mediaUrl, headers) {
-  return fetchWithTimeout(mediaUrl, { headers: headers || {} }, PROXY_FETCH_TIMEOUT_MS);
+// 代理媒体拉取：manual 重定向 + 逐跳重新校验，防白名单 CDN 用 302 把请求带进内网/本机。
+// 合法 CDN 跳转（同白名单 host）仍可跟随，最多 PROXY_MEDIA_MAX_REDIRECTS 跳。
+const PROXY_MEDIA_MAX_REDIRECTS = 5;
+async function fetchProxiedMedia(mediaUrl, headers, redirectsLeft) {
+  const hopsLeft = redirectsLeft == null ? PROXY_MEDIA_MAX_REDIRECTS : redirectsLeft;
+  const resp = await fetchWithTimeout(mediaUrl, { headers: headers || {}, redirect: 'manual' }, PROXY_FETCH_TIMEOUT_MS);
+  if (resp.status >= 300 && resp.status < 400) {
+    const location = resp.headers && resp.headers.get ? resp.headers.get('location') : '';
+    if (!location) return resp;
+    if (hopsLeft <= 0) throw new Error('PROXY_REDIRECT_LIMIT');
+    const nextUrl = new URL(location, mediaUrl).toString();
+    await assertProxyableMediaUrl(nextUrl, 'PROXY_REDIRECT');
+    return fetchProxiedMedia(nextUrl, headers, hopsLeft - 1);
+  }
+  return resp;
 }
 
 function requiresApiAuth(pathname) {
@@ -4557,16 +4668,6 @@ async function getQishuiDecryptedAudio(audioUrl) {
       if (encryptedBuffer.length > QISHUI_ENCRYPTED_AUDIO_MAX_BYTES) {
         throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
       }
-      // [临时诊断-确认后删除] 转储首个汽水加密音频（transfer 前），排查渲染崩溃
-      if (!global.__qishuiAudioDumpEnc) {
-        global.__qishuiAudioDumpEnc = true;
-        try {
-          const dir = 'D:/Mineradio/_qishui_audio_dump';
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(path.join(dir, 'encrypted.bin'), encryptedBuffer);
-          console.log('[QishuiDump] encrypted.bin ' + encryptedBuffer.length + ' -> ' + dir);
-        } catch (e) { console.log('[QishuiDump] enc failed', e.message); }
-      }
       const result = await qishuiDecryptAudio(encryptedBuffer, parsed.auth);
       const payload = {
         buffer: result.buffer,
@@ -4577,16 +4678,6 @@ async function getQishuiDecryptedAudio(audioUrl) {
       // 校验不过就当该曲解密失败，返回错误让播放走降级，绝不把脏数据发出去。
       if (!looksLikeValidDecryptedAudio(payload.buffer, payload.extension)) {
         throw new Error('Qishui decrypted audio failed signature check');
-      }
-      // [临时诊断-确认后删除] 转储首个汽水解密产物，排查渲染崩溃
-      if (!global.__qishuiAudioDumpDec) {
-        global.__qishuiAudioDumpDec = true;
-        try {
-          const dir = 'D:/Mineradio/_qishui_audio_dump';
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(path.join(dir, 'decrypted' + payload.extension), payload.buffer);
-          console.log('[QishuiDump] decrypted' + payload.extension + ' ' + payload.buffer.length + ' -> ' + dir);
-        } catch (e) { console.log('[QishuiDump] dec failed', e.message); }
       }
       rememberQishuiDecryptedAudio(key, payload);
       return payload;
@@ -6486,7 +6577,7 @@ const routeCtx = {
   artist_detail, artist_songs, artist_top_song, lyric, lyric_new,
   // ---- qq ----
   handleQQSearch, handleQQSongUrl, handleQQLyric, getQQLoginInfo, normalizeQQCookieInput,
-  qqCookieUin, qqCookieMusicKey, saveQQCookie, refreshQQCookieSession, refreshQQConfiguredCookieStore, getQQCookieFile,
+  qqCookieUin, qqCookieMusicKey, saveQQCookie, bumpQQCookieEpoch, withQQCookieWriteLock, refreshQQCookieSession, refreshQQConfiguredCookieStore, getQQCookieFile,
   handleQQUserPlaylists, handleQQPlaylistTracks, handleQQArtistDetail, handleQQSongComments,
   // ---- kugou ----
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,

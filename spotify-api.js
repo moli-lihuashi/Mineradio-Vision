@@ -148,11 +148,55 @@ function getSpotifyTokenFile() {
   return process.env.SPOTIFY_TOKEN_FILE || process.env.MINERADIO_SPOTIFY_TOKEN_FILE || DEFAULT_SPOTIFY_TOKEN_FILE;
 }
 
+// OAuth token 是账号凭据，落盘必须加密（与 desktop/secret-store.js 同一格式：
+// "MR" 前缀 + safeStorage/DPAPI 密文）。
+const ENCRYPTED_PREFIX = Buffer.from([0x4d, 0x52]); // "MR"
+
+function spotifySafeStorage() {
+  try {
+    const ss = require('electron').safeStorage;
+    if (ss && typeof ss.isEncryptionAvailable === 'function' && ss.isEncryptionAvailable()) return ss;
+  } catch (_) {}
+  return null;
+}
+
+function readTokenFilePayload(file) {
+  const buf = fs.readFileSync(file);
+  if (!buf.length) return {};
+  if (buf.length > 2 && buf[0] === ENCRYPTED_PREFIX[0] && buf[1] === ENCRYPTED_PREFIX[1]) {
+    const ss = spotifySafeStorage();
+    if (!ss) {
+      console.warn('[SpotifyToken] encrypted token file present but OS encryption unavailable:', file);
+      return {};
+    }
+    return JSON.parse(ss.decryptString(buf.subarray(2)));
+  }
+  // 历史明文 token：只有本机加密可用（能立刻在下次写入时升级为密文）才接受；
+  // 加密不可用时 fail-closed，宁可让用户重新授权，也不继续信任明文凭据。
+  if (!spotifySafeStorage()) {
+    console.warn('[SpotifyToken] plaintext token file ignored (OS encryption unavailable):', file);
+    return {};
+  }
+  return JSON.parse(buf.toString('utf8').replace(/^\uFEFF/, ''));
+}
+
+function writeTokenFilePayload(file, payload) {
+  const ss = spotifySafeStorage();
+  if (!ss) {
+    const err = new Error('SPOTIFY_TOKEN_STORAGE_UNAVAILABLE');
+    err.code = 'SPOTIFY_TOKEN_STORAGE_UNAVAILABLE';
+    throw err;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const enc = ss.encryptString(JSON.stringify(payload));
+  fs.writeFileSync(file, Buffer.concat([ENCRYPTED_PREFIX, Buffer.from(enc)]));
+}
+
 function readStoredSpotifyToken() {
   const file = getSpotifyTokenFile();
   try {
     if (!file || !fs.existsSync(file)) return { file, accessToken: '', refreshToken: '', expiresAt: 0 };
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    const raw = readTokenFilePayload(file);
     return {
       file,
       accessToken: normalizeText(raw.accessToken || raw.access_token),
@@ -195,7 +239,7 @@ function saveSpotifyOAuthToken(payload) {
     err.code = 'SPOTIFY_TOKEN_MISSING';
     throw err;
   }
-  writeJsonFile(getSpotifyTokenFile(), saved);
+  writeTokenFilePayload(getSpotifyTokenFile(), saved);
   spotifyProfileCache = { value: null, at: 0, promise: null };
   return {
     provider: 'spotify',
@@ -464,15 +508,20 @@ function spotifyInvalidGrant(err) {
 function invalidateSpotifyAccessToken() {
   const stored = readStoredSpotifyToken();
   if (!stored.refreshToken) return clearSpotifyToken();
-  writeJsonFile(getSpotifyTokenFile(), {
-    accessToken: '',
-    refreshToken: stored.refreshToken,
-    tokenType: stored.tokenType || 'Bearer',
-    scope: stored.scope || DEFAULT_SPOTIFY_SCOPES.join(' '),
-    expiresAt: 0,
-    createdAt: stored.createdAt || 0,
-    authorizedAt: stored.authorizedAt || 0,
-  });
+  try {
+    writeTokenFilePayload(getSpotifyTokenFile(), {
+      accessToken: '',
+      refreshToken: stored.refreshToken,
+      tokenType: stored.tokenType || 'Bearer',
+      scope: stored.scope || DEFAULT_SPOTIFY_SCOPES.join(' '),
+      expiresAt: 0,
+      createdAt: stored.createdAt || 0,
+      authorizedAt: stored.authorizedAt || 0,
+    });
+  } catch (err) {
+    // 失效标记写不进去不该让刷新链路整体失败，只记日志（内存态仍是未登录）
+    console.warn('[SpotifyToken] invalidate write skipped:', err.message);
+  }
   return { ok: true, provider: 'spotify', loggedIn: false, tokenConfigured: true };
 }
 

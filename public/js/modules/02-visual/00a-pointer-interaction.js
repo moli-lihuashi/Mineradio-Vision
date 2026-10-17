@@ -153,7 +153,8 @@ renderer.domElement.addEventListener('wheel', function(e){
   markRenderInteraction('canvas-wheel', 900);
   if (freeCamera && freeCamera.active) {
     freeCamera.fov = clampRange((freeCamera.fov || BASE_FOV) + e.deltaY * 0.018, 26, 72);
-    saveFreeCameraState();
+    // 滚轮是高频事件，同步 stringify + 写 localStorage 会拖住跟手性；走已有防抖版
+    scheduleFreeCameraStateSave(400);
     return;
   }
   if (fx && fx.preset === SKULL_PRESET_INDEX && typeof skullWheelZoomTarget !== 'undefined') {

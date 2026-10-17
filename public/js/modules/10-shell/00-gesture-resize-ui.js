@@ -78,12 +78,11 @@ var handCanvas = null, handCanvasCtx = null;
 // 平滑系数 (越小越平滑, 但反应越慢)
 var HAND_SMOOTH_ALPHA = 0.35;
 
-// MediaPipe CDN：jsdelivr 国内常不可达，准备 jsdelivr / unpkg 回退
-var MEDIPIPE_SCRIPT_CDNS = [
-  'https://cdn.jsdelivr.net/npm',
-  'https://unpkg.com',
-];
-var MEDIPIPE_HANDS_CDN_BASE = null; // 成功加载 hands.js 的 CDN 根，locateFile 复用
+// MediaPipe 本地 vendor（原 CDN：jsdelivr/unpkg）：
+// 全量随包分发，避免远程脚本执行面，也解决国内 CDN 不可达
+var MEDIPIPE_VENDOR_BASE = '/vendor/mediapipe';
+var MEDIPIPE_SCRIPT_CDNS = [MEDIPIPE_VENDOR_BASE];
+var MEDIPIPE_HANDS_CDN_BASE = null; // 成功加载 hands.js 的根，locateFile 复用
 
 function waitForPredicate(fn, timeoutMs, intervalMs) {
   return new Promise(function (resolve) {
@@ -113,14 +112,14 @@ async function loadMediapipeFromCdns(relPaths) {
       for (var i = 0; i < relPaths.length; i++) {
         await loadScriptOnce(base + '/' + relPaths[i]);
       }
-      MEDIPIPE_HANDS_CDN_BASE = base + '/@mediapipe/hands';
+      MEDIPIPE_HANDS_CDN_BASE = base + '/hands';
       return base;
     } catch (e) {
       lastErr = e;
-      console.warn('[Gesture] CDN failed:', base, e && e.message);
+      console.warn('[Gesture] vendor load failed:', base, e && e.message);
     }
   }
-  throw lastErr || new Error('MEDIPIPE_CDN_UNREACHABLE');
+  throw lastErr || new Error('MEDIPIPE_VENDOR_MISSING');
 }
 
 async function startGestureControl() {
@@ -129,8 +128,8 @@ async function startGestureControl() {
   try {
     await ensureGestureLibsReady();
     await loadMediapipeFromCdns([
-      '@mediapipe/camera_utils/camera_utils.js',
-      '@mediapipe/hands/hands.js',
+      'camera_utils/camera_utils.js',
+      'hands/hands.js',
     ]);
     if (typeof Hands !== 'function' || typeof Camera !== 'function') {
       throw new Error('MEDIPIPE_GLOBALS_MISSING');
@@ -139,7 +138,7 @@ async function startGestureControl() {
     gestureVideo.playsInline = true; gestureVideo.muted = true;
     gestureVideo.style.display = 'none';
     document.body.appendChild(gestureVideo);
-    var handsBase = MEDIPIPE_HANDS_CDN_BASE || 'https://cdn.jsdelivr.net/npm/@mediapipe/hands';
+    var handsBase = MEDIPIPE_HANDS_CDN_BASE || '/vendor/mediapipe/hands';
     gestureHands = new Hands({ locateFile: function(f){ return handsBase + '/' + f; } });
     // modelComplexity:1 比 0 更稳定, 但仍流畅. 提高 confidence 减少误检
     gestureHands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
@@ -164,10 +163,8 @@ async function startGestureControl() {
     var msg = String((e && e.message) || e);
     if (msg === 'GESTURE_LIBS_NOT_READY') {
       showToast('手势组件加载中，请 1 秒后再点一次');
-    } else if (msg === 'MEDIPIPE_CDN_UNREACHABLE' || /Failed to load|network|net::/i.test(msg)) {
-      showToast('手势模型下载失败（网络/CDN），请检查网络后重试');
-    } else if (msg === 'MEDIPIPE_GLOBALS_MISSING') {
-      showToast('手势模型脚本异常，请重试或重启应用');
+    } else if (msg === 'MEDIPIPE_VENDOR_MISSING' || msg === 'MEDIPIPE_GLOBALS_MISSING' || /Failed to load|network|net::/i.test(msg)) {
+      showToast('手势组件加载失败，请重试或重启应用');
     } else if (/Permission|NotAllowed|NotFound|NotReadable/i.test(msg)) {
       showToast('手势启动失败 (需要摄像头权限)');
     } else {

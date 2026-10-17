@@ -859,12 +859,33 @@ var _lgMirrorFrame = 0;
 var _lgMirrorBgColor = '#000';
 var _lgMirrorBgColorAt = 0;
 var _lgMirrorRectAt = 0;
+var _lgMirrorProbeAt = 0;
+var _lgMirrorProbeResult = false;
+// #custom-bg-video 是常驻元素，缓存引用避免在 rAF 里反复走 getElementById；
+// 元素被替换/移除时（isConnected 为 false）重新解析一次。
+var _lgBgVideoEl = null;
+function liquidGlassBgVideoEl() {
+  if (_lgBgVideoEl && _lgBgVideoEl.isConnected) return _lgBgVideoEl;
+  _lgBgVideoEl = document.getElementById('custom-bg-video');
+  return _lgBgVideoEl;
+}
 function liquidGlassMirrorBlitStride() {
   var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
   if (quality === 'eco') return 6;
   if (quality === 'balanced') return 4;
   if (quality === 'ultra') return 2;
   return 3;
+}
+// 玻璃可见性探测含 getClientRects()（强制同步布局），不能每帧跑：
+// 节流到 5Hz（200ms）。探测只用于「无可见玻璃时早退」，
+// 200ms 的陈旧答案最多让玻璃刚出现/消失时的背景镜像晚几帧，肉眼不可感知。
+function liquidGlassHasActiveMirrorTargetsThrottled(mgr) {
+  var nowMs = performance.now();
+  if (!_lgMirrorProbeAt || (nowMs - _lgMirrorProbeAt) > 200) {
+    _lgMirrorProbeResult = liquidGlassHasActiveMirrorTargets(mgr);
+    _lgMirrorProbeAt = nowMs;
+  }
+  return _lgMirrorProbeResult;
 }
 function liquidGlassHasActiveMirrorTargets(mgr) {
   if (!mgr || !mgr._instances) return false;
@@ -893,7 +914,7 @@ function liquidGlassHasActiveMirrorTargets(mgr) {
 function updateLiquidGlassBackdropMirror() {
   var mgr = window._liquidGlassMgr;
   if (!mgr || !mgr._instances || !Object.keys(mgr._instances).length) return;
-  if (!liquidGlassHasActiveMirrorTargets(mgr)) return;
+  if (!liquidGlassHasActiveMirrorTargetsThrottled(mgr)) return;
   var src = renderer.domElement;
   if (!src || src.width <= 0 || src.height <= 0) return;
   if (!_lgMirrorCanvas) {
@@ -936,7 +957,7 @@ function updateLiquidGlassBackdropMirror() {
   }
   _lgMirrorCtx.fillStyle = _lgMirrorBgColor;
   _lgMirrorCtx.fillRect(0, 0, W, H);
-  var vid = document.getElementById('custom-bg-video');
+  var vid = liquidGlassBgVideoEl();
   if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {
     var vscale = Math.max(W / vid.videoWidth, H / vid.videoHeight);
     var vsw = W / vscale, vsh = H / vscale;

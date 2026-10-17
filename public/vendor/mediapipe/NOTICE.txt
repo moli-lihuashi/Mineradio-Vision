@@ -1,0 +1,12 @@
+Vendored third-party assets — do not edit.
+
+@mediapipe/hands@0.4.1675469240
+@mediapipe/camera_utils@0.3.1675466862
+License: Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+Copyright Google LLC
+Source: https://www.npmjs.com/package/@mediapipe/hands
+         https://www.npmjs.com/package/@mediapipe/camera_utils
+
+These files were previously loaded from public CDNs (cdn.jsdelivr.net / unpkg.com).
+They are bundled locally so the renderer can run under a strict Content-Security-Policy
+(script-src 'self') and so gesture control works without CDN reachability.

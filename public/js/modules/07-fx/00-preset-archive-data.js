@@ -316,39 +316,6 @@ if (!hadStoredUserFxArchives) {
   saveUserFxArchives();
 }
 var userFxArchiveEditing = -1;
-function renderUserFxArchives() {
-  var grid = document.getElementById('user-archive-grid');
-  if (!grid) return;
-  grid.innerHTML = userFxArchives.map(function(slot, index){
-    var hasSave = !!slot.snapshot;
-    var editing = userFxArchiveEditing === index;
-    var nameHtml = editing
-      ? '<input class="user-archive-input" id="user-archive-input-' + index + '" type="text" maxlength="18" value="' + escAttr(slot.name) + '" onkeydown="handleUserFxArchiveRenameKey(event,' + index + ')">'
-      : '<div class="user-archive-name" title="' + escAttr(slot.name) + '">' + escHtml(slot.name) + '</div>';
-    var actionsHtml = editing
-      ? '<button type="button" onclick="commitUserFxArchiveRename(' + index + ')">确定</button>' +
-        '<button type="button" onclick="cancelUserFxArchiveRename()">取消</button>'
-      : '<button type="button" onclick="applyUserFxArchive(' + index + ')"' + (hasSave ? '' : ' disabled') + '>应用</button>' +
-        '<button type="button" onclick="saveUserFxArchive(' + index + ')">保存</button>' +
-        '<button type="button" onclick="renameUserFxArchive(' + index + ')">命名</button>';
-    return '<div class="user-archive-slot' + (hasSave ? ' has-save' : '') + '" data-slot="' + index + '">' +
-      nameHtml +
-      '<div class="user-archive-meta">' + formatUserArchiveTime(slot.savedAt) + '</div>' +
-      '<div class="user-archive-actions">' +
-        actionsHtml +
-      '</div>' +
-    '</div>';
-  }).join('');
-  if (userFxArchiveEditing >= 0) {
-    setTimeout(function(){
-      var input = document.getElementById('user-archive-input-' + userFxArchiveEditing);
-      if (input) {
-        input.focus();
-        input.select();
-      }
-    }, 0);
-  }
-}
 function saveUserFxArchive(index) {
   index = clampRange(Number(index) || 0, 0, Math.max(0, userFxArchives.length - 1));
   userFxArchives[index].snapshot = captureFxArchiveSnapshot();

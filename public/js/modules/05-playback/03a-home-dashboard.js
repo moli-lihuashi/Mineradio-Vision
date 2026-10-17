@@ -240,8 +240,7 @@ function playHomePlatformLikedAffinitySong(index) {
   })).catch(function (error) { console.warn('[HomeLikedAffinityPlay]', error); });
 }
 
-// ===== 稳定封面：先 Image 预加载再上背景，避免封面切换闪烁；同一元素同源请求去重 =====
-var homeDashboardStableCoverRequests = new Map();
+// ===== 稳定封面：先 Image 预加载再上背景，避免封面切换闪烁 =====
 function homeDashboardSetStableBackgroundImage(element, source) {
   if (!element) return;
   var requested = String(source || '');

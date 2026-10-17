@@ -215,7 +215,7 @@ function renderDetailComments(comments) {
     var user = c.user || {};
     var avatar = user.avatar ? coverUrlWithSize(user.avatar, 64) : '';
     return '<div class="comment-item">' +
-      (avatar ? '<img class="comment-avatar" src="' + avatar + '" alt="">' : '<div class="comment-avatar"></div>') +
+      (avatar ? '<img class="comment-avatar" src="' + escAttr(avatar) + '" alt="">' : '<div class="comment-avatar"></div>') +
       '<div class="comment-main"><div class="comment-meta">' + escHtml(user.nickname || '音乐用户') + (c.likedCount ? (' · ' + c.likedCount + ' 赞') : '') + (c.time ? (' · ' + escHtml(commentTimeLabel(c.time))) : '') + '</div>' +
       '<div class="comment-text">' + escHtml(c.content || '') + '</div></div>' +
     '</div>';
@@ -223,12 +223,14 @@ function renderDetailComments(comments) {
 }
 function renderArtistSongList(songs) {
   detailArtistSongs = (songs || []).map(cloneSong);
+  detailSongVirtualState.sig = ''; // 换数据：作废差分签名，强制重绘
   if (!detailArtistSongs.length) return '<div class="detail-empty">暂无热门歌曲</div>';
   return '<div class="detail-scroll detail-song-virtual" data-detail-song-kind="artist">' +
     detailSongRowsHtml(detailArtistSongs, 'artist') +
   '</div>';
 }
 function renderAlbumSongList(songs) {
+  detailSongVirtualState.sig = ''; // 换数据：作废差分签名，强制重绘
   if (!songs || !songs.length) return '<div class="detail-empty">暂无专辑曲目</div>';
   return '<div class="detail-scroll detail-song-virtual" data-detail-song-kind="album">' +
     detailSongRowsHtml(songs, 'album') +
@@ -236,7 +238,7 @@ function renderAlbumSongList(songs) {
 }
 var DETAIL_SONG_ROW_STEP = 72;
 var DETAIL_SONG_VIRTUAL_OVERSCAN = 6;
-var detailSongVirtualState = { raf: 0 };
+var detailSongVirtualState = { raf: 0, sig: '' };
 function detailSongRowsHtml(songs, kind) {
   songs = songs || [];
   var body = document.getElementById('track-detail-body');
@@ -292,6 +294,13 @@ function scheduleDetailSongVirtualRender() {
     var kind = list.getAttribute('data-detail-song-kind') || 'artist';
     var songs = kind === 'album' ? detailAlbumSongs : detailArtistSongs;
     if (!songs || !songs.length) return;
+    // 签名差分：种类/条数/列表几何/视口高度都没变就跳过整表重建。
+    // detailSongRowsHtml 内部按 listRect.top 推导 scrollTop，几何项足以覆盖滚动位移。
+    var body = document.getElementById('track-detail-body');
+    var sig = kind + ':' + songs.length + ':' + Math.round(list.getBoundingClientRect().top)
+      + ':' + Math.round(body ? body.clientHeight : 0);
+    if (sig === detailSongVirtualState.sig) return;
+    detailSongVirtualState.sig = sig;
     list.innerHTML = detailSongRowsHtml(songs, kind);
   });
 }
@@ -455,7 +464,7 @@ function openTrackDetailModal(type, songOverride) {
   var body = document.getElementById('track-detail-body');
   if (!heading || !body) return;
   var cover = songCoverSrc(song, 180);
-  var coverHtml = cover ? '<img class="detail-cover" src="' + cover + '" alt="">' : '<div class="detail-cover"></div>';
+  var coverHtml = cover ? '<img class="detail-cover" src="' + escAttr(cover) + '" alt="">' : '<div class="detail-cover"></div>';
   var title = song.name || '当前歌曲';
   var artists = currentArtistNames(song);
   var seq = ++trackDetailSeq;

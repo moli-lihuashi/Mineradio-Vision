@@ -103,6 +103,9 @@ function bindFxPanelDom() {
     ['fx-classiclyrictilt','classicLyricTiltStrength'],
     ['fx-classiclyricx','classicLyricOffsetX'],['fx-classiclyricy','classicLyricOffsetY'],
   ];
+  // 滑块拖动时 input 事件 60-120Hz，saveLyricLayout 是全量 JSON.stringify + localStorage 同步写，
+  // 每事件落盘会拖慢跟手性。debounce 400ms 合并拖动期间的写入；松手（change）立即补一次落盘。
+  var scheduleLyricLayoutSave = (typeof debounce === 'function') ? debounce(saveLyricLayout, 400) : null;
   ids.forEach(function(pair){
     var el = document.getElementById(pair[0]);
     if (!el) return;
@@ -193,8 +196,10 @@ function bindFxPanelDom() {
       if (pair[1] === 'lyricLetterSpacing' || pair[1] === 'lyricLineHeight' || pair[1] === 'lyricWeight' || pair[1] === 'lyricScale' || pair[1] === 'lyricGlowStrength') pushDesktopLyricsState(true);
       if (/^(desktopLyricsSize|desktopLyricsOpacity|desktopLyricsY)$/.test(pair[1])) pushDesktopLyricsState(true);
       if (pair[1] === 'wallpaperOpacity') pushWallpaperState(true);
-      saveLyricLayout();
+      if (scheduleLyricLayoutSave) scheduleLyricLayoutSave(); else saveLyricLayout();
     });
+    // 松手立即落盘，不必等 debounce 尾巴；拖动期间的重复写已被合并
+    el.addEventListener('change', function () { saveLyricLayout(); });
   });
   var lyricCustomLinesRebuildTimer = 0;
   function scheduleLyricCustomLinesRebuild() {

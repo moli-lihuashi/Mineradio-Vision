@@ -1,7 +1,7 @@
 const { appRoot, runElectron, jsCheckFiles, runNodeSyntaxCheck } = require('./helpers');
 const { runPlaybackAudioGraphRegressionCheck, runPlaybackSourceFallbackTransactionCheck, runQQVipEntitlementRegressionCheck, runLoginEasterEggGateRegressionCheck, runSpotifyApiResilienceRegressionCheck, runPlatformAccountSyncGuardCheck, runHomeDailyRecommendationRegressionCheck, runQishuiProviderDistributionRegressionCheck } = require('./regression-checks');
 const { parseCombinedIndexModules, scanForbiddenMarkers, checkDeferredEagerDependencyGuard, smokeCoreEvalNoReferenceError } = require('./module-parse');
-const { checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard } = require('./guards');
+const { checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard } = require('./guards');
 const { runElectronRuntimeCheck, runMainStartupRecoveryCheck } = require('./electron-runtime');
 
 // 酷狗修改版:以下 check 因模块拆分粒度不同(功能差异),跳过以避免误报。
@@ -17,7 +17,6 @@ const KUGOU_SKIP_CHECKS = new Set([
   'checkProviderFallbackTerminalStateGuard',     // 读 11/13/14 不存在;server.js 缺 probePlaybackAudioUrl/audioProbeMagic
   'checkProviderEntitlementBoundaryGuard',       // 读 08-account/02-login-status.js / 13-playback-start-audio.js 不存在
   'checkProviderAuthCookiePathGuard',            // 路径存在但函数缺失:getCookieFile/configuredCookieStores 等
-  'checkCuefieldAutoMixGuard',                   // 读 05-playback/16-18-cuefield 不存在(酷狗版在 05-cuefield/00-02)
   'checkAlbumDetailGaplessGuard',                // 读 06/13/14/09-queue-snapshot/02-visual/15 全不存在
   'checkSonicTopographyPresetGuard',             // 读 00-state/04-05-06 / 02-visual/04 / 10-shell/00 等不存在
   'checkLongPressReorderGuard',                  // 读 05-playback/10-queue-actions / 04-shelf/01-manager-core 不存在
@@ -104,6 +103,7 @@ async function main() {
   await maybe('checkVolumeWheelStepGuard', checkVolumeWheelStepGuard);
   await maybe('checkKugouCloudlistIdentityGuard', checkKugouCloudlistIdentityGuard);
   await maybe('checkNonCurrentAudioPrefetchGuard', checkNonCurrentAudioPrefetchGuard);
+  await maybe('checkMusicalProfileGuard', checkMusicalProfileGuard);
   await maybe('checkCuefieldAutoMixGuard', checkCuefieldAutoMixGuard);
   await maybe('checkAlbumDetailGaplessGuard', checkAlbumDetailGaplessGuard);
   await maybe('checkInternalBetaPackagingGuard', checkInternalBetaPackagingGuard);

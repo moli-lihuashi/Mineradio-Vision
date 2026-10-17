@@ -8,9 +8,85 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const dns = require('dns');
 
 const LLM_SECRET_FILE = process.env.LLM_SECRET_FILE || '';
 const LLM_CONFIG_FILE = process.env.LLM_CONFIG_FILE || '';
+
+// ---- LLM baseUrl 安全校验 ----
+// 背景：/api/ai/config 接受任意 baseUrl 且 callLLM 会带上用户的 Bearer API Key 发请求。
+// 不校验则持 token 方（渲染进程 XSS 等）可把密钥外传到任意主机，并借本进程探测内网。
+// 策略：强制 https（本机 loopback 的 http 例外，供本地 ollama 等自用场景——密钥不出本机）；
+// 拒绝环回/内网/链路本地/云元数据/CGNAT/TEST-NET/组播保留段；带凭证的 URL 一律拒绝。
+function isPrivateOrReservedIPv4(o) {
+  const [a, b] = o;
+  if (o.some(x => x > 255)) return true;
+  if (a === 0 || a === 127 || a === 10) return true;
+  if (a === 169 && b === 254) return true;               // 链路本地 + 云元数据 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true;      // RFC1918
+  if (a === 192 && b === 168) return true;               // RFC1918
+  if (a === 100 && b >= 64 && b <= 127) return true;     // CGNAT 100.64/10
+  if (a === 192 && b === 0) return true;                 // 含 TEST-NET-1 192.0.2/24
+  if (a === 198 && (b === 18 || b === 19)) return true;  // 基准测试段
+  if (a === 198 && b === 51) return true;                // TEST-NET-2
+  if (a === 203 && b === 0) return true;                 // TEST-NET-3
+  if (a >= 224) return true;                             // 组播/保留
+  return false;
+}
+
+function isBlockedLlmHost(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')
+    || h.endsWith('.internal') || h.endsWith('.lan')) return true;
+  if (h === 'metadata.google.internal' || h === 'metadata.goog') return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) return isPrivateOrReservedIPv4(v4.slice(1).map(Number));
+  if (h.includes(':')) {
+    // IPv6：环回 / 链路本地 / 唯一本地 / v4 映射。
+    // 注意 WHATWG URL 会把 ::ffff:127.0.0.1 规范化为 ::ffff:7f00:1（十六进制组），两种形态都要认。
+    const mappedDotted = /^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+    if (mappedDotted) return isPrivateOrReservedIPv4(mappedDotted.slice(1).map(Number));
+    const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+    if (mappedHex) {
+      const g1 = parseInt(mappedHex[1], 16), g2 = parseInt(mappedHex[2], 16);
+      return isPrivateOrReservedIPv4([g1 >> 8, g1 & 0xff, g2 >> 8, g2 & 0xff]);
+    }
+    if (h === '::1' || h.startsWith('fe80:') || /^f[cd]/.test(h)) return true; // 环回/链路本地/唯一本地
+    return false;
+  }
+  return false;
+}
+
+function isLoopbackHttpUrl(parsed) {
+  return parsed.protocol === 'http:' && /^(127\.0\.0\.1|\[::1\]|localhost)$/.test(parsed.hostname);
+}
+
+function assertSafeLlmBaseUrlSync(baseUrl) {
+  let parsed;
+  try { parsed = new URL(String(baseUrl || '').trim()); } catch (_) { throw new Error('AI_BASE_URL_INVALID'); }
+  if (parsed.username || parsed.password) throw new Error('AI_BASE_URL_CREDENTIALS');
+  // 本机 loopback 的 http 例外优先判定：本地 ollama 等自用场景，密钥不出本机
+  if (isLoopbackHttpUrl(parsed)) return parsed;
+  if (parsed.protocol !== 'https:') throw new Error('AI_BASE_URL_PROTOCOL');
+  if (isBlockedLlmHost(parsed.hostname)) throw new Error('AI_BASE_URL_HOST_BLOCKED');
+  return parsed;
+}
+
+async function assertSafeLlmBaseUrl(baseUrl) {
+  const parsed = assertSafeLlmBaseUrlSync(baseUrl);
+  if (!isLoopbackHttpUrl(parsed)) {
+    // 域名再解析一次：防「公网域名 -> 内网 IP」的 DNS 指向
+    let addrs = [];
+    try { addrs = await dns.promises.lookup(parsed.hostname, { all: true }); }
+    catch (_) { throw new Error('AI_BASE_URL_DNS_FAILED'); }
+    if (!addrs.length) throw new Error('AI_BASE_URL_DNS_FAILED');
+    for (const a of addrs) {
+      if (isBlockedLlmHost(a.address)) throw new Error('AI_BASE_URL_IP_BLOCKED');
+    }
+  }
+  return parsed.toString();
+}
 
 function readSecret() {
   // 优先走 secret-store（DPAPI 加密），回退明文
@@ -80,6 +156,7 @@ function buildPlaylistPrompt(userPrompt, profile) {
 
 function callLLM(baseUrl, apiKey, model, systemMsg, userMsg, opts) {
   opts = opts || {};
+  assertSafeLlmBaseUrlSync(baseUrl); // 防线二：持久化里遗留的坏配置在发请求前拦截
   return new Promise((resolve, reject) => {
     const url = new URL(baseUrl.replace(/\/+$/, '') + '/chat/completions');
     const transport = url.protocol === 'https:' ? https : http;
@@ -300,8 +377,10 @@ module.exports = function register(ctx) {
       try {
         const parsed = await readRequestBody(req); // readRequestBody 返回已解析对象
         if (parsed.baseUrl) {
+          // 防线一：落盘前校验（https / 非内网 / 无URL凭证），防密钥外传与借进程探测内网
+          const safeBaseUrl = await assertSafeLlmBaseUrl(parsed.baseUrl);
           const cfg = readConfig();
-          cfg.baseUrl = parsed.baseUrl;
+          cfg.baseUrl = safeBaseUrl;
           if (parsed.model !== undefined) cfg.model = parsed.model;
           writeConfig(cfg);
         }

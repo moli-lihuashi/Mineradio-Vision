@@ -127,9 +127,15 @@ async function ensureAIDepthPipeline() {
   aiDepthBusy = true;
   try {
     showAIDepthChip('加载 AI 深度模型 (首次需下载 50MB)…');
-    var mod = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+    // transformers.js 本地 vendor：库与 ONNX Runtime wasm 随包分发（CSP script-src 'self'），
+    // 仅模型权重仍从 HuggingFace 拉取（connect-src 放行）
+    var mod = await import('/vendor/transformers/transformers.min.js');
     mod.env.allowLocalModels = false;
-    if (mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) mod.env.backends.onnx.wasm.numThreads = 1;
+    mod.env.allowRemoteModels = true;
+    if (mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) {
+      mod.env.backends.onnx.wasm.numThreads = 1;
+      mod.env.backends.onnx.wasm.wasmPaths = '/vendor/transformers/';
+    }
     aiDepthPipeline = await mod.pipeline('depth-estimation', 'Xenova/depth-anything-small-hf');
     aiDepthReady = true;
     return aiDepthPipeline;

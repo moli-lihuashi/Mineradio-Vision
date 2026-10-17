@@ -21,6 +21,7 @@ win-unpacked/
 .kugou-cookie
 .qishui-cookie
 .qishui-token
+.qishui-qr-login.json
 .spotify-token.json
 .spotify-credentials.json
 .spotify-credentials
@@ -39,6 +40,7 @@ backups/
 /_*.txt
 /_*.jsonl
 /_*.json
+/_*/
 /_debug-archive/
 
 # Local development noise

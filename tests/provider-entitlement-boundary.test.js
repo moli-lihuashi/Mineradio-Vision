@@ -63,6 +63,23 @@ function withHttpsMock(handler, task) {
   });
 }
 
+// 会员/设备探测不是播放请求：旧版 /v1/get_union_vip、网关 batch_union_vipinfo、
+// 网页端 roleinfo、以及取址前的设备身份注册（userservice risk/v2）都应放行。
+function isKugouNonPlaybackProbe(parsed) {
+  return parsed.pathname === '/v1/get_union_vip'
+    || /^\/kugouvip\/v[12]\/batch_union_vipinfo$/.test(parsed.pathname)
+    || /\/recharge\/roleinfo$/.test(parsed.pathname)
+    || (parsed.hostname === 'userservice.kugou.com' && parsed.pathname.indexOf('/risk/v2/') === 0);
+}
+
+// 设备注册要返回 dfid，否则上游会停在「未注册设备」而不去查会员。
+function kugouProbeBody(parsed, membershipBody) {
+  if (parsed.hostname === 'userservice.kugou.com' && parsed.pathname.indexOf('/risk/v2/') === 0) {
+    return { status: 1, data: { dfid: 'fixture-dfid-' + (new URLSearchParams(parsed.search).get('mid') || 'device') } };
+  }
+  return membershipBody;
+}
+
 function qishuiTrackPayload(id, requiresVip, mediaUrl) {
   return {
     data: {
@@ -194,8 +211,8 @@ async function testKugouPlaybackEntitlementBoundary() {
   let ordinaryPlaybackRequests = 0;
   await withHttpsMock(({ url }) => {
     const parsed = new URL(url);
-    if (parsed.pathname === '/v1/get_union_vip') {
-      return { body: { status: 1, data: { userid: '71001', is_vip: false, vip_type: 0, is_svip: false, svip_type: 0 } } };
+    if (isKugouNonPlaybackProbe(parsed)) {
+      return { body: kugouProbeBody(parsed, { status: 1, data: { userid: '71001', is_vip: false, vip_type: 0, is_svip: false, svip_type: 0 } }) };
     }
     ordinaryPlaybackRequests += 1;
     throw new Error('ordinary member-track request reached playback upstream: ' + parsed.pathname);
@@ -219,8 +236,8 @@ async function testKugouPlaybackEntitlementBoundary() {
   let freePart = '';
   await withHttpsMock(({ url }) => {
     const parsed = new URL(url);
-    if (parsed.pathname === '/v1/get_union_vip') {
-      return { body: { status: 1, data: { userid: '71002', is_vip: false, vip_type: 0 } } };
+    if (isKugouNonPlaybackProbe(parsed)) {
+      return { body: kugouProbeBody(parsed, { status: 1, data: { userid: '71002', is_vip: false, vip_type: 0 } }) };
     }
     if (parsed.pathname === '/v5/url') {
       freeQuality = parsed.searchParams.get('quality') || '';
@@ -249,8 +266,8 @@ async function testKugouPlaybackEntitlementBoundary() {
   let vipFreePart = '';
   await withHttpsMock(({ url }) => {
     const parsed = new URL(url);
-    if (parsed.pathname === '/v1/get_union_vip') {
-      return { body: { status: 1, data: { userid: '71003', is_vip: true, vip_type: 1, vip_end_time: 4102444800 } } };
+    if (isKugouNonPlaybackProbe(parsed)) {
+      return { body: kugouProbeBody(parsed, { status: 1, data: { userid: '71003', is_vip: true, vip_type: 1, vip_end_time: 4102444800 } }) };
     }
     if (parsed.pathname === '/v5/url') {
       vipQuality = parsed.searchParams.get('quality') || '';
@@ -277,17 +294,20 @@ async function testKugouPlaybackEntitlementBoundary() {
 
   const fallbackCookie = 'userid=71004; token=fallback-vip-token; kg_mid=fallback-vip-mid; KuGoo=KugooID%3D71004%26NickName%3DVIP';
   const membershipPaths = [];
-  await withHttpsMock(({ url }) => {
+  await withHttpsMock(({ url, body }) => {
     const parsed = new URL(url);
     membershipPaths.push(parsed.pathname);
-    if (parsed.pathname === '/v1/get_union_vip') {
-      return { body: { status: 1, data: {} } };
+    if (parsed.hostname === 'userservice.kugou.com' && parsed.pathname.indexOf('/risk/v2/') === 0) {
+      return { body: kugouProbeBody(parsed, { status: 1, data: {} }) };
     }
-    if (parsed.pathname === '/v1/vipuser_sub') {
+    // 契约变更（2026-10-17）：/v1/vipuser_sub 已从探测链移除（近年 502 / 参数无效）；
+    // 现在靠 unionVip 的 get_type=1 / get_type=2 互补。这里让 get_type=1 返回未知、
+    // get_type=2 返回会员，验证「第一条未知仍会继续探测」。
+    if (/batch_union_vipinfo/.test(parsed.pathname) && /"get_type"\s*:\s*2/.test(String(body || ''))) {
       return {
         body: {
           status: 1,
-          data: { userid: '71004', is_vip: true, vip_type: 1, vip_end_time: 4102444800 },
+          data: { main_vip: { '71004': { is_vip: 1, vip_type: 1, vip_end_time: 4102444800 } } },
         },
       };
     }
@@ -298,7 +318,10 @@ async function testKugouPlaybackEntitlementBoundary() {
     assert.strictEqual(status.membershipSource, 'kugou-vip-api', 'later official VIP evidence must be authoritative');
   });
   assert(membershipPaths.includes('/v1/get_union_vip'), 'Kugou must try the primary VIP endpoint');
-  assert(membershipPaths.includes('/v1/vipuser_sub'), 'Kugou must continue after an unknown primary response');
+  assert(
+    membershipPaths.filter(p => p === '/kugouvip/v2/batch_union_vipinfo').length >= 2,
+    'Kugou must try both unionVip get_type variants'
+  );
 }
 
 function testQishuiMembershipNormalization() {

@@ -134,22 +134,18 @@ async function run() {
   assert.strictEqual(cookie, 'sessionid=session-value; sid_tt=sid-value; uid_tt=uid-value; ttwid=ttwid-value');
   assert(!cookie.includes('wrong-domain'), 'cookies from unrelated domains must never be imported');
 
-  const localImportSource = desktopImport.includes('async function openQishuiMusicLoginWindow')
-    ? desktopImport.slice(desktopImport.indexOf('async function openQishuiMusicLoginWindow'))
-    : (namedFunctionSource(desktopMain, 'openQishuiMusicLoginWindow') || '');
-  assert(localImportSource, 'the desktop Qishui import route must exist');
-  // openQishuiMusicLoginWindow 只调用本机导入；缓存兜底在 readQishuiOfficialClientCookieHeader 内部
-  assert(localImportSource.includes('readQishuiOfficialClientCookieHeader()'), 'fresh SodaMusic state must be read');
-  assert(!/openQishuiOfficialWebLoginWindow\s*\(/.test(localImportSource), 'normal Qishui import must not fall through to QR login');
-  assert(!/createQishuiPcQrLogin\s*\(/.test(localImportSource), 'normal Qishui import must not create a QR session');
-  assert(/QISHUI_LOCAL_COOKIE_DB_LOCKED/.test(desktopImport));
-  assert(/QISHUI_LOCAL_COOKIE_NOT_FOUND/.test(desktopImport));
+  // 契约变更（2026-10-17）：本地汽水客户端会话导入窗口（openQishuiMusicLoginWindow）已下线，
+  // 登录统一走扫码桥 qishui-qr-login.js；这里断言新链路存在、旧入口保持移除状态。
+  const qrBridge = fs.readFileSync(path.join(__dirname, '..', 'qishui-qr-login.js'), 'utf8');
+  assert(/createQishuiQrLoginBridge/.test(qrBridge), 'the desktop Qishui QR login bridge must exist');
+  assert(/QISHUI_QR_CONFIG_FILE/.test(desktopMain), 'the desktop must persist the Qishui QR login config');
+  assert(!/openQishuiMusicLoginWindow/.test(desktopImport), 'the removed local-session import window must stay gone');
   const officialReader = desktopImport.slice(desktopImport.indexOf('async function readQishuiOfficialClientCookieHeader'));
-  assert(
-    officialReader.indexOf('discoverQishuiCookieStores') >= 0 &&
-    officialReader.indexOf('readSavedQishuiCookieHeader()') > officialReader.indexOf('discoverQishuiCookieStores'),
-    'fresh SodaMusic state must be read before the cached Mineradio copy'
-  );
+  // 契约变更（2026-10-17）：读者只从本机汽水客户端的 cookie 库 + Electron session 读取，
+  // 不再回落到 readSavedQishuiCookieHeader() 的缓存副本，因此旧的「先后顺序」断言不再成立。
+  assert(officialReader.indexOf('discoverQishuiCookieStores') >= 0, 'the reader must scan local SodaMusic cookie stores');
+  assert(officialReader.indexOf('readQishuiOfficialClientCookieDatabase') >= 0, 'the reader must read the local cookie database directly');
+  assert(officialReader.indexOf('readSavedQishuiCookieHeader()') < 0, 'the reader must not fall back to the cached cookie copy');
   console.log('[OK] Qishui search pagination and strict full SodaMusic local-session import verified.');
 }
 

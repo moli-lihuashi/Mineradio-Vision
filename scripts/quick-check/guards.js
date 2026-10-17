@@ -2463,104 +2463,131 @@ function checkNonCurrentAudioPrefetchGuard() {
   console.log('[OK] Non-current audio URL prefetch stays disabled by default.');
 }
 
+function checkMusicalProfileGuard() {
+  logStep('Musical profile (chroma key/chroma) guard');
+  const beatText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '01-audio-beat-analysis.js'), 'utf8');
+  const runtimeText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '03-beat-map-runtime.js'), 'utf8');
+  const prefetchText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '00-tempo-worker-cache-prefetch.js'), 'utf8');
+  const plannerText = fs.readFileSync(path.join(appRoot, 'cuefield-next', 'recipe-planner.js'), 'utf8');
+  const profileText = fs.readFileSync(path.join(appRoot, 'cuefield-next', 'musical-profile.js'), 'utf8');
+
+  // 生产者
+  if (!/async function analyzeMusicalProfile\(/.test(beatText)) fail('beat analysis must expose analyzeMusicalProfile');
+  if (!/musicalProfile:\s*musicalProfile/.test(beatText)) fail('beat map must carry musicalProfile in its return value');
+  if (!/musicalProfilePeakOnly/.test(beatText) || !/binWeight\[bin\]/.test(beatText)) {
+    fail('chroma must keep per-pitch-class bin weighting and the spectral-peak mode (both were needed to get key fit above noise)');
+  }
+  if (!/musicalProfileCorrelation/.test(beatText)) {
+    fail('key estimation must use correlation, not cosine: Krumhansl templates are all-positive, cosine scores white noise at 0.96');
+  }
+
+  // pack 是白名单 —— 少一行字段就会被静默丢掉，写盘后再也读不回来
+  if (!/musicalProfile:\s*packMusicalProfile\(map\.musicalProfile\)/.test(runtimeText)) fail('packLocalBeatMap must include musicalProfile');
+  if (!/musicalProfile:\s*stored\.musicalProfile \|\| null/.test(runtimeText)) fail('unpackLocalBeatMap must restore musicalProfile');
+  if (!/function packMusicalProfile\(/.test(runtimeText)) fail('packMusicalProfile helper is missing');
+  if (!/v:\s*2,/.test(runtimeText)) fail('beat map pack version must be 2 (v1 has no musicalProfile)');
+
+  // 老缓存补算
+  if (!/beatProfileBackfill/.test(prefetchText) || !/diskMap\.musicalProfile/.test(prefetchText)) {
+    fail('prefetch must backfill musicalProfile for v1-era cache entries instead of trusting them forever');
+  }
+
+  // 消费者还在用它当门槛
+  if (!/musicalEvidence/.test(plannerText) || !/compareMusicalProfiles/.test(plannerText)) {
+    fail('cuefield recipe-planner must keep gating recipes on musicalEvidence');
+  }
+  if (!/function compareMusicalProfiles/.test(profileText) || !/function compareLocalMusicalWindows/.test(profileText)) {
+    fail('cuefield-next/musical-profile.js lost its comparison functions');
+  }
+  console.log('[OK] Chroma-based musical profile is produced, packed (v2), backfilled, and consumed as cuefield harmonic evidence.');
+}
+
 function checkCuefieldAutoMixGuard() {
   logStep('Cuefield AutoMix integration guard');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
-  const desktopText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
-  const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'index-loader.js'), 'utf8');
+  const serverText = fs.readFileSync(path.join(appRoot, 'server', 'routes', 'update.js'), 'utf8');
   const htmlText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
-  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
-  const coreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '16-cuefield-automix-core.js'), 'utf8');
-  const timelineText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '17-cuefield-timeline-executor.js'), 'utf8');
-  const integrationText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '18-cuefield-automix-integration.js'), 'utf8');
-  const adapterText = fs.readFileSync(path.join(appRoot, 'cuefield', 'adapter-mineradio.js'), 'utf8');
-  const bridgeText = fs.readFileSync(path.join(appRoot, 'cuefield', 'mineradio-bridge.js'), 'utf8');
-  const recipeText = fs.readFileSync(path.join(appRoot, 'cuefield', 'recipe-planner.js'), 'utf8');
-  const beatPrefetchText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '00-tempo-worker-cache-prefetch.js'), 'utf8');
-  const coreStoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '00-core-stores.js'), 'utf8');
-  const beatCameraText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-scene', '02-beat-camera-runtime.js'), 'utf8');
-  const audioGraphText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '08-audio-graph-controls.js'), 'utf8');
-  const playbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '13-playback-start-audio.js'), 'utf8');
-  const controlsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '14-player-controls.js'), 'utf8');
-  const progressText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '04-progress-seek.js'), 'utf8');
+  const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'index-loader.js'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
-  const beta = JSON.parse(fs.readFileSync(path.join(appRoot, 'electron-builder.internal-beta.json'), 'utf8'));
-  if (!packageJson.build.files.includes('cuefield/**/*') || !(beta.files || []).includes('cuefield/**/*')) {
-    fail('Cuefield runtime files must be included in regular and internal-beta packages');
+  const syncText = fs.readFileSync(path.join(appRoot, 'scripts', 'sync-dist-app.js'), 'utf8');
+
+  // 本仓库的 Cuefield 是「前端 5 模块 + 服务端双引擎（默认 v2、v1 兜底）」。
+  // 上游那套 05-playback/16|17|18 与 cuefieldRunEqualPowerCrossfade 一行都不在，
+  // 按上游路径断言只会 ENOENT —— 守卫必须盯着我们真实存在的东西。
+  const MODULES = [
+    '00-cuefield-automix-core.js',
+    '01-cuefield-timeline-executor.js',
+    '01a-cuefield-bridge-engine.js',
+    '01b-cuefield-source-loop.js',
+    '02-cuefield-automix-integration.js',
+  ];
+  const moduleDir = path.join(appRoot, 'public', 'js', 'modules', '05-cuefield');
+  const texts = {};
+  for (const name of MODULES) {
+    const file = path.join(moduleDir, name);
+    if (!fs.existsSync(file)) fail('Cuefield front-end module is missing: 05-cuefield/' + name);
+    texts[name] = fs.readFileSync(file, 'utf8');
   }
-  if (!/16-cuefield-automix-core\.js/.test(loaderText) || !/17-cuefield-timeline-executor\.js/.test(loaderText) || !/18-cuefield-automix-integration\.js/.test(loaderText) || !/id="cuefield-automix-btn"/.test(htmlText) || !/id="cuefield-feedback"/.test(htmlText) || !/#cuefield-automix-btn\.cuefield-automix-on/.test(cssText)) {
-    fail('Cuefield AutoMix needs loaded runtime modules, a default-off control, and local feedback UI');
+
+  // 1) index.html 必须按依赖顺序逐个 script 载入（core → executor → bridge → loop → integration）
+  let cursor = -1;
+  for (const name of MODULES) {
+    const at = htmlText.indexOf('05-cuefield/' + name);
+    if (at < 0) fail('index.html does not load 05-cuefield/' + name);
+    if (at < cursor) fail('index.html loads 05-cuefield modules out of order at ' + name);
+    cursor = at;
   }
-  if (!/var cuefieldAutoMixEnabled = false/.test(integrationText) || !/CUEFIELD_AUTOMIX_STORE_KEY/.test(integrationText) || !/if \(!cuefieldAutoMixEnabled \|\| !audio/.test(integrationText) || !/function toggleCuefieldAutoMix/.test(integrationText)) {
-    fail('Cuefield AutoMix must be opt-in and must not prepare while disabled');
+  if (/05-cuefield\//.test(loaderText)) fail('05-cuefield must not also be listed in index-loader.js (would be evaluated twice)');
+
+  // 2) 服务端：v1 与 v2 两条引擎都要在；v2 失败必须可见地回落（engineFallback），不能静默
+  for (const needle of [
+    "pn === '/api/cuefield/transition'",
+    "pn === '/api/cuefield/feedback'",
+    'cuefield-next/mineradio-bridge',
+    'planCuefieldTransitionFromCache',
+    'engineFallback',
+  ]) {
+    if (!serverText.includes(needle)) fail('server/routes/update.js lost cuefield wiring: ' + needle);
   }
-  if (!/function createCuefieldAutoMix/.test(coreText) || !/function buildCuefieldTimelineExecution/.test(timelineText) || !/planCuefieldTransitionFromCache/.test(serverText) || !/pn === '\/api\/cuefield\/transition'/.test(serverText) || !/pn === '\/api\/cuefield\/feedback'/.test(serverText)) {
-    fail('Cuefield planner, timeline executor, and local server endpoints are incomplete');
+  if (!/get\('engine'\)[\s\S]{0,40}\|\|\s*'v2'/.test(serverText)) fail('cuefield transition endpoint must default to the v2 engine');
+
+  // 3) 两个引擎目录都要在，且都要进打包与 dist 同步白名单
+  for (const [dirName, minModules] of [['cuefield', 8], ['cuefield-next', 19]]) {
+    const abs = path.join(appRoot, dirName);
+    if (!fs.existsSync(abs)) fail('missing cuefield engine directory: ' + dirName + '/');
+    const count = fs.readdirSync(abs).filter((f) => f.endsWith('.js')).length;
+    if (count < minModules) fail(dirName + '/ must keep at least ' + minModules + ' modules, found ' + count);
+    if (!packageJson.build.files.includes(dirName + '/**/*')) fail('package.json build.files must include ' + dirName + '/**/*');
+    if (!syncText.includes("'" + dirName + "'")) fail('sync-dist-app.js must copy ' + dirName + '/ into dist');
   }
-  if (!/MINERADIO_BEAT_COMBOS/.test(adapterText) || !/raw\[7\]/.test(adapterText) || !/flags & 1/.test(adapterText) || !/flags & 2/.test(adapterText) || !/flags & 4/.test(adapterText) || /raw\[8\][^\n]{0,80}downbeat|raw\[8\][^\n]{0,80}>=\s*7/.test(adapterText)) {
-    fail('Cuefield must decode packed comboIdx and flags independently so ordinary camera/pulse flags cannot become false downbeats');
+
+  // 4) 执行层必须认识 v2 的 11 种 op —— 只剩 play/crossfade 就等于「播到尾再淡出」
+  const timelineText = texts['01-cuefield-timeline-executor.js'];
+  for (const op of ['play', 'volume', 'filter', 'bass', 'duck', 'echo', 'bridge', 'loop', 'rate', 'spectrum', 'handoff']) {
+    if (!new RegExp("op === '" + op + "'").test(timelineText)) fail('timeline executor lost op=' + op);
   }
-  if (!/function normalizedTempoPair/.test(recipeText) || !/\[0\.5, 1, 2\]/.test(recipeText) || !/function nearestDownbeat/.test(recipeText) || !/anchor-aligned-beatmix/.test(recipeText) || !/simple-crossfade/.test(recipeText) || /const needsSafetyFallback/.test(recipeText) || !/maxEntryTime/.test(bridgeText)) {
-    fail('Cuefield must use per-track downbeat confidence, half/double-tempo normalization, bounded entry jumps, and a simple-fade fallback instead of forced safety blends');
+
+  // 5) weak 档必须真的放开：v2 在真实歌曲上产出的通常就是 tier='weak'（实测 score=0.604），
+  //    上游默认 allowWeak:false 会把它全部拒掉 → 用户听感等于没有 automix。
+  const integrationText = texts['02-cuefield-automix-integration.js'];
+  if (!/allowWeak:\s*true/.test(integrationText)) fail('automix must allow weak-tier plans: weak is the norm on real tracks, not an error');
+  if (!/minWeakScore:\s*0?\.\d+/.test(integrationText)) fail('automix must pin an explicit minWeakScore next to allowWeak (0.58 default is too loose)');
+
+  // 5b) 开关状态必须真的显示出来。上游 18 找的是 #cuefield-automix-btn（我们 index.html 没有这个 id），
+  //     照抄会让 updateCuefieldAutoMixUi() 直接 return —— CSS 的 .on / .cuefield-automix-ready 全成死代码，
+  //     用户开了也看不出（实测过：存档 pref='1' 但界面还写着「实验功能 · 默认关闭」）。
+  if (!/getElementById\('quick-menu-automix-toggle'\)/.test(integrationText)) {
+    fail('automix UI must target #quick-menu-automix-toggle; #cuefield-automix-btn does not exist in this repo');
   }
-  if (!/cuefieldLyricTextForSong/.test(integrationText) || !/fromLrc:\s*lyricPair\[0\]/.test(integrationText) || !/toLrc:\s*lyricPair\[1\]/.test(integrationText) || !/allowWeak:\s*false/.test(integrationText) || !/allowSafetyFallback:\s*false/.test(integrationText)) {
-    fail('Cuefield must consume the existing lyric cache as weak structure evidence and refuse weak/rejected forced beatmix plans');
+  if (!/quick-menu-automix-status/.test(integrationText)) fail('automix UI must refresh #quick-menu-automix-status text');
+  if (!/syncCuefieldAutoMixUiOnReady/.test(integrationText) || !/DOMContentLoaded/.test(integrationText)) {
+    fail('automix must re-sync its UI after DOM ready: the script loads in <head>, the toggle lives at the end of <body>');
   }
-  if (!/var provider = songProviderKey\(song\)/.test(beatPrefetchText) || !/return provider \+ ':' \+ id/.test(beatPrefetchText) || !/resolveAlbumGaplessPlaybackData\(song\)/.test(beatPrefetchText)) {
-    fail('Cuefield beatmaps must use provider-aware keys and resolve the same provider playback path as the real player');
+
+  // 6) 反馈仍必须本地，不能接远程
+  if (/feedback-remote|CUEFIELD_FEEDBACK_REMOTE|https?:\/\/.*cuefield/i.test(serverText + integrationText)) {
+    fail('cuefield feedback must remain local; no remote feedback service');
   }
-  if (!/CUEFIELD_FEEDBACK_FILE/.test(desktopText) || !/appendCuefieldFeedback/.test(serverText) || !/readCuefieldFeedbackStats/.test(serverText) || /feedback-remote|CUEFIELD_FEEDBACK_REMOTE|https?:\/\/.*cuefield/i.test(serverText + integrationText)) {
-    fail('Cuefield feedback must remain local and must not wire a remote feedback service');
-  }
-  if (!/albumGaplessHandoff:\s*true/.test(integrationText) || !/resetCuefieldAutoMix\(opts\.cuefieldAutoMix/.test(playbackText) || !/scheduleCuefieldAutoMixPrepare\(token, idx/.test(playbackText) || !/audio\.onended = function \(\) \{[\s\S]{0,160}cuefieldAutoMixExecuting/.test(playbackText) || !/tickCuefieldAutoMix/.test(progressText) || !/resetCuefieldAutoMix\('manual-seek'\)/.test(progressText)) {
-    fail('Cuefield must hand off through the proven player path and reset for manual seeking');
-  }
-  if (!/function claimCuefieldPreparedAudioForPlayback/.test(integrationText) || !/media === audio[\s\S]{0,100}claimCuefieldPreparedAudioForPlayback\(media\);[\s\S]{0,40}return;/.test(integrationText) || !/audio = opts\.preloadedAudio;[\s\S]{0,180}claimCuefieldPreparedAudioForPlayback\(audio\)/.test(playbackText) || !/preserveExecution:\s*!!opts\.cuefieldAutoMix/.test(playbackText)) {
-    fail('Cuefield must transfer preloaded B-deck ownership before preparing another track so it cannot pause active playback');
-  }
-  if (!/function cuefieldRunEqualPowerCrossfade\(pending, nextMedia, durationMs, context\)/.test(integrationText) || !/var theta = eased \* Math\.PI \* 0\.5/.test(integrationText) || !/overlapHeadroom/.test(integrationText) || !/cuefieldWriteIncomingGain\(nextMedia, incoming\)/.test(integrationText) || !/shared-context-gain/.test(integrationText)) {
-    fail('Cuefield must apply one headroom-protected equal-power envelope to the shared-context A/B deck gains');
-  }
-  if (!/var completed = await cuefieldRunEqualPowerCrossfade\(pending, nextMedia, fadeMs, context\);[\s\S]{0,150}if \(!completed \|\| !cuefieldTransitionStillCurrent\(pending, context\)\) return false;/.test(integrationText) || !/var handoffReady = await runCuefieldTimeline\(pending, nextMedia, transitionContext\);[\s\S]{0,150}if \(!handoffReady \|\| !cuefieldTransitionStillCurrent\(pending, transitionContext\)\)/.test(integrationText)) {
-    fail('Cuefield ownership handoff must be driven by the completed equal-power fade state, not an elapsed timer');
-  }
-  if (!/var cuefieldTransitionGeneration = 0/.test(integrationText) || !/cuefieldTransitionGeneration\+\+;[\s\S]{0,120}clearCuefieldTimelineTimers\(\)/.test(integrationText) || !/function cuefieldDelay\(delayMs, generation\)/.test(integrationText) || !/context\.generation !== cuefieldTransitionGeneration/.test(integrationText) || !/audio !== context\.outgoingMedia/.test(integrationText)) {
-    fail('Cuefield reset, seek, and pause must invalidate delayed transitions before they can wake and rewrite current audio gain');
-  }
-  if (!/var cuefieldMediaFadeTimer = 0/.test(integrationText) || !/cuefieldMediaFadeTimer = setInterval\(function \(\) \{[\s\S]{0,100}applyStep\(\)/.test(integrationText) || !/context\.outgoingMedia && context\.outgoingMedia\.currentTime/.test(integrationText) || !/if \(cuefieldMediaFadeTimer\) clearInterval\(cuefieldMediaFadeTimer\)/.test(integrationText)) {
-    fail('Cuefield gain must follow the outgoing media clock and keep a timer watchdog when visual RAF is throttled');
-  }
-  if (!/function recoverCuefieldAutoMixEndedOutgoing/.test(integrationText) || !/__mineradioCuefieldEndedRecoveryToken/.test(playbackText)) {
-    fail('Cuefield must resume ordinary queue advance if its outgoing deck ends before a failed handoff settles');
-  }
-  if (!/__mineradioPreparedGraphFailed/.test(integrationText) || !/The first element is permanently tied/.test(integrationText)) {
-    fail('Cuefield must rebuild a clean fallback media element after a partial WebAudio graph failure');
-  }
-  if (!/var cuefieldActiveTransitionContext = null/.test(integrationText) || !/shouldRestoreOutgoing[\s\S]{0,520}rampAudioOutputGain\(targetVolume, 120\)/.test(integrationText) || !/async function runCuefieldNormalFallback\(\)/.test(integrationText) || !/audio !== nextMedia && audio !== transitionContext\.outgoingMedia/.test(integrationText)) {
-    fail('Cuefield disable/cancel must restore its outgoing deck and pre-adoption handoff failures must use normal playback fallback');
-  }
-  if (!/function cuefieldAutoMixBlockedByAlbumGapless\(index\)[\s\S]{0,120}albumGaplessQueueCanAdvance\(index\)/.test(integrationText) || !/if \(cuefieldAutoMixBlockedByAlbumGapless\(currentIndex\)\) return false;/.test(integrationText) || !/cuefieldAutoMixBlockedByAlbumGapless\(pending\.currentIndex\)[\s\S]{0,180}album-gapless-priority/.test(integrationText) || !/function startAlbumGaplessMix\(preload, reason, remaining\)[\s\S]{0,360}cuefieldAutoMixExecuting[^\n]*return false;/.test(playbackText)) {
-    fail('Cuefield AutoMix and album gapless must stay mutually exclusive so only one prepared B-deck can transition');
-  }
-  if (!/albumGaplessMixed:\s*true/.test(integrationText) || !/preserveGain:\s*albumGaplessMixed/.test(playbackText) || !/preserveGain:\s*!!opts\.preserveGain/.test(controlsText) || !/else if \(!opts\.preserveGain\) restorePlaybackGain\(\)/.test(controlsText)) {
-    fail('Cuefield mixed handoff must preserve the completed incoming gain through the shared playback-start path');
-  }
-  if (!/CUEFIELD_AUTOMIX_NORMAL_START_SETTLE_MS = 4200/.test(integrationText) || !/CUEFIELD_AUTOMIX_HANDOFF_SETTLE_MS = 5200/.test(integrationText) || !/function cuefieldAutoMixVisualTransitionBusy/.test(integrationText) || !/cuefieldAutoMixVisualTransitionBusy\(\)[\s\S]{0,120}scheduleCuefieldAutoMixPrepare\(token, currentIndex, 900/.test(integrationText) || !/cuefieldAutoMixPostSwitchDelay\(!!opts\.cuefieldAutoMix\)/.test(playbackText)) {
-    fail('Cuefield background analysis must wait for cover and particle transition work to settle');
-  }
-  if (!/function contextStillCurrent\(\)/.test(integrationText) || !/var analysisToken = beatMapToken/.test(integrationText) || !/descriptor = await cuefieldAutoMixAudioDescriptor\(song\);[\s\S]{0,220}analysisToken !== beatMapToken[\s\S]{0,120}cuefieldAutoMixVisualTransitionBusy\(\)/.test(integrationText) || !/analyzeAudioBeats\(descriptor\.proxyUrl, null, analysisToken/.test(integrationText)) {
-    fail('Cuefield beat analysis must revalidate track ownership and visual-idle state after resolving the next audio URL');
-  }
-  if (!/audioSourceMedia = null/.test(coreStoreText) || !/function cuefieldCreatePreparedAudioGraph/.test(integrationText) || !/createMediaElementSource\(media\)/.test(integrationText) || !/__mineradioPreparedAudioGraph/.test(audioGraphText) || !/preparedGraph\.adopted = true/.test(audioGraphText) || !/audioSourceMedia = audio/.test(audioGraphText)) {
-    fail('Cuefield must prepare B in the same AudioContext and adopt its existing source/analyser/gain graph without rebinding mid-playback');
-  }
-  if (!/function resetAudioVisualState\(options\)/.test(beatCameraText) || !/preserveEnvelope/.test(beatCameraText) || !/function resetBeatCameraSync\(t, options\)/.test(beatCameraText) || !/preserveMomentum/.test(beatCameraText) || !/resetAudioVisualState\(\{ preserveEnvelope: albumGaplessMixed \}\)/.test(playbackText) || !/preserveMomentum: albumGaplessMixed/.test(playbackText) || !/syncBeatMapPlaybackCursor\(audio \? audio\.currentTime : 0, albumGaplessMixed\)/.test(playbackText)) {
-    fail('mixed handoff must preserve the live particle envelope and camera momentum while aligning the new beat-map cursor');
-  }
-  if (!/var cuefieldMediaFadeSerial = 0/.test(integrationText) || !/function cancelCuefieldMediaFade/.test(integrationText) || !/function claimCuefieldPreparedAudioForPlayback\(media\)[\s\S]{0,180}cancelCuefieldMediaFade\(\)/.test(integrationText) || !/serial !== cuefieldMediaFadeSerial/.test(integrationText) || !/await applyAudioOutputDevice\(nextMedia\)/.test(integrationText)) {
-    fail('Cuefield must cancel the temporary B-deck fade and apply the selected output device before ownership handoff');
-  }
-  console.log('[OK] Cuefield AutoMix is opt-in, packages with the app, uses local feedback, and reuses safe handoff controls.');
+  console.log('[OK] Cuefield AutoMix keeps 5 front-end modules over a dual-engine backend (default v2, visible v1 fallback).');
 }
 
 function checkAlbumDetailGaplessGuard() {
@@ -3095,5 +3122,5 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
 }
 
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
 };

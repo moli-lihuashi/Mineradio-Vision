@@ -10,7 +10,7 @@ module.exports = function register(ctx) {
     sendJSON, readRequestBody,
     handleQQSearch, handleQQSongUrl, handleQQLyric,
     getQQLoginInfo, normalizeQQCookieInput, parseCookieString,
-    qqCookieUin, qqCookieMusicKey, saveQQCookie, refreshQQCookieSession,
+    qqCookieUin, qqCookieMusicKey, saveQQCookie, bumpQQCookieEpoch, withQQCookieWriteLock, refreshQQCookieSession,
     handleQQUserPlaylists, handleQQPlaylistTracks,
     handleQQArtistDetail, handleQQSongComments,
   } = ctx;
@@ -107,7 +107,9 @@ module.exports = function register(ctx) {
           sendJSON(res, { provider: 'qq', loggedIn: false, error: 'INVALID_QQ_COOKIE', message: 'QQ cookie 缺少 uin 或有效登录票据' }, 400);
           return;
         }
-        saveQQCookie(normalized);
+        // 写锁 + 代际递增：与后台刷新互斥，且让在途刷新发现“用户刚保存过”而放弃旧值写回。
+        // bump 必须在锁内，否则“写盘→释放锁→bump”之间刷新可插入并覆盖
+        await withQQCookieWriteLock(() => { saveQQCookie(normalized); bumpQQCookieEpoch(); });
         const info = await getQQLoginInfo();
         sendJSON(res, { ...info, saved: true });
       } catch (err) {
@@ -118,7 +120,8 @@ module.exports = function register(ctx) {
     }
 
     if (pn === '/api/qq/logout') {
-      saveQQCookie('');
+      // 登出也是外部写入：锁内清空并作废在途刷新的写回，防止退完又“被登录”
+      await withQQCookieWriteLock(() => { saveQQCookie(''); bumpQQCookieEpoch(); });
       sendJSON(res, { provider: 'qq', ok: true, loggedIn: false });
       return;
     }

@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- CSP：自包含文档；封面图经 IPC 下发，可能是 https 直链、http 直链（酷狗）或 data: -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; connect-src 'self'; object-src 'none'; base-uri 'self'">
   <title>Mineradio Wallpaper</title>
   <style>
     html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050608}

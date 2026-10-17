@@ -7,6 +7,10 @@
 //    优点: 完全规避人声干扰; 预先准备好节奏表
 //    缺点: 每首歌首次要 1-3 秒
 // ============================================================
+
+// 缺 musicalProfile 的老缓存（pack v1）只补算一次，避免分析失败时每轮队列都重跑。
+var beatProfileBackfill = {};
+
 function medianGap(times, minGap, maxGap) {
   if (!times || times.length < 2) return 0;
   var gaps = [];
@@ -96,19 +100,29 @@ var musicTempoLoadPromise = null;
 function ensureMusicTempo() {
   if (window.MusicTempo) return Promise.resolve(window.MusicTempo);
   if (musicTempoLoadPromise) return musicTempoLoadPromise;
-  musicTempoLoadPromise = fetch('/vendor/music-tempo.min.js')
-    .then(function(resp){
-      if (!resp.ok) throw new Error('music-tempo load failed: ' + resp.status);
-      return resp.text();
-    })
-    .then(function(code){
-      (0, eval)(code);
-      return window.MusicTempo || null;
-    })
-    .catch(function(err){
-      console.warn('music-tempo dynamic load failed:', err);
-      return null;
-    });
+  // 同源静态资源用 <script> 懒加载，不再 fetch+eval：
+  // 既避开 eval（CSP/审计面），也让浏览器按常规脚本管线处理
+  musicTempoLoadPromise = new Promise(function(resolve){
+    var hit = document.querySelector('script[data-mr-src="/vendor/music-tempo.min.js"]');
+    if (hit && hit.getAttribute('data-mr-state') === 'ok') {
+      resolve(window.MusicTempo || null);
+      return;
+    }
+    var sc = hit || document.createElement('script');
+    sc.src = '/vendor/music-tempo.min.js';
+    sc.async = true;
+    sc.setAttribute('data-mr-src', '/vendor/music-tempo.min.js');
+    sc.onload = function () {
+      sc.setAttribute('data-mr-state', 'ok');
+      resolve(window.MusicTempo || null);
+    };
+    sc.onerror = function () {
+      sc.setAttribute('data-mr-state', 'error');
+      console.warn('music-tempo dynamic load failed');
+      resolve(null);
+    };
+    if (!hit) document.head.appendChild(sc);
+  });
   return musicTempoLoadPromise;
 }
 
@@ -410,9 +424,17 @@ async function runQueueBeatPrefetch(fromIdx, token, seq, state) {
   try {
     if (token !== beatMapToken || seq !== beatPrefetchToken) return;
     var diskMap = await readBeatDiskCache(key);
-    if (diskMap) {
+    // 老缓存（pack v1）没有 musicalProfile：cuefield v2 的 musicalEvidence 会恒为 false，
+    // 那 4 个依赖和声的 recipe 永远不 eligible。命中但缺画像时清掉内存缓存，往下补算一次。
+    if (diskMap && diskMap.musicalProfile) {
       console.log('队列节奏D盘缓存命中:', song.name || key, diskMap.visualBeatCount || 0);
       return;
+    }
+    if (diskMap) {
+      if (beatProfileBackfill[key]) return;
+      beatProfileBackfill[key] = true;
+      delete beatMapCache[key];
+      console.log('队列节奏缓存缺音高画像，后台补算:', song.name || key);
     }
     var audioUrl = await fetchBeatPrefetchAudioUrl(song);
     if (token !== beatMapToken || seq !== beatPrefetchToken || !audioUrl || beatMapCache[key]) return;

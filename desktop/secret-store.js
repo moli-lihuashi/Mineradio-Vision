@@ -15,6 +15,15 @@ function readSecretFile(filePath) {
       }
       return safeStorage.decryptString(buf.subarray(2)).trim();
     }
+    // 无 "MR" 前缀 = 历史明文文件。
+    // 只在「本机加密可用」时接受：这种环境下调用方会立刻把它重写成密文完成迁移，
+    // 明文不会长期存在；加密不可用时 fail-closed 返回空（宁可让用户重新登录，
+    // 也不把明文文件当成有效凭据无条件信任——那等于加密形同虚设）。
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[SecretStore] plaintext credential file ignored (OS encryption unavailable):', filePath);
+      return '';
+    }
+    console.warn('[SecretStore] legacy plaintext credential file, will re-encrypt on next write:', filePath);
     return buf.toString('utf8').trim();
   } catch (e) {
     console.warn('[SecretStore] read failed:', filePath, e.message);

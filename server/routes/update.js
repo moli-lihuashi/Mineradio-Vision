@@ -17,6 +17,29 @@ module.exports = function register(ctx) {
     readCuefieldFeedbackStats, appendCuefieldFeedback,
   } = ctx;
 
+  // v2（cuefield-next）引擎惰性加载：268KB，只在显式 engine:'v2' 时才 require，
+  // 不给默认启动路径加任何成本。注意本文件在 server/routes/ 下，仓库根是两层之上。
+  let cuefieldNextBridge = null;
+  function loadCuefieldNextBridge() {
+    if (!cuefieldNextBridge) cuefieldNextBridge = require('../../cuefield-next/mineradio-bridge');
+    return cuefieldNextBridge;
+  }
+
+  // cuefield 的 readBeatMapCache 是**同步**接口（内部 entryFromCache 直接取返回值当 entry 用），
+  // 而本仓库的 readBeatMapCache 已改成 async（fs.promises）→ 直接把 async 函数传进去拿到的是
+  // Promise，`entry.map` 恒为 undefined，必然抛 BEATMAP_CACHE_MISS。
+  // 这里一次性预读 from/to 两个 key，给出同步查表闭包。
+  async function cuefieldCacheLookup(fromKey, toKey) {
+    const read = (key) => Promise.resolve()
+      .then(() => readBeatMapCache(key))
+      .catch(() => null);
+    const [fromEntry, toEntry] = await Promise.all([read(fromKey), read(toKey)]);
+    const table = new Map();
+    if (fromEntry && fromEntry.map) table.set(String(fromKey), fromEntry);
+    if (toEntry && toEntry.map) table.set(String(toKey), toEntry);
+    return (key) => table.get(String(key)) || null;
+  }
+
   return async function(req, res, url, pn) {
     if (pn === '/api/app/version') {
       sendJSON(res, {
@@ -154,15 +177,51 @@ module.exports = function register(ctx) {
       }
       try {
         const body = await readRequestBody(req);
-        const plan = planCuefieldTransitionFromCache({
+        // 默认 v2（cuefield-next / 上游 19 模块）。前端执行层已是配套的 5 模块版本，
+        // 能消费 duck/echo/loop/rate/spectrum/bridge 与 volume 双曲线；显式传 'v1' 可回落旧引擎。
+        const engine = String(
+          body.engine || (url && url.searchParams && url.searchParams.get('engine')) || 'v2'
+        ).trim().toLowerCase();
+        const readCache = await cuefieldCacheLookup(body.fromKey, body.toKey);
+        const baseOpts = {
           fromKey: body.fromKey,
           toKey: body.toKey,
           fromLrc: body.fromLrc,
           toLrc: body.toLrc,
           exitBias: body.exitBias || 'late',
           maxEntryTime: Math.max(8, Math.min(32, Number(body.maxEntryTime) || 32)),
-          readBeatMapCache,
-        });
+          readBeatMapCache: readCache,
+        };
+        let plan = null;
+        let solvedBy = 'v1';
+        let v2Fallback = null;
+        if (engine === 'v2') {
+          try {
+            plan = loadCuefieldNextBridge().planCuefieldTransitionFromCache({
+              ...baseOpts,
+              minimumListenUntil: body.minimumListenUntil,
+              // 只带最近 2 条：避免同一种配方连刷（上游的 cadence 抖动抑制）
+              recentRecipes: Array.isArray(body.recentRecipes) ? body.recentRecipes.slice(-2) : [],
+              enableCleanBoundary: body.enableCleanBoundary === true,
+              enableCadenceFallback: body.enableCadenceFallback === true,
+              boundaryEvidence: body.boundaryEvidence,
+              tailEvidence: body.tailEvidence,
+              enableLiveEndCrossfadeFallback: body.enableLiveEndCrossfadeFallback === true,
+            });
+            solvedBy = 'v2';
+          } catch (v2Err) {
+            // v2 任何异常都不能影响 v1，但回落必须可见（不要静默）：
+            // 响应里带 engineFallback，探针/前端都能看出「要了 v2 实际跑了 v1」。
+            v2Fallback = String(v2Err && (v2Err.code || v2Err.message) || 'CUEFIELD_V2_FAILED');
+            console.warn('[cuefield] v2 engine failed, falling back to v1:', v2Fallback);
+            plan = null;
+          }
+        }
+        if (!plan) plan = planCuefieldTransitionFromCache(baseOpts);
+        if (plan && typeof plan === 'object' && !Array.isArray(plan)) {
+          plan.engine = solvedBy;
+          if (v2Fallback) plan.engineFallback = { requested: 'v2', actual: solvedBy, error: v2Fallback };
+        }
         sendJSON(res, plan);
       } catch (err) {
         // 返回 200 + ok:false：beatmap 缓存缺失等场景属预期跳过，

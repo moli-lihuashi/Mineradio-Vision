@@ -38,6 +38,32 @@ function withHttpsMock(handler, task) {
   return Promise.resolve().then(task).finally(() => { https.request = original; });
 }
 
+function installSafeStorageStub(root) {
+  const Module = require('module');
+  const stubPath = path.join(root, 'electron-safestorage-stub.js');
+  fs.writeFileSync(stubPath, [
+    "'use strict';",
+    "const PREFIX = Buffer.from('MR');",
+    'const encode = (text) => Buffer.from(Buffer.from(String(text), "utf8").toString("base64").split("").reverse().join(""), "utf8");',
+    'const decode = (buf) => Buffer.from(Buffer.from(buf).toString("utf8").split("").reverse().join(""), "base64").toString("utf8");',
+    'module.exports = {',
+    '  app: { getPath: () => require("os").tmpdir(), isReady: () => true },',
+    '  safeStorage: {',
+    '    isEncryptionAvailable: () => true,',
+    '    encryptString: (text) => encode(text),',
+    '    decryptString: (buf) => decode(buf),',
+    '  },',
+    '  PREFIX,',
+    '};',
+    '',
+  ].join('\n'), 'utf8');
+  const originalResolve = Module._resolveFilename;
+  Module._resolveFilename = function (request, parent, isMain, options) {
+    if (request === 'electron') return stubPath;
+    return originalResolve.call(this, request, parent, isMain, options);
+  };
+}
+
 async function run() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mineradio-spotify-resilience-'));
   const configFile = path.join(root, '.spotify-credentials.json');
@@ -46,6 +72,10 @@ async function run() {
   process.env.SPOTIFY_TOKEN_FILE = tokenFile;
   process.env.SPOTIFY_CLIENT_ID = 'spotify-test-client';
   delete process.env.SPOTIFY_CLIENT_SECRET;
+
+  // token 落盘已改为加密（fail-closed）：测试进程没有真实 DPAPI，
+  // 用可控 safeStorage 桩模拟「本机加密可用」的生产环境。
+  installSafeStorageStub(root);
 
   const spotify = require('../spotify-api');
   const runtime = spotify._test;

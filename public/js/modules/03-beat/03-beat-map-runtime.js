@@ -63,12 +63,49 @@ function unpackLocalBeatEvent(row) {
     step: row[11] || 0
   };
 }
+// 音高/和声画像（cuefield v2 musical-profile.js 的唯一输入）。
+// 只保留消费方真正读的字段：pitchClassProfile / intervalProfile / key / windows；
+// debug（frameCount/keyMargin/tonalShare…）只在内存里给探针看，不写盘。
+function packMusicalProfile(profile) {
+  if (!profile || !Array.isArray(profile.pitchClassProfile) || profile.pitchClassProfile.length !== 12) return null;
+  var packed = {
+    source: String(profile.source || 'chroma-fft-v1').slice(0, 24),
+    noteCount: profile.noteCount || 0,
+    noteDensity: localBeatRound(profile.noteDensity || 0, 1000),
+    confidence: localBeatRound(profile.confidence || 0, 1000),
+    pitchClassProfile: profile.pitchClassProfile.slice(0, 12),
+    intervalProfile: Array.isArray(profile.intervalProfile) ? profile.intervalProfile.slice(0, 25) : [],
+    key: profile.key ? {
+      root: profile.key.root || 0,
+      mode: profile.key.mode || 'major',
+      name: String(profile.key.name || '').slice(0, 12),
+      confidence: localBeatRound(profile.key.confidence || 0, 1000)
+    } : null
+  };
+  if (Array.isArray(profile.windows) && profile.windows.length) {
+    packed.windows = profile.windows.slice(0, 32).map(function (win) {
+      if (!win || !Array.isArray(win.pitchClassProfile)) return null;
+      return {
+        start: localBeatRound(win.start || 0, 1000),
+        duration: localBeatRound(win.duration || 0, 1000),
+        confidence: localBeatRound(win.confidence || 0, 1000),
+        noteCount: win.noteCount || 0,
+        pitchClassProfile: win.pitchClassProfile.slice(0, 12),
+        intervalProfile: Array.isArray(win.intervalProfile) ? win.intervalProfile.slice(0, 25) : [],
+        key: win.key ? { root: win.key.root || 0, mode: win.key.mode || 'major', name: String(win.key.name || '').slice(0, 12), confidence: localBeatRound(win.key.confidence || 0, 1000) } : null
+      };
+    }).filter(Boolean);
+  }
+  return packed;
+}
 function packLocalBeatMap(map) {
   if (!map) return null;
   var camera = (map.cameraBeats || map.beats || map.kicks || []).map(packLocalBeatEvent);
   var pulse = (map.pulseBeats || map.kicks || []).map(packLocalBeatEvent);
   return {
-    v: 1,
+    // v2 = 多了 musicalProfile。老的 v1 条目仍可读（unpack 认 1|2），但缺画像的那几首
+    // 会在后台预热时补算一次，见 00-tempo-worker-cache-prefetch.js。
+    v: 2,
     duration: localBeatRound(map.duration || 0, 1000),
     gridStep: localBeatRound(map.gridStep || 0, 1000),
     sectionSteps: (map.sectionSteps || []).map(function(v){ return localBeatRound(v, 1000); }),
@@ -78,7 +115,8 @@ function packLocalBeatMap(map) {
     partial: !!map.partial,
     partialUntilSec: map.partialUntilSec || 0,
     cameraBeats: camera,
-    pulseBeats: pulse
+    pulseBeats: pulse,
+    musicalProfile: packMusicalProfile(map.musicalProfile)
   };
 }
 function unpackLocalBeatMap(stored) {
@@ -98,7 +136,8 @@ function unpackLocalBeatMap(stored) {
     visualBeatCount: stored.visualBeatCount || camera.length,
     analyzedAt: stored.analyzedAt || Date.now(),
     partial: !!stored.partial,
-    partialUntilSec: stored.partialUntilSec || 0
+    partialUntilSec: stored.partialUntilSec || 0,
+    musicalProfile: stored.musicalProfile || null
   };
 }
 function readLocalBeatPrefs() {

@@ -372,9 +372,12 @@
       return;
     }
     list.innerHTML = plugins.map(function (plugin) {
-      return '<label class="fx-toggle' + (plugin.enabled ? ' on' : '') + '" style="justify-content:space-between;gap:10px;padding:8px 10px" data-lg-plugin="' + plugin.id + '">' +
-        '<span style="min-width:0"><strong style="display:block;font-size:11.5px">' + (plugin.name || plugin.id) + '</strong>' +
-        '<small style="display:block;margin-top:3px;color:rgba(255,255,255,.42);font-size:10px">' + (plugin.description || plugin.id) + '</small></span>' +
+      var pid = escAttr(plugin.id == null ? '' : String(plugin.id));
+      var pname = escHtml(plugin.name || plugin.id || '');
+      var pdesc = escHtml(plugin.description || plugin.id || '');
+      return '<label class="fx-toggle' + (plugin.enabled ? ' on' : '') + '" style="justify-content:space-between;gap:10px;padding:8px 10px" data-lg-plugin="' + pid + '">' +
+        '<span style="min-width:0"><strong style="display:block;font-size:11.5px">' + pname + '</strong>' +
+        '<small style="display:block;margin-top:3px;color:rgba(255,255,255,.42);font-size:10px">' + pdesc + '</small></span>' +
         '<span style="flex:0 0 auto;font-size:10.5px">' + (plugin.enabled ? '开' : '关') + '</span>' +
         '</label>';
     }).join('');

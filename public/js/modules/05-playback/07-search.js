@@ -250,6 +250,10 @@ function renderPodcastPrograms() {
     $results.__podcastVirtualBound = true;
     $results.addEventListener('scroll', throttle(function(){
       if (searchMode !== 'podcast' || !podcastPrograms.length) return;
+      // 窗口差分：overscan 内的小幅滚动不重建 DOM
+      var range = podcastProgramVirtualRange();
+      if (range.start === podcastVirtualState.start && range.end === podcastVirtualState.end
+        && range.total === podcastVirtualState.total && podcastVirtualState.idx === currentIdx) return;
       var wrap = $results.querySelector('.podcast-program-virtual');
       if (wrap) wrap.innerHTML = podcastProgramRowsHtml();
     }, 16), { passive: true });
@@ -258,7 +262,8 @@ function renderPodcastPrograms() {
 }
 var PODCAST_PROGRAM_ROW_STEP = 62;
 var PODCAST_PROGRAM_OVERSCAN = 6;
-function podcastProgramRowsHtml() {
+var podcastVirtualState = { start: -1, end: -1, total: -1, idx: -1 };
+function podcastProgramVirtualRange() {
   var total = podcastPrograms.length;
   var head = $results.querySelector('.podcast-result-head');
   var headH = head ? (head.offsetHeight || 58) : 58;
@@ -269,6 +274,15 @@ function podcastProgramRowsHtml() {
   var end = Math.min(total, start + maxRows);
   start = Math.max(0, Math.min(start, Math.max(0, total - maxRows)));
   end = Math.min(total, Math.max(end, start + maxRows));
+  return { start: start, end: end, total: total };
+}
+function podcastProgramRowsHtml() {
+  var range = podcastProgramVirtualRange();
+  var start = range.start, end = range.end;
+  podcastVirtualState.start = start;
+  podcastVirtualState.end = end;
+  podcastVirtualState.total = range.total;
+  podcastVirtualState.idx = currentIdx;
   var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (start * PODCAST_PROGRAM_ROW_STEP) + 'px"></div>';
   html += podcastPrograms.slice(start, end).map(function(p, localIndex){
     var i = start + localIndex;

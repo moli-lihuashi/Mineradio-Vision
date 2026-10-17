@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.2.0
+
+### cuefield 过渡引擎 v2（默认启用）
+
+- 收进上游 `cuefield-next/` 的 19 个模块，`POST /api/cuefield/transition` 默认 `engine: "v2"`；显式传 `engine: "v1"` 才回落到旧的 8 模块实现。
+- v2 出错会自动回 v1，并在响应里带 `engineFallback`（回落永远可见，不静默）。
+- 前端执行层换成配套的 5 个模块（`05-cuefield/00 / 01 / 01a / 01b / 02`），可消费 duck / echo / bridge / loop / rate / spectrum 与 A/B 双 deck 独立 volume 曲线（11 种 op）；v1 执行层只会压成一次 equal-power crossfade。
+- 两代引擎产出结构不兼容（v2 用 `policy` / `route` / `rescueClass`，多出 `artifact` / `rejected`），请求版本必须与前端执行层配套。
+- v2 在真实歌曲上多为 `tier: "weak"`，本仓库显式放开 `allowWeak: true` 并把门槛抬到 `minWeakScore: 0.6`。
+- 和声证据需要的 `musicalProfile` 改为自带实现：降采样到 ~12kHz → 4096 点 FFT → 取谱峰 → 12 音级 chroma → Krumhansl 模板相关系数定调，随 beatmap 落盘（pack `v: 2`，约 2~3.5 KB；4 分钟整轨约 0.25~0.5s）。
+
+### 安全加固（按 2026-10-17 代码审查逐项修复）
+
+- **凭据一律 fail-closed**：酷狗 / QQ / 汽水 / Spotify 的 cookie 与 token 只以 safeStorage 密文（`MR` 前缀）落盘；加密不可用时只保留在内存并报错。历史明文文件仅在「加密可用」时读取并立即重写为密文。
+- **更新链**：补丁签名缺公钥直接拒绝（不再 fail-open）；安装包下载加大小上限；更新 manifest 只认 https。
+- **媒体代理 SSRF**：手动跟随重定向，并逐跳重新校验 host 白名单。
+- **AI 接口** baseUrl 校验；**IPC sender** 批量校验；新增 **CSP**；手势识别（MediaPipe）与封面深度（Transformers.js）改为从 `public/vendor` 本地加载，失败才回落 CDN。
+- 修复 4 处 **XSS**；汽水验证页的动态脚本改为域名白名单（可用 `MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS` 追加）。
+- 汽水登录态增加 30 天过期判定；QQ cookie 覆盖加锁；登录态轮询加守卫。
+- 未实施：汽水验证页的 `webSecurity:false` 仍保留 —— 关闭它会断掉依赖同源 cookie 的验证链路，需在真实 MFA 环境验证后才能改。
+
+### 性能
+
+- 主循环去掉每帧强制 reflow；FX 滑块落盘加 debounce；虚拟列表改为窗口差分更新。
+
+### 其他
+
+- 汽水本地会话导入窗口下线，登录统一走扫码桥；相关测试同步更新。
+- Spotify token 加密与刷新链路测试补齐。
+
 ## v3.1.0
 
 - **手写墨迹开屏**：开屏改为按采集笔迹回放的 12 笔手写 "mineradio"，前 6 笔（miner）与后 6 笔（adio）两侧同时落笔；进线/出线收缩、写完落墨、水滴弹起裂成三粒，笔速按原始轨迹的 3.2 倍回放。

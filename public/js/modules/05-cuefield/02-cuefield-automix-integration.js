@@ -12,6 +12,10 @@ var cuefieldTransitionGeneration = 0;
 var cuefieldDelayWaiters = [];
 var cuefieldActiveTransitionContext = null;
 var cuefieldAudioDescriptorCache = {};
+var cuefieldRecentRecipes = [];
+var cuefieldBridgeEngine = null;
+var cuefieldSourceLoopRuntime = null;
+var cuefieldDeckVolumeSerial = { A: 0, B: 0 };
 var cuefieldFeedbackState = { context: null, timer: 0, submitted: false };
 var CUEFIELD_AUTOMIX_NORMAL_START_SETTLE_MS = 4200;
 var CUEFIELD_AUTOMIX_HANDOFF_SETTLE_MS = 5200;
@@ -42,6 +46,7 @@ function cuefieldAutoMixStatusText(status) {
     'waiting-beatmap': '正在准备节拍图',
     'missing-audio': '下一首暂不可用',
     fallback: '本组歌曲暂不适合混音',
+    'technical-error': '分析暂不可用',
     ready: '过渡已准备',
     handoff: '正在自动过渡',
     error: '准备失败'
@@ -49,20 +54,25 @@ function cuefieldAutoMixStatusText(status) {
 }
 
 function updateCuefieldAutoMixUi(status) {
-  var toggle = document.getElementById('quick-menu-automix-toggle');
-  if (!toggle) return;
-  var statusEl = document.getElementById('quick-menu-automix-status');
+  // 本仓库的开关在快捷菜单里（#quick-menu-automix-toggle），不是上游的 #cuefield-automix-btn。
+  // 只认旧 id 的话开/关与 ready 态在界面上完全不更新 —— CSS 里 .on / .cuefield-automix-ready
+  // 那几条规则会全成死代码，用户按了开关只看得到一条 toast，之后没有任何视觉确认。
+  var button = document.getElementById('quick-menu-automix-toggle')
+    || document.getElementById('cuefield-automix-btn');
+  if (!button) return;
   var snapshot = cuefieldAutoMix && cuefieldAutoMix.snapshot ? cuefieldAutoMix.snapshot() : null;
   var ready = !!(snapshot && snapshot.pending);
-  toggle.classList.toggle('on', !!cuefieldAutoMixEnabled);
-  toggle.classList.toggle('cuefield-automix-ready', !!cuefieldAutoMixEnabled && ready);
-  toggle.setAttribute('aria-pressed', cuefieldAutoMixEnabled ? 'true' : 'false');
-  toggle.title = cuefieldAutoMixEnabled
+  button.classList.toggle('on', !!cuefieldAutoMixEnabled);
+  button.classList.toggle('cuefield-automix-on', !!cuefieldAutoMixEnabled);
+  button.classList.toggle('cuefield-automix-ready', !!cuefieldAutoMixEnabled && ready);
+  button.setAttribute('aria-pressed', cuefieldAutoMixEnabled ? 'true' : 'false');
+  button.title = cuefieldAutoMixEnabled
     ? ('Cuefield AutoMix · ' + (ready ? '过渡已准备' : cuefieldAutoMixStatusText(status || (snapshot && snapshot.lastStatus))))
     : 'Cuefield AutoMix（实验功能，默认关闭）';
-  if (statusEl) {
-    statusEl.textContent = cuefieldAutoMixEnabled
-      ? ('自动过渡 · ' + (ready ? '已就绪' : cuefieldAutoMixStatusText(status || (snapshot && snapshot.lastStatus))))
+  var label = document.getElementById('quick-menu-automix-status');
+  if (label) {
+    label.textContent = cuefieldAutoMixEnabled
+      ? (ready ? '过渡已准备' : cuefieldAutoMixStatusText(status || (snapshot && snapshot.lastStatus)))
       : '实验功能 · 默认关闭';
   }
 }
@@ -156,8 +166,14 @@ async function ensureCuefieldAutoMixBeatMap(song, key, context) {
 function initCuefieldAutoMix() {
   if (cuefieldAutoMix || !window.CuefieldAutoMix || typeof window.CuefieldAutoMix.createCuefieldAutoMix !== 'function') return cuefieldAutoMix;
   cuefieldAutoMix = window.CuefieldAutoMix.createCuefieldAutoMix({
-    allowWeak: false,
-    allowSafetyFallback: false,
+    // 上游默认 allowWeak:false —— 它会把 tier='weak' 的 plan 全部拒掉。
+    // 实测真实歌曲（光年之外 → BA MIRA，真 beatmap + 真歌词）产出的 echo-out plan
+    // 正好是 tier='weak' / score=0.604，被这个开关拦在门外，用户听感上等于没有 automix。
+    // 这里放开 weak，但把分数门槛从默认 0.58 抬到 0.6，只放行「上游自己也认为勉强可用」的那一档。
+    allowWeak: true,
+    minWeakScore: 0.6,
+    allowSafetyFallback: true,
+    allowLiveEndCrossfadeFallback: true,
     minMixConfidence: 0.64,
     getKey: cuefieldSongKey,
     ensureBeatMap: ensureCuefieldAutoMixBeatMap,
@@ -168,24 +184,21 @@ function initCuefieldAutoMix() {
         cuefieldLyricTextForSong(fromSong, true),
         cuefieldLyricTextForSong(toSong, false)
       ]);
-      try {
-        return await apiJson('/api/cuefield/transition', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fromKey: fromKey,
-            toKey: toKey,
-            fromLrc: lyricPair[0] || '',
-            toLrc: lyricPair[1] || '',
-            exitBias: 'late',
-            maxEntryTime: 32
-          })
-        });
-      } catch (err) {
-        // beat map 缓存未命中（新歌尚未分析）时服务端回 400，属正常降级：
-        // 返回 ok:false 由 automix core 走 fallback，不再向控制台抛资源加载错误。
-        return { ok: false, error: (err && err.message) || 'CUEFIELD_TRANSITION_SKIPPED', skipped: true };
-      }
+      return apiJson('/api/cuefield/transition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromKey: fromKey,
+          toKey: toKey,
+          fromLrc: lyricPair[0] || '',
+          toLrc: lyricPair[1] || '',
+          exitBias: 'late',
+          maxEntryTime: 32,
+          recentRecipes: cuefieldRecentRecipes.slice(-2),
+          minimumListenUntil: context && context.minimumListenUntil,
+          enableLiveEndCrossfadeFallback: true
+        })
+      });
     },
     prepareAudioUrl: cuefieldAutoMixAudioDescriptor
   });
@@ -205,6 +218,10 @@ function clearCuefieldTimelineTimers() {
     waiter.resolve(false);
   }
   cancelCuefieldMediaFade();
+  cuefieldDeckVolumeSerial.A++;
+  cuefieldDeckVolumeSerial.B++;
+  if (cuefieldSourceLoopRuntime && cuefieldSourceLoopRuntime.stop) cuefieldSourceLoopRuntime.stop('timeline-clear', false);
+  if (cuefieldBridgeEngine && cuefieldBridgeEngine.stop) cuefieldBridgeEngine.stop('timeline-clear');
 }
 
 function cancelCuefieldMediaFade() {
@@ -231,7 +248,9 @@ function claimCuefieldPreparedAudioForPlayback(media) {
 function disposeCuefieldPreparedAudioGraph(media) {
   var graph = media && media.__mineradioPreparedAudioGraph;
   if (!graph || graph.adopted) return;
-  [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode].forEach(function (node) {
+  [graph.source, graph.filterNode, graph.bassNode, graph.midNode, graph.highNode,
+    graph.analyser, graph.beatAnalyser, graph.gainNode, graph.echoSendNode,
+    graph.echoDelayNode, graph.echoFeedbackNode, graph.echoWetNode].forEach(function (node) {
     try { if (node) node.disconnect(); } catch (_) { }
   });
   try { delete media.__mineradioPreparedAudioGraph; } catch (_) { }
@@ -341,7 +360,7 @@ async function runCuefieldAutoMixPrepare(token, currentIndex, nextIndex, attempt
     currentSong: currentSong,
     nextSong: nextSong,
     leadSec: 4,
-    introBedLeadSec: 12
+      introBedLeadSec: 12
   });
   if (
     token !== trackSwitchToken
@@ -376,7 +395,11 @@ function cuefieldTimelineExecution(pending) {
       timeline: pending.timeline,
       entryTime: pending.entryTime,
       executionMode: pending.executionMode,
-      targetVolume: targetVolume
+      targetVolume: targetVolume,
+      mixStart: pending.mixStart,
+      handoffAt: pending.handoffAt,
+      audibleOverlap: pending.audibleOverlap,
+      preRollDuration: pending.preRollDuration
     });
   }
   return { leadSec: 4, bStart: Math.max(0, Number(pending.entryTime) || 0), handoffDelayMs: 2600, actions: [] };
@@ -397,7 +420,11 @@ function cuefieldCreatePreparedAudioGraph(media) {
   try {
     if ((!audioCtx || audioCtx.state === 'closed') && typeof initAudio === 'function') initAudio();
     if (!audioCtx || audioCtx.state === 'closed' || !audioCtx.createMediaElementSource) return null;
-    graph = { context: audioCtx, source: null, analyser: null, beatAnalyser: null, gainNode: null, adopted: false };
+    graph = {
+      context: audioCtx, source: null, filterNode: null, bassNode: null, midNode: null, highNode: null,
+      analyser: null, beatAnalyser: null, gainNode: null, echoSendNode: null,
+      echoDelayNode: null, echoFeedbackNode: null, echoWetNode: null, adopted: false
+    };
     graph.source = audioCtx.createMediaElementSource(media);
     // A media element cannot be safely returned to direct-output mode after a
     // MediaElementSource has been created for it. Mark it immediately so a
@@ -406,20 +433,59 @@ function cuefieldCreatePreparedAudioGraph(media) {
     graph.analyser = audioCtx.createAnalyser();
     graph.beatAnalyser = audioCtx.createAnalyser();
     graph.gainNode = audioCtx.createGain();
+    graph.filterNode = audioCtx.createBiquadFilter();
+    graph.filterNode.type = 'highpass';
+    graph.filterNode.frequency.value = 20;
+    graph.bassNode = audioCtx.createBiquadFilter();
+    graph.bassNode.type = 'lowshelf';
+    graph.bassNode.frequency.value = 180;
+    graph.bassNode.gain.value = 0;
+    graph.midNode = audioCtx.createBiquadFilter();
+    graph.midNode.type = 'peaking';
+    graph.midNode.frequency.value = 1200;
+    graph.midNode.Q.value = 0.72;
+    graph.midNode.gain.value = 0;
+    graph.highNode = audioCtx.createBiquadFilter();
+    graph.highNode.type = 'highshelf';
+    graph.highNode.frequency.value = 5200;
+    graph.highNode.gain.value = 0;
+    if (audioCtx.createDelay) {
+      graph.echoSendNode = audioCtx.createGain();
+      graph.echoDelayNode = audioCtx.createDelay(2);
+      graph.echoFeedbackNode = audioCtx.createGain();
+      graph.echoWetNode = audioCtx.createGain();
+      graph.echoSendNode.gain.value = 0;
+      graph.echoFeedbackNode.gain.value = 0;
+      graph.echoWetNode.gain.value = 0;
+    }
     graph.analyser.fftSize = typeof FFT_SIZE !== 'undefined' ? FFT_SIZE : 2048;
     graph.analyser.smoothingTimeConstant = 0.58;
     graph.beatAnalyser.fftSize = typeof BEAT_FFT_SIZE !== 'undefined' ? BEAT_FFT_SIZE : 1024;
     graph.beatAnalyser.smoothingTimeConstant = 0.10;
     graph.gainNode.gain.value = 0;
-    graph.source.connect(graph.analyser);
+    graph.source.connect(graph.filterNode);
+    graph.filterNode.connect(graph.bassNode);
+    graph.bassNode.connect(graph.midNode);
+    graph.midNode.connect(graph.highNode);
+    graph.highNode.connect(graph.analyser);
     graph.source.connect(graph.beatAnalyser);
     graph.analyser.connect(graph.gainNode);
     graph.gainNode.connect(audioCtx.destination);
+    if (graph.echoSendNode) {
+      graph.highNode.connect(graph.echoSendNode);
+      graph.echoSendNode.connect(graph.echoDelayNode);
+      graph.echoDelayNode.connect(graph.echoFeedbackNode);
+      graph.echoFeedbackNode.connect(graph.echoDelayNode);
+      graph.echoDelayNode.connect(graph.echoWetNode);
+      graph.echoWetNode.connect(audioCtx.destination);
+    }
     media.__mineradioPreparedAudioGraph = graph;
     return graph;
   } catch (error) {
     if (graph) {
-      [graph.source, graph.analyser, graph.beatAnalyser, graph.gainNode].forEach(function (node) {
+      [graph.source, graph.filterNode, graph.bassNode, graph.midNode, graph.highNode,
+        graph.analyser, graph.beatAnalyser, graph.gainNode, graph.echoSendNode,
+        graph.echoDelayNode, graph.echoFeedbackNode, graph.echoWetNode].forEach(function (node) {
         try { if (node) node.disconnect(); } catch (_) { }
       });
     }
@@ -575,25 +641,216 @@ async function cuefieldWaitForMediaTime(media, targetTime, pending, context) {
   return cuefieldTransitionStillCurrent(pending, context);
 }
 
+function cuefieldRampParam(param, value, durationMs) {
+  if (!param) return false;
+  value = Number(value);
+  durationMs = Math.max(0, Number(durationMs) || 0);
+  try {
+    var ctx = param.context || audioCtx;
+    var now = ctx && Number(ctx.currentTime) || 0;
+    if (typeof param.cancelAndHoldAtTime === 'function') param.cancelAndHoldAtTime(now);
+    else {
+      if (param.cancelScheduledValues) param.cancelScheduledValues(now);
+      if (param.setValueAtTime) param.setValueAtTime(Number(param.value) || 0, now);
+    }
+    if (durationMs && param.linearRampToValueAtTime) param.linearRampToValueAtTime(value, now + durationMs / 1000);
+    else if (param.setValueAtTime) param.setValueAtTime(value, now);
+    else param.value = value;
+    return true;
+  } catch (_) {
+    try { param.value = value; return true; } catch (_) { return false; }
+  }
+}
+
+function cuefieldVolumeCurveValue(curve, progress) {
+  progress = Math.max(0, Math.min(1, Number(progress) || 0));
+  if (curve === 'equal-power-in') return Math.sin(progress * Math.PI * 0.5);
+  if (curve === 'equal-power-out') return Math.cos(progress * Math.PI * 0.5);
+  if (curve === 'cubic-ease-in') return progress * progress * progress;
+  if (curve === 'cubic-ease-out') return 1 - Math.pow(1 - progress, 3);
+  return progress * progress * (3 - 2 * progress);
+}
+
+function cuefieldAnimateDeckVolume(deck, media, target, durationMs, curve, pending, context) {
+  deck = deck === 'A' ? 'A' : 'B';
+  var serial = ++cuefieldDeckVolumeSerial[deck];
+  durationMs = Math.max(0, Number(durationMs) || 0);
+  target = Math.max(0, Math.min(1, Number(target) || 0));
+  var graph = media && media.__mineradioPreparedAudioGraph;
+  var start = deck === 'A'
+    ? (typeof currentAudioOutputGain === 'function' ? currentAudioOutputGain() : Number(targetVolume) || 0)
+    : (graph && graph.gainNode ? Number(graph.gainNode.gain.value) || 0 : Number(media && media.volume) || 0);
+  if (!durationMs) {
+    if (deck === 'A' && typeof writeAudioOutputGain === 'function') writeAudioOutputGain(target);
+    else cuefieldWriteIncomingGain(media, target);
+    return;
+  }
+  var startedAt = performance.now();
+  function tick(now) {
+    if (serial !== cuefieldDeckVolumeSerial[deck] || !cuefieldTransitionStillCurrent(pending, context)) return;
+    var progress = Math.max(0, Math.min(1, (now - startedAt) / durationMs));
+    var shaped = cuefieldVolumeCurveValue(curve, progress);
+    var value = curve === 'equal-power-out'
+      ? target + (start - target) * shaped
+      : start + (target - start) * shaped;
+    if (deck === 'A' && typeof writeAudioOutputGain === 'function') writeAudioOutputGain(value);
+    else cuefieldWriteIncomingGain(media, value);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function cuefieldApplyGraphEcho(graph, action, pending, context) {
+  if (!graph || !graph.echoSendNode || !graph.echoDelayNode || !graph.echoFeedbackNode || !graph.echoWetNode) return false;
+  var duration = Math.max(0, Number(action.durationMs) || 0);
+  if (action.enabled === false) {
+    cuefieldRampParam(graph.echoSendNode.gain, 0, duration);
+    var tailMs = Math.max(300, Math.min(4000, Number(action.tailMs) || 1200));
+    var decayStart = (Number(graph.context && graph.context.currentTime) || 0) + tailMs / 1000;
+    var decayEnd = decayStart + 0.32;
+    try {
+      graph.echoFeedbackNode.gain.setValueAtTime(graph.echoFeedbackNode.gain.value, decayStart);
+      graph.echoFeedbackNode.gain.linearRampToValueAtTime(0, decayEnd);
+      graph.echoWetNode.gain.setValueAtTime(graph.echoWetNode.gain.value, decayStart);
+      graph.echoWetNode.gain.linearRampToValueAtTime(0, decayEnd);
+    } catch (_) {
+      cuefieldRampParam(graph.echoFeedbackNode.gain, 0, 320);
+      cuefieldRampParam(graph.echoWetNode.gain, 0, 320);
+    }
+    return true;
+  }
+  var bpm = Math.max(40, Math.min(240, Number(action.bpm) || 120));
+  cuefieldRampParam(graph.echoDelayNode.delayTime, Math.max(0.04, Math.min(1.5, 60 / bpm * (Number(action.delayBeats) || 0.5))), duration);
+  cuefieldRampParam(graph.echoFeedbackNode.gain, Math.max(0, Math.min(0.72, Number(action.feedback) || 0)), duration);
+  cuefieldRampParam(graph.echoWetNode.gain, Math.max(0, Math.min(0.5, Number(action.wet) || 0)), duration);
+  cuefieldRampParam(graph.echoSendNode.gain, 1, duration);
+  return true;
+}
+
+function cuefieldApplyGraphDuck(graph, action) {
+  if (!graph || !graph.bassNode || !graph.bassNode.gain || !graph.context) return false;
+  var bpm = Math.max(40, Math.min(240, Number(action.bpm) || 120));
+  var pulseSec = 60 / bpm * Math.max(0.25, Number(action.beats) || 1);
+  var pulses = Math.max(1, Math.min(16, Math.round(Number(action.pulses) || 4)));
+  var param = graph.bassNode.gain;
+  var baseDb = Number(param.value) || 0;
+  var depthDb = Math.max(-24, baseDb - 12 * Math.max(0.08, Math.min(0.75, Number(action.depth) || 0.35)));
+  var attack = Math.min(pulseSec * 0.22, Math.max(0.005, Number(action.attack) || 24) / 1000);
+  var hold = Math.min(pulseSec * 0.3, Math.max(0.01, Number(action.hold) || 70) / 1000);
+  var release = Math.min(pulseSec * 0.46, Math.max(0.04, Number(action.release) || 180) / 1000);
+  var now = Number(graph.context.currentTime) || 0;
+  try {
+    if (param.cancelScheduledValues) param.cancelScheduledValues(now);
+    for (var i = 0; i < pulses; i++) {
+      var at = now + i * pulseSec;
+      param.setValueAtTime(baseDb, at);
+      param.linearRampToValueAtTime(depthDb, at + attack);
+      param.setValueAtTime(depthDb, at + attack + hold);
+      param.linearRampToValueAtTime(baseDb, at + attack + hold + release);
+    }
+    return true;
+  } catch (_) { return false; }
+}
+
+function cuefieldInitSourceLoop() {
+  if (!cuefieldSourceLoopRuntime && window.CuefieldSourceLoop && window.CuefieldSourceLoop.createCuefieldSourceLoop) {
+    cuefieldSourceLoopRuntime = window.CuefieldSourceLoop.createCuefieldSourceLoop();
+  }
+  return cuefieldSourceLoopRuntime;
+}
+
+function cuefieldInitBridge() {
+  if (!cuefieldBridgeEngine && window.CuefieldBridgeEngine && window.CuefieldBridgeEngine.createCuefieldBridgeEngine) {
+    cuefieldBridgeEngine = window.CuefieldBridgeEngine.createCuefieldBridgeEngine();
+  }
+  return cuefieldBridgeEngine;
+}
+
+function cuefieldApplyTimelineAction(action, pending, nextMedia, context) {
+  action = action || {};
+  var graph = nextMedia && nextMedia.__mineradioPreparedAudioGraph;
+  var deckMedia = action.deck === 'A' ? context.outgoingMedia : nextMedia;
+  if (action.op === 'handoff') return Promise.resolve(true);
+  if (action.op === 'play' && action.deck !== 'A') {
+    if (!action.sourceZeroPreRoll && Math.abs((Number(nextMedia.currentTime) || 0) - Number(action.at || 0)) > 0.045) cuefieldSetMediaTime(nextMedia, action.at);
+    return Promise.resolve(nextMedia.paused ? nextMedia.play() : true).then(function () { return true; }).catch(function () { return false; });
+  }
+  if (action.op === 'volume') {
+    cuefieldAnimateDeckVolume(action.deck, nextMedia, action.target, action.durationMs, action.curve, pending, context);
+    return Promise.resolve(true);
+  }
+  if (action.op === 'rate' && deckMedia) {
+    try { deckMedia.playbackRate = Math.max(0.94, Math.min(1.06, Number(action.value) || 1)); return Promise.resolve(true); } catch (_) { return Promise.resolve(false); }
+  }
+  if (action.op === 'bridge') {
+    var bridge = cuefieldInitBridge();
+    var started = !!(bridge && bridge.start(action.bridge || pending.bridgePlan || {}, { audioContext: audioCtx }));
+    pending.bridgeStarted = started;
+    if (!started) pending.runtimeDowngrade = 'bridge-unavailable';
+    return Promise.resolve(true);
+  }
+  if (action.op === 'loop') {
+    var loop = cuefieldInitSourceLoop();
+    var applied = !!(loop && loop.apply(action, deckMedia, pending.fromKey + '>' + pending.toKey));
+    if (!applied) pending.runtimeDowngrade = 'source-loop-unavailable';
+    return Promise.resolve(true);
+  }
+  if (action.deck === 'A') {
+    pending.runtimeDowngrade = pending.runtimeDowngrade || ('outgoing-' + action.op + '-bypassed');
+    return Promise.resolve(true);
+  }
+  if (!graph) {
+    pending.runtimeDowngrade = pending.runtimeDowngrade || 'b-deck-graph-unavailable';
+    return Promise.resolve(true);
+  }
+  if (action.op === 'filter') cuefieldRampParam(graph.filterNode && graph.filterNode.frequency, action.type === 'none' ? 20 : action.value, action.durationMs);
+  else if (action.op === 'bass') cuefieldRampParam(graph.bassNode && graph.bassNode.gain, (Math.max(0, Math.min(1, Number(action.value) || 0)) - 1) * 18, action.durationMs);
+  else if (action.op === 'spectrum') {
+    cuefieldRampParam(graph.bassNode && graph.bassNode.gain, (Number(action.low) - 1) * 18, action.durationMs);
+    cuefieldRampParam(graph.midNode && graph.midNode.gain, (Number(action.mid) - 1) * 18, action.durationMs);
+    cuefieldRampParam(graph.highNode && graph.highNode.gain, (Number(action.high) - 1) * 18, action.durationMs);
+  } else if (action.op === 'echo') cuefieldApplyGraphEcho(graph, action, pending, context);
+  else if (action.op === 'duck') cuefieldApplyGraphDuck(graph, action);
+  return Promise.resolve(true);
+}
+
 async function runCuefieldTimeline(pending, nextMedia, context) {
   var execution = pending.timelineExecution || cuefieldTimelineExecution(pending);
   if (!execution) return false;
   pending.timelineExecution = execution;
   clearCuefieldTimelineTimers();
-  var fadeMs = Math.max(360, Number(execution.fadeDurationMs) || Number(pending.fadeSec) * 1000 || 1400);
-  var fadeStartA = isFinite(Number(pending.fadeStartA))
-    ? Number(pending.fadeStartA)
-    : Math.max(0, Number(pending.triggerAt) + Math.max(0, Number(execution.fadeStartDelayMs) || 0) / 1000);
-  pending.fadeStartA = fadeStartA;
-  pending.executionFallback = nextMedia.__mineradioPreparedAudioGraph ? 'shared-context-gain' : 'direct-volume-fallback';
-  if (!await cuefieldWaitForMediaTime(context.outgoingMedia, fadeStartA, pending, context)) return false;
-  if (!cuefieldTransitionStillCurrent(pending, context)) return false;
-  if (nextMedia.readyState < 2) return false;
-  var bFadeStart = isFinite(Number(pending.bFadeStart)) ? Math.max(0, Number(pending.bFadeStart)) : Math.max(0, Number(execution.bStart) || 0);
-  if (Math.abs((Number(nextMedia.currentTime) || 0) - bFadeStart) > 0.04) cuefieldSetMediaTime(nextMedia, bFadeStart);
-  var completed = await cuefieldRunEqualPowerCrossfade(pending, nextMedia, fadeMs, context);
-  if (!completed || !cuefieldTransitionStillCurrent(pending, context)) return false;
-  return cuefieldTransitionStillCurrent(pending, context);
+  pending.executionFallback = nextMedia.__mineradioPreparedAudioGraph ? 'cuefield-timeline-graph' : 'volume-only-fallback';
+  pending.actualMixStart = Number(context.outgoingMedia && context.outgoingMedia.currentTime) || 0;
+  var actions = Array.isArray(execution.actions) ? execution.actions.slice() : [];
+  var elapsedMs = 0;
+  for (var i = 0; i < actions.length; i++) {
+    var action = actions[i];
+    var delayMs = Math.max(0, Number(action.delayMs) || 0);
+    if (delayMs > elapsedMs && !await cuefieldDelay(delayMs - elapsedMs, context.generation)) return false;
+    elapsedMs = delayMs;
+    if (!cuefieldTransitionStillCurrent(pending, context)) return false;
+    if (action.optionalWhenLate && Number(action.maxLateMs) >= 0 && performance.now() - (context.startedAt + delayMs) > Number(action.maxLateMs)) continue;
+    if (!await cuefieldApplyTimelineAction(action, pending, nextMedia, context)) return false;
+  }
+  var handoffDelayMs = Math.max(0, Number(execution.handoffDelayMs) || elapsedMs);
+  if (handoffDelayMs > elapsedMs && !await cuefieldDelay(handoffDelayMs - elapsedMs, context.generation)) return false;
+  if (!cuefieldTransitionStillCurrent(pending, context) || nextMedia.paused || nextMedia.ended) return false;
+  cuefieldWriteIncomingGain(nextMedia, Math.max(0, Math.min(1, Number(targetVolume) || 0)));
+  if (typeof writeAudioOutputGain === 'function') writeAudioOutputGain(0);
+  var finalGraph = nextMedia && nextMedia.__mineradioPreparedAudioGraph;
+  if (finalGraph) {
+    cuefieldRampParam(finalGraph.filterNode && finalGraph.filterNode.frequency, 20, 160);
+    cuefieldRampParam(finalGraph.bassNode && finalGraph.bassNode.gain, 0, 160);
+    cuefieldRampParam(finalGraph.midNode && finalGraph.midNode.gain, 0, 160);
+    cuefieldRampParam(finalGraph.highNode && finalGraph.highNode.gain, 0, 160);
+    cuefieldRampParam(finalGraph.echoSendNode && finalGraph.echoSendNode.gain, 0, 120);
+    cuefieldRampParam(finalGraph.echoFeedbackNode && finalGraph.echoFeedbackNode.gain, 0, 160);
+    cuefieldRampParam(finalGraph.echoWetNode && finalGraph.echoWetNode.gain, 0, 160);
+  }
+  try { nextMedia.playbackRate = 1; } catch (_) { }
+  if (cuefieldSourceLoopRuntime && cuefieldSourceLoopRuntime.stop) cuefieldSourceLoopRuntime.stop('handoff', true);
+  if (cuefieldBridgeEngine && cuefieldBridgeEngine.stop) cuefieldBridgeEngine.stop('handoff');
+  return true;
 }
 
 function cuefieldFeedbackContext(pending) {
@@ -656,7 +913,9 @@ function submitCuefieldFeedback(rating) {
 
 function tickCuefieldAutoMix() {
   if (!cuefieldAutoMixEnabled || !cuefieldAutoMix || cuefieldAutoMixExecuting || !audio) return;
-  if (!cuefieldAutoMix.shouldTrigger({ token: trackSwitchToken, currentIndex: currentIdx, currentTime: audio.currentTime || 0 })) return;
+  var nextIndex = cuefieldAutoMixNextIndex(currentIdx);
+  var nextKey = nextIndex >= 0 ? cuefieldSongKey(playQueue[nextIndex]) : '';
+  if (!cuefieldAutoMix.shouldTrigger({ token: trackSwitchToken, currentIndex: currentIdx, currentTime: audio.currentTime || 0, nextKey: nextKey })) return;
   var pending = cuefieldAutoMix.consumePending();
   if (pending) executeCuefieldAutoMix(pending);
 }
@@ -685,12 +944,17 @@ function recoverCuefieldAutoMixEndedOutgoing(pending, context, reason) {
   outgoing.__mineradioCuefieldEndedRecoveryToken = token;
   cuefieldAutoMixExecuting = false;
   if (cuefieldActiveTransitionContext === context) cuefieldActiveTransitionContext = null;
-  if (typeof finalizeListenSession === 'function') finalizeListenSession(true);
   updateCuefieldAutoMixUi(reason || 'fallback');
+  if (
+    playMode === 'single'
+    && typeof restartSingleRepeatMedia === 'function'
+    && restartSingleRepeatMedia(outgoing, token, index, 'cuefield-ended')
+  ) return true;
+  if (typeof finalizeListenSession === 'function') finalizeListenSession(true);
   setTimeout(function () {
     if (trackSwitchToken !== token || currentIdx !== index || audio !== outgoing) return;
     if (playMode === 'single') {
-      playQueueAt(index, { autoRepeat: true, suppressPlayFailureNotice: true, preserveHomeState: true });
+      playQueueAt(index, { autoRepeat: true, preserveHomeState: true, suppressPlayFailureNotice: true });
     } else if (typeof nextTrack === 'function') {
       nextTrack(false);
     } else if (pending && isFinite(Number(pending.nextIndex))) {
@@ -712,6 +976,7 @@ async function executeCuefieldAutoMix(pending) {
   if (pending.toKey && cuefieldSongKey(playQueue[pending.nextIndex]) !== pending.toKey) return;
   var transitionContext = {
     generation: ++cuefieldTransitionGeneration,
+    startedAt: performance.now(),
     outgoingMedia: audio,
     outgoingToken: trackSwitchToken,
     outgoingIndex: currentIdx
@@ -737,7 +1002,12 @@ async function executeCuefieldAutoMix(pending) {
       recoverCuefieldAutoMixEndedOutgoing(pending, transitionContext, 'fallback');
       return;
     }
-    await nextMedia.play();
+    var execution = pending.timelineExecution || cuefieldTimelineExecution(pending);
+    pending.timelineExecution = execution;
+    var playAction = execution && Array.isArray(execution.actions)
+      ? execution.actions.find(function (action) { return action && action.deck === 'B' && action.op === 'play'; })
+      : null;
+    if (!playAction || Number(playAction.delayMs) <= 40) await nextMedia.play();
   } catch (_) {
     cuefieldAutoMixExecuting = false;
     stopCuefieldPreparedAudio(nextMedia);
@@ -819,7 +1089,15 @@ async function executeCuefieldAutoMix(pending) {
     });
     handoffSucceeded = !!(handoffResult === true && audio === nextMedia && currentIdx === pending.nextIndex && nextMedia.src && !nextMedia.paused && !nextMedia.ended);
     if (!handoffSucceeded) handoffSucceeded = await runCuefieldNormalFallback();
-    if (handoffSucceeded) showCuefieldFeedback(feedback);
+    if (handoffSucceeded) {
+      var chosen = pending.plan && pending.plan.chosen || {};
+      var recipe = chosen.transitionRecipe || chosen.recipeCandidate && chosen.recipeCandidate.recipe || chosen.recipe || pending.executionMode;
+      if (recipe) {
+        cuefieldRecentRecipes.push(String(recipe));
+        cuefieldRecentRecipes = cuefieldRecentRecipes.slice(-2);
+      }
+      showCuefieldFeedback(feedback);
+    }
   } catch (err) {
     console.warn('[CuefieldAutoMix] handoff failed:', err);
     try { handoffSucceeded = await runCuefieldNormalFallback(); } catch (_) { }
@@ -834,4 +1112,21 @@ async function executeCuefieldAutoMix(pending) {
 
 cuefieldAutoMixEnabled = readCuefieldAutoMixPreference();
 initCuefieldAutoMix();
-updateCuefieldAutoMixUi(cuefieldAutoMixEnabled ? 'waiting' : 'disabled');
+// 这个文件是在 index.html 头部用 <script> 载入的，而开关按钮在 body 尾部（#quick-menu-automix-toggle），
+// 直接调 updateCuefieldAutoMixUi() 时元素还不存在 → 静默 return，界面就一直停在「实验功能 · 默认关闭」，
+// 用户开了也看不出来。等 DOM 就绪再刷一次。
+function syncCuefieldAutoMixUiOnReady() {
+  if (!document.getElementById('quick-menu-automix-toggle')) return false;
+  updateCuefieldAutoMixUi(cuefieldAutoMixEnabled ? 'waiting' : 'disabled');
+  return true;
+}
+if (!syncCuefieldAutoMixUiOnReady()) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', syncCuefieldAutoMixUiOnReady, { once: true });
+  }
+  // 兜底轮询：DOMContentLoaded 也可能早于别的模块把按钮插进来（或按钮是延迟渲染的）
+  (function retry(remaining) {
+    if (syncCuefieldAutoMixUiOnReady() || remaining <= 0) return;
+    setTimeout(function () { retry(remaining - 1); }, 150);
+  })(20);
+}

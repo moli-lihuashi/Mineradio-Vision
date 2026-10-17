@@ -1,8 +1,19 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.2.34">
+<html lang="zh-CN" data-app-version="3.2.35">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- CSP：本窗口只从 127.0.0.1 本地服务取资源。远程脚本执行面已清零（MediaPipe / transformers.js 已本地化到 vendor/），
+     仅保留 Google Fonts（style/font/connect——liquidglass 还要 fetch woff2 字节嵌进光栅化 SVG）与 HuggingFace 模型权重（connect）。
+     全站 inline onclick / style 属性密集（125 个模块合并为单个内联 script 注入），script-src/style-src 必须含 'unsafe-inline'。
+     'unsafe-eval' 是被迫项：本机 Chromium 138 实测 'wasm-eval' 关键字不被承认（wasm 变体探针：
+     wasm-eval/wasm-src 全部被拦，仅 unsafe-eval 放行），MediaPipe 与 ONNX Runtime 的 wasm 编译绕不开。
+     在 'unsafe-inline' 已必需的前提下，'unsafe-eval' 的边际风险可忽略；CSP 的实效是阻断外部资源加载链。
+     img/media-src 必须含 http: —— 酷狗封面直链就是 http://imge.kugou.com（汽水是 https），只放 https: 会全量裂图
+     （2026-10-17 回归教训，实证探针：缺 http: 时 http 封面被拦、加上后 0 违规）。本窗口 Origin 自身是 http://127.0.0.1，无混合内容问题。
+     改这条策略前必须同步验证：手势（vendor/mediapipe）、AI 封面深度（vendor/transformers + HF 权重）、
+     Google Fonts、酷狗 http 封面直链、Wallpaper Engine 媒体（mineradio-wallpaper: scheme）。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http: mineradio-wallpaper:; media-src 'self' data: blob: https: http: mineradio-wallpaper:; connect-src 'self' https://huggingface.co https://*.huggingface.co https://fonts.googleapis.com https://fonts.gstatic.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'">
 <title>Mineradio</title>
 <meta name="referrer" content="no-referrer">
 <!-- Google Fonts 不可阻塞启动：离线/墙/超时会卡住 DOMContentLoaded ~30s，表现为进程在但几乎 0 CPU、长时间黑屏 -->
@@ -31,6 +42,8 @@
 <script src="js/modules/04-mood/00-mood-audio.js"></script>
 <script src="js/modules/05-cuefield/00-cuefield-automix-core.js"></script>
 <script src="js/modules/05-cuefield/01-cuefield-timeline-executor.js"></script>
+<script src="js/modules/05-cuefield/01a-cuefield-bridge-engine.js"></script>
+<script src="js/modules/05-cuefield/01b-cuefield-source-loop.js"></script>
 <script src="js/modules/05-cuefield/02-cuefield-automix-integration.js"></script>
 <script src="sonic-topography-preset.js" defer></script>
 <script>

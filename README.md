@@ -5,7 +5,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
 ![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
-![version](https://img.shields.io/badge/version-3.1.0-success?style=flat-square)
+![version](https://img.shields.io/badge/version-3.2.0-success?style=flat-square)
 
 ![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-10-12.webp)
 
@@ -33,15 +33,23 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 | 崩溃诊断 / 崩溃风暴退避 | 部分（基础 `render-process-gone` 钩子与 `featureStatus` 读取） | 有（崩溃时间戳、子进程崩溃记录、本地 minidump、指数退避，本仓库实现） |
 | 本地音乐库 / 内置歌单库 | 有 | **尚未合并** |
 | Sonic Workshop 预设（本仓库名「音域回响」） | 有（`vendor/sonic-workshop`，预设槽位 8） | 有（`sonic-topography/`，预设槽位 10；同一项目，桥接拆成 html + js + css） |
-| cuefield 过渡引擎 | 19 个模块 | 8 个模块（均为上游同名文件；上游新增的 11 个未合并） |
+| cuefield 过渡引擎 | 19 个模块 | 38 个（`cuefield-next/` 19 模块 v2 **默认引擎** + `cuefield/` 8 模块 v1 兜底 + 前端 5 模块执行层） |
 | 自动化测试 | 54 个（绑定上游的模块划分） | 24 个（按本仓库模块结构编写；两边的模块拆分不同，不套用同一套测试） |
 
-> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游在本地音乐库、内置歌单库与 `docs/` 文档上更完整，这些还没有合并。cuefield 与测试数量的差异来自两边的模块划分不同 —— 本仓库没有套用上游的统一测试，所以 cuefield 新增的那 11 个模块也没有随测试一起合并。
+> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游在本地音乐库、内置歌单库与 `docs/` 文档上更完整，这些还没有合并。cuefield 与测试数量的差异来自两边的模块划分不同 —— 本仓库没有套用上游的统一测试。
+>
+> cuefield 的 19 个模块全部收进仓库，并且**已经是默认引擎**：`POST /api/cuefield/transition` 默认 `engine: "v2"`，用 `cuefield-next/`；传 `engine: "v1"` 可回落旧的 `cuefield/`（8 模块）。v2 任何异常都会自动回到 v1，并在响应里带 `engineFallback` 说明原因（回落永远可见，不静默）。
+>
+> 前端执行层也换成了配套的 5 个模块（`public/js/modules/05-cuefield/`，`index.html` 按序逐个 `<script>` 载入），能消费 duck / echo / bridge / loop / rate / spectrum 与 A/B 双 deck 独立 volume 曲线（11 种 op）；旧的 v1 执行层只会把 timeline 压成一次 equal-power crossfade（5 种 op），等于「播到结尾再淡出两秒」。
+>
+> 两代引擎的产出结构不兼容（v2 没有 `mixConfidence`/`mixType`，改用 `policy`/`route`/`rescueClass`，且多出 `artifact`/`rejected`），所以**请求 v1 / v2 必须与前端执行层配套**，不能混用。另外 v2 在真实歌曲上产出的通常是 `tier: "weak"`（实测 score 0.604），上游默认 `allowWeak: false` 会把它全部拒掉、听感上等于没有 automix，因此本仓库在 `02-cuefield-automix-integration.js` 里显式放开 `allowWeak: true` 并抬门槛到 `minWeakScore: 0.6`。
+>
+> v2 的和声证据（`musicalEvidence`，决定 4 个依赖调性/和声走向的 recipe 是否可用）需要 `musicalProfile`。上游靠 `basic-pitch` 的音符事件，本仓库没有那套模型与权重，改为在 beat 分析里自己算 chroma：降采样 12kHz → 4096 点 FFT → 只取谱峰 → 12 音级累积 → Krumhansl 模板定调，结果随 beatmap 一起写盘（pack `v: 2`，约占 2~3.5KB）。实测真实歌曲 key 判定与 confidence 都能过 v2 的 `0.55` 门槛，且 4 分钟整轨耗时约 0.25~0.5s（后台预热时算）。
 
 ## 下载安装
 
-- **Windows 安装包（推荐）**：[Mineradio-3.1.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.1.0/Mineradio-3.1.0-Setup.exe) —— 2026-10-17 构建，包含本仓库最新代码
-- 免安装便携版：[Mineradio-Vision-v3.1.0-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.1.0/Mineradio-Vision-v3.1.0-portable-win-x64.zip) —— 2026-10-17 构建，解压后运行 `Mineradio\Mineradio.exe`
+- **Windows 安装包（推荐）**：[Mineradio-3.2.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.2.0/Mineradio-3.2.0-Setup.exe) —— 2026-10-17 构建，包含本仓库最新代码
+- 免安装便携版：[Mineradio-Vision-v3.2.0-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.2.0/Mineradio-Vision-v3.2.0-portable-win-x64.zip) —— 2026-10-17 构建，解压后运行 `Mineradio\Mineradio.exe`
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可正常安装。安装路径优先 D–Z 盘，卸载只清理本程序自己的文件。

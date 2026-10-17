@@ -305,6 +305,21 @@ function finishStageLyricResidentBuild(job) {
     return;
   }
   var added = mergeStageLyricResidentBundle(job.mesh, bundle);
+  // 配色是「建行时烤进材质」的：makeLyricShaderMaterial(lineMask, state.pal, …)，
+  // 而 state.pal 是 startStageLyricResidentBuild 启动那一刻的快照（本文件 startStageLyricResidentBuild）。
+  // 分块建轨会跨几十帧，期间一旦换配色（换封面 / 切主题 / lyricColorMode 从 custom 切回 auto），
+  // setStageLyricPalette 里的 applyLyricPaletteToMesh 只刷到「当时已在 data.rowLayers 里的行」，
+  // 这一批还没合并的行刷不到；等它合并进来，就带着旧色永久留在轨里 ——
+  // 表现就是同一条轨里一部分行新色、一部分行旧色（「歌词颜色不统一」）。
+  // 合并完成是唯一收口点：快照与当前配色不一致时统一刷一次，保证整轨同色。
+  // 只在真的不一致时刷，避免每次合并都把整轨材质 needsUpdate。
+  var jobPal = job.state && job.state.pal;
+  if (
+    jobPal && stageLyrics.palette && jobPal !== stageLyrics.palette &&
+    typeof applyLyricPaletteToMesh === 'function'
+  ) {
+    try { applyLyricPaletteToMesh(job.mesh); } catch (_) {}
+  }
   var demandIndex = data.trackPendingPayload && data.trackPendingPayload.trackIndex != null
     ? Number(data.trackPendingPayload.trackIndex)
     : Number(data.trackTargetLineIndex);

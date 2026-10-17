@@ -29,11 +29,29 @@ function lyricLayerVirtualIndex(entry, fallbackIndex, activeLine, usesTrack) {
   return lyricRowVirtualIndex(entry, fallbackIndex);
 }
 
+/**
+ * 行飞机相对基准宽 6.10 的横向放大倍数。
+ * 长行不会被缩字号，而是把画布加宽（makeLyricMaskPayload 的 neededCanvasW），
+ * 再由 lyricRowLogicalWorldWidth 把飞机等比例加宽，字身在世界上始终是同一大小。
+ * 行距必须用同一个倍数去量「这一行在世界里有多高」，否则两边尺度不一致。
+ */
+function lyricRowWidthScale(mask) {
+  mask = mask || {};
+  var logicalWidth = Math.max(1, Number(mask.logicalWidth) || Number(mask.width) || 2048);
+  return clampRange(logicalWidth / 2048, 1, 3);
+}
+
 function lyricTrackLineStepWorld(mask, worldH) {
   mask = mask || {};
   var h = Math.max(1, Number(mask.height) || 384);
   var lineHeight = Number(mask.lineHeight) || Number(mask.fontSize) || 128;
-  var step = worldH * (lineHeight / h);
+  // worldH 是按「基准宽 6.10」算出来的高度（worldW * maskH / maskW），
+  // 而真正的行飞机宽度是 6.10 * lyricRowWidthScale(mask)。
+  // 少了这个倍数，行距就会随画布宽度按 1/W 塌缩：实测
+  //   W=2048 → 0.4429、W=3507 → 0.2587、W=4262 → 撞 0.22 下限，
+  // 同一时间字身世界高度恒为 0.381（不缩），于是行距只剩字高的 0.577 倍，上下行糊在一起。
+  // 「歌词有概率挤在一起」= 这条轨建轨那一刻恰好是长行，整首歌的行距都被按那行的画布宽度压扁。
+  var step = worldH * lyricRowWidthScale(mask) * (lineHeight / h);
   step *= clampRange(1 + (lyricContextSpreadValue() - 1) * 0.32, 0.86, 1.45);
   if (lyricTranslationLayoutActive()) step *= 1.06;
   return clampRange(step, 0.22, 0.94);
@@ -43,7 +61,7 @@ function lyricTranslationLineStepWorld(mask, worldH) {
   mask = mask || {};
   var h = Math.max(1, Number(mask.height) || 384);
   var lineHeight = Number(mask.lineHeight) || Number(mask.fontSize) || 128;
-  var step = worldH * (lineHeight / h);
+  var step = worldH * lyricRowWidthScale(mask) * (lineHeight / h);
   if (lyricTranslationLayoutActive()) step *= 1.04;
   return clampRange(step, 0.20, 0.78);
 }
@@ -240,13 +258,11 @@ function lyricTranslationMeshScale(entry) {
 }
 
 function lyricRowLogicalWorldWidth(mask, baseWorldW) {
-  mask = mask || {};
   baseWorldW = Math.max(0.1, Number(baseWorldW) || 6.10);
-  var logicalWidth = Math.max(1, Number(mask.logicalWidth) || Number(mask.width) || 2048);
   // 2048 is the visual-size baseline used by the original continuous track.
   // A larger logical canvas prevents clipping; it must widen the plane rather
   // than squeeze the same-size glyphs into the old plane.
-  return baseWorldW * clampRange(logicalWidth / 2048, 1, 3);
+  return baseWorldW * lyricRowWidthScale(mask);
 }
 
 function makeLyricRowGlowMesh(row, pal, worldW, preparedGlowTexture) {

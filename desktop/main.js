@@ -2304,7 +2304,8 @@ ipcMain.handle('mineradio-cache-choose-directory', async () => {
   }
 });
 
-ipcMain.handle('mineradio-cache-set-settings', async (_event, payload) => {
+ipcMain.handle('mineradio-cache-set-settings', async (event, payload) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
     const rootPath = normalizeCacheRootPath(payload && payload.rootPath);
     console.log('[CacheSettings] set-settings called, rootPath:', rootPath);
@@ -3207,7 +3208,7 @@ async function ensureLocalServerStarted() {
     try { delete require.cache[require.resolve(serverModulePath)]; } catch (_) {}
     localServer = require(serverModulePath);
 
-    // cookie 加密存储（保持原有 secret-store 集成，加入写入验证与明文兜底）
+    // cookie 加密存储（secret-store/safeStorage；写入失败即放弃落盘，不留明文兜底）
     if (localServer && typeof localServer.configureCookieStorage === 'function') {
       const secretStore = require('./secret-store');
       const _cookieDebugLogPath = path.join(_stableUserData, 'cookie-debug.log');
@@ -3239,7 +3240,7 @@ async function ensureLocalServerStarted() {
             try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
             return;
           }
-          // 1) 尝试加密写入
+          // 1) 加密写入（fail-closed：写不成就报错并放弃落盘，绝不退回明文）
           try {
             secretStore.writeSecretFile(file, content);
             // 2) 验证文件确实写入了
@@ -3247,17 +3248,13 @@ async function ensureLocalServerStarted() {
               _cookieLog('writeFn: encrypted write OK, size=' + fs.statSync(file).size);
               return;
             }
-            _cookieLog('writeFn: encrypted write returned but file missing/empty, trying plaintext');
+            _cookieLog('writeFn: encrypted write returned but file missing/empty');
+            console.error('[Cookie] encrypted write produced no file, credential NOT persisted:', file);
           } catch (e) {
-            _cookieLog('writeFn: encrypted write threw: ' + e.message + ', trying plaintext');
-          }
-          // 3) 明文兜底写入
-          try {
-            fs.writeFileSync(file, value, 'utf8');
-            _cookieLog('writeFn: plaintext fallback OK, size=' + fs.statSync(file).size);
-          } catch (e2) {
-            _cookieLog('writeFn: plaintext fallback FAILED: ' + e2.message);
-            console.error('[Cookie] all write attempts failed:', file, e2.message);
+            // 加密不可用（safeStorage 未就绪）时不再写明文兜底：明文凭据落盘会让
+            // 加密彻底失去意义，也会被任何本地进程直接读走。本次会话仍在内存中有效。
+            _cookieLog('writeFn: encrypted write threw: ' + e.message + ' — refusing plaintext fallback');
+            console.error('[Cookie] encrypted write failed, credential NOT persisted:', file, e.message);
           }
         },
       );
@@ -3325,6 +3322,13 @@ async function loadMainWindowWithRetry(win) {
   throw error;
 }
 
+// DevTools 只在开发态或用 MINERADIO_DEVTOOLS=1 显式请求时开放。
+// 打包后常开 DevTools 会暴露调试协议入口（renderer 侧可用 --remote-debugging 类手段挂接）。
+function devToolsEnabled() {
+  if (process.env.MINERADIO_DEVTOOLS === '1') return true;
+  return !app.isPackaged;
+}
+
 async function createWindow() {
   htmlFullscreenActive = false;
   windowFullscreenActive = false;
@@ -3358,8 +3362,8 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
-      // [临时诊断] 验证双语翻译链路，临时开 devTools；定位后改回 env 开关
-      devTools: true,
+      // 生产构建（packaged）默认关闭 DevTools；需调试时设 MINERADIO_DEVTOOLS=1
+      devTools: devToolsEnabled(),
     },
   });
 
@@ -3396,7 +3400,19 @@ async function createWindow() {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol === 'file:') return;
+      if (parsed.protocol === 'file:') {
+        // file:// 仅放行应用自身目录内的页面。渲染进程一旦失陷，若能导航到任意本地 HTML，
+        // preload 会随新文档重新执行，等于把全部 desktopWindow IPC 再暴露一遍。
+        try {
+          const appRoot = path.resolve(app.getAppPath ? app.getAppPath() : __dirname);
+          let target = decodeURIComponent(parsed.pathname).replace(/^\/+/, '');
+          if (/^[a-zA-Z]:[\\/]/.test(target)) target = target.replace(/\//g, path.sep);
+          const resolved = path.resolve(appRoot, target);
+          if (resolved === appRoot || resolved.startsWith(appRoot + path.sep)) return;
+        } catch (e) {}
+        event.preventDefault();
+        return;
+      }
       if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
           /^(127\.0\.0\.1|localhost)(:|$)/.test(parsed.host)) return;
       event.preventDefault();
@@ -3489,8 +3505,8 @@ async function createWindow() {
       event.preventDefault();
       exitFullscreenToWindow(mainWindow);
     }
-    // F12 或 Ctrl+Shift+I 打开 DevTools
-    if (input.type === 'keyDown' && (input.code === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))) {
+    // F12 或 Ctrl+Shift+I 打开 DevTools（打包后默认禁用，需 MINERADIO_DEVTOOLS=1）
+    if (devToolsEnabled() && input.type === 'keyDown' && (input.code === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))) {
       event.preventDefault();
       if (mainWindow.webContents.isDevToolsOpened()) {
         mainWindow.webContents.closeDevTools();
@@ -3603,9 +3619,34 @@ ipcMain.handle('mineradio-memory-get-snapshot', async () => {
   }
 });
 
-ipcMain.handle('mineradio-memory-trim-app', async (_event, pids) => {
+// 本应用自己的进程树 PID 白名单：主进程 + 主窗口渲染进程 + app metrics 里的
+// browser/renderer/gpu/utility 子进程。用于把 trimAppMemory 的入参锁在本应用内，
+// 防止渲染进程失陷后对用户态任意进程 EmptyWorkingSet。
+function ownProcessPidSet() {
+  const pids = new Set([process.pid]);
   try {
-    const result = await appMemory.trimAppWorkingSets(pids && Array.isArray(pids) ? pids : [process.pid]);
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && mainWindow.webContents.getOSProcessId) {
+      pids.add(mainWindow.webContents.getOSProcessId());
+    }
+  } catch (_) {}
+  try {
+    (app.getAppMetrics() || []).forEach((m) => {
+      if (!m || !Number.isFinite(m.pid)) return;
+      const type = String(m.type || '');
+      if (type === 'Browser' || type === 'Renderer' || type === 'GPU' || type === 'Utility' || type === 'Zygote') pids.add(m.pid);
+    });
+  } catch (_) {}
+  return pids;
+}
+
+ipcMain.handle('mineradio-memory-trim-app', async (event, pids) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    const own = ownProcessPidSet();
+    const requested = Array.isArray(pids)
+      ? pids.map((p) => Math.round(Number(p))).filter((p) => Number.isFinite(p) && p > 0 && own.has(p))
+      : [];
+    const result = await appMemory.trimAppWorkingSets(requested.length ? requested : [process.pid]);
     memoryAutoState.lastTrimAt = Date.now();
     return result;
   } catch (e) {
@@ -3613,7 +3654,8 @@ ipcMain.handle('mineradio-memory-trim-app', async (_event, pids) => {
   }
 });
 
-ipcMain.handle('mineradio-memory-purge-system', async (_event, options) => {
+ipcMain.handle('mineradio-memory-purge-system', async (event, options) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
     const opts = options || {};
     const result = await systemMemory.purgeSystemMemorySmart(systemMemory.MEMORY_MASK_DEFAULT, {
@@ -3692,7 +3734,8 @@ ipcMain.handle('mineradio-cache-write-lyric', async (_event, key, payload) => {
 });
 
 /* ===== 导出登录 Cookie（明文桌面备份，兼容旧入口） ===== */
-ipcMain.handle('mineradio-export-login-cookie', async (_event, provider) => {
+ipcMain.handle('mineradio-export-login-cookie', async (event, provider) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', message: '不受信任的调用来源' };
   try {
     const meta = loginCookieExportMeta(provider);
     if (!meta) return { ok: false, error: 'UNKNOWN_PROVIDER', message: '未知平台，无法导出登录 cookie' };
@@ -3798,7 +3841,10 @@ ipcMain.handle('mineradio-login-pack-qr-stop', async () => {
   }
 });
 
-ipcMain.handle('mineradio-login-pack-qr-import', async (_event, payload = {}) => {
+ipcMain.handle('mineradio-login-pack-qr-import', async (event, payload = {}) => {
+  // sender 校验：该 handler 会让主进程对任意 http(s) URL 发 GET（SSRF 面），
+  // 只允许受信任主窗口调用。URL 的 host 级过滤属第二批 SSRF 收敛，见代码审查报告 #8。
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', message: '不受信任的调用来源' };
   try {
     const password = String(payload.password || '');
     const url = String(payload.url || '');
