@@ -1,5 +1,6 @@
 // ====================================================================
 //  路由: 酷狗音乐
+//  - /api/kugou/search
 //  - /api/kugou/login/status, /api/kugou/login/qr/key, /api/kugou/login/qr/check
 //  - /api/kugou/login/cookie, /api/kugou/logout
 //  - /api/kugou/user/playlists, /api/kugou/playlist/tracks
@@ -12,12 +13,27 @@ module.exports = function register(ctx) {
     getKugouLoginInfoFresh, getKugouLoginInfo,
     handleKugouLoginQrKey, handleKugouLoginQrCheck,
     normalizeKugouCookieInput, saveKugouCookie,
+    handleKugouSearch,
     handleKugouUserPlaylists, handleKugouPlaylistTracks,
     handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
     handleKugouLikeCheck, handleKugouLikeToggle, handleKugouPlaylistAddSong,
   } = ctx;
 
   return async function(req, res, url, pn) {
+    if (pn === '/api/kugou/search') {
+      try {
+        const kw = url.searchParams.get('keywords') || url.searchParams.get('q') || '';
+        const limit = Math.max(1, Math.min(20, parseInt(url.searchParams.get('limit') || '12', 10) || 12));
+        const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+        const songs = await handleKugouSearch(kw, limit, ctx.kugouCookie, offset);
+        sendJSON(res, { provider: 'kugou', songs: Array.isArray(songs) ? songs : [] });
+      } catch (err) {
+        console.error('[KugouSearch]', err);
+        sendJSON(res, { provider: 'kugou', error: err.message, songs: [] }, 500);
+      }
+      return;
+    }
+
     if (pn === '/api/kugou/login/status') {
       try {
         sendJSON(res, await getKugouLoginInfoFresh());

@@ -130,13 +130,28 @@ async function playQueueAt(idx, opts) {
     applyPreferredLyricsForCurrent(true);
   });
 
-  markPlayPhase('cover-load');
-  safePlaybackStep('cover-load', function(){
-    var customCover = getCustomCoverForSong(song);
-    var coverOpts = { trackToken: token, deferHeavy: true, delay: firstVisualPlay ? 420 : 900, timeout: firstVisualPlay ? 1600 : 2400 };
-    if (customCover) applyCoverDataUrl(customCover, coverOpts);
-    else loadCoverFromUrl(song.cover ? coverUrlWithSize(song.cover, 400) : '', coverOpts);
-  });
+  // 封面重管线（图片解码 → canvas → buildEdgeAndDepth → 三张 three.js 纹理 → AI 深度）
+  // 已从「取址前」后移到「取址成功之后」：歌取不到地址时完全不跑，
+  // 否则 source-fallback 每递归一层就重跑一遍，主线程被反复打满、原生内存反复分配，
+  // 实测会把渲染进程推向 OOM（kOomExceptionCode 0xE0000008）。
+  var coverLoadPending = true;
+  function runPendingCoverLoad() {
+    if (!coverLoadPending) return;
+    coverLoadPending = false;
+    safePlaybackStep('cover-load', function(){
+      var customCover = getCustomCoverForSong(song);
+      var coverOpts = { trackToken: token, deferHeavy: true, delay: firstVisualPlay ? 420 : 900, timeout: firstVisualPlay ? 1600 : 2400 };
+      if (customCover) applyCoverDataUrl(customCover, coverOpts);
+      else loadCoverFromUrl(song.cover ? coverUrlWithSize(song.cover, 400) : '', coverOpts);
+    });
+  }
+  function dropPendingCoverLoad(reason) {
+    if (!coverLoadPending) return;
+    coverLoadPending = false;
+    // 让已排队/已启动的封面重工作全部失效，别在播放已经失败后还继续分配原生内存
+    coverProcessToken++;
+    if (window.__mineradioDebugLoading) console.log('[CoverLoad] dropped (' + reason + ')');
+  }
   safePlaybackStep('trial-banner-reset', function(){ document.getElementById('trial-banner').classList.remove('show'); });
   safePlaybackStep('show-loading', showLoading);
   lyricSunEnergy = 0; lyricSunTarget = 0; lyricSunHold = 0; lyricSunAvg = 0; lyricSunPeak = 0.55;
@@ -160,7 +175,7 @@ async function playQueueAt(idx, opts) {
       try { await ensureQQSessionBeforePlay('pre-play'); } catch (prePlayErr) {
         console.warn('QQ pre-play session check failed:', prePlayErr);
       }
-      if (token !== trackSwitchToken) return;
+      if (token !== trackSwitchToken) { dropPendingCoverLoad('token-expired-qq'); return; }
     }
     var qualityMeta = typeof resolveProviderRequestedQuality === 'function'
       ? resolveProviderRequestedQuality(song, opts)
@@ -169,7 +184,7 @@ async function playQueueAt(idx, opts) {
     var data = typeof resolveProviderPlayUrlData === 'function'
       ? await resolveProviderPlayUrlData(song, opts)
       : await apiJson('/api/song/url?id=' + song.id + '&quality=' + encodeURIComponent(requestedQuality));
-    if (token !== trackSwitchToken) return;
+    if (token !== trackSwitchToken) { dropPendingCoverLoad('token-expired-resolve'); return; }
     if (
       typeof sourceFallbackRecoveryFromOptions === 'function'
       && sourceFallbackRecoveryFromOptions(opts)
@@ -177,6 +192,7 @@ async function playQueueAt(idx, opts) {
       && !sourceFallbackRecoveryCanContinue(sourceFallbackRecoveryFromOptions(opts))
       && typeof settleExpiredSourceFallbackPlayback === 'function'
     ) {
+      dropPendingCoverLoad('fallback-expired');
       return settleExpiredSourceFallbackPlayback(idx, token, opts);
     }
     if (data) {
@@ -188,12 +204,16 @@ async function playQueueAt(idx, opts) {
       if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(song);
     }
     if (!data || !data.url) {
+      // 取不到地址：封面重管线一律不启动，已排队的也作废
+      dropPendingCoverLoad('no-url');
       if (isQQPlayback && await retryQQPlaybackWithCompatibleQuality(song, idx, token, opts, data, requestedQuality)) return;
       var fbNoUrl = await tryAutoPlaybackFallback(song, data, idx, token, opts);
       if (fbNoUrl != null) return fbNoUrl;
       handlePlaybackUnavailable(song, data);
       return;
     }
+    // 取址成功：这时才启动封面重管线
+    runPendingCoverLoad();
     if (playbackProvider === 'netease' && data.sourceMatch && typeof applyNeteaseSourceMatchMetadata === 'function') {
       applyNeteaseSourceMatchMetadata(song, data);
       if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(song);

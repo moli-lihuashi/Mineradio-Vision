@@ -219,7 +219,7 @@ function setLoginProvider(provider, silent) {
 function loginProviderBusy(provider) {
   if (provider === 'qq') return !!qqWebLoginBusy;
   if (provider === 'kugou') return !!kugouWebLoginBusy;
-  if (provider === 'qishui') return !!(qishuiOAuthBusy || qishuiTokenBusy);
+  if (provider === 'qishui') return !!qishuiTokenBusy;
   if (provider === 'spotify') return !!(spotifyConfigBusy || spotifyOAuthBusy);
   return !!neteaseWebLoginBusy;
 }

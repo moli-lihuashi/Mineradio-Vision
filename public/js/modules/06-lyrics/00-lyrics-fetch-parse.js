@@ -104,6 +104,19 @@ async function runQueueLyricPrefetch(fromIndex, token) {
     lyricQueuePrefetchBusy = false;
   }
 }
+// 整份歌词响应的签名（原文 + 译文 + K 歌逐字），用于判断刷新回来的歌词是否与当前已应用的不同。
+// 只比译文不够：缓存里被写错的**原文**（如酷狗因为 album_audio_id 串曲返回了别人的歌词/
+// 中文有声书）在没有译文时永远等不到纠正。
+var appliedLyricResponseSignature = '';
+function lyricResponseSignature(response) {
+  response = response || {};
+  return [
+    String(response.yrc || ''),
+    String(response.lyric || response.lrc || ''),
+    String(response.trans || response.tlyric || ''),
+    String(response.ytlrc || '')
+  ].join('\u0002');
+}
 function refreshPersistentLyricCache(song, token) {
   if (!song) return;
   var endpoint = typeof lyricEndpointForSong === 'function'
@@ -112,17 +125,20 @@ function refreshPersistentLyricCache(song, token) {
   apiJson(endpoint).then(function (response) {
     if (!response || response.error) return;
     writePersistentLyricCache(song, response);
-    // 缓存补翻译：旧持久缓存无译文（如酷狗翻译修复前写入的缓存），
-    // 刷新响应带译文且仍是同一首歌时，重新应用让当前显示立即更新
+    // 缓存自愈：旧持久缓存可能是「无歌词」「错歌词」「错译文」
+    // （如酷狗把别人的歌词/音译当歌词写进缓存的那批）。
+    // 只要刷新响应的内容签名与当前已应用的不同，就重新应用让显示立即更新；
+    // 相同则直接返回，避免每次切歌都重排字幕。
     if (typeof token === 'number' && token !== trackSwitchToken) return;
-    if (lyricsTranslationLines && lyricsTranslationLines.length) return;
-    var hasFreshTrans = !!(String(response.trans || '') || String(response.tlyric || '') || String(response.ytlrc || ''));
-    if (hasFreshTrans) applyLyricApiResponse(response, token, song);
+    if (lyricResponseSignature(response) === appliedLyricResponseSignature) return;
+    if (!String(response.lyric || response.lrc || response.yrc || '').trim()) return;
+    applyLyricApiResponse(response, token, song);
   }).catch(function () {});
 }
 function applyLyricApiResponse(r, token, song) {
   if (token !== trackSwitchToken) return;
   r = r || {};
+  appliedLyricResponseSignature = lyricResponseSignature(r);
   var nativeLines = parseYrcText(r.yrc || '');
   var lrcLines = parseLyricText(r.lyric || '');
   var translationPayload = buildLyricTranslationPayload(r);

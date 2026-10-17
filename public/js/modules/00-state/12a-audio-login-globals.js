@@ -53,9 +53,9 @@ var qishuiLoginStatus = {
 };
 var qishuiLoginWasLoggedIn = false;
 var qishuiLoginAutoRefreshTimer = null;
-var qishuiOAuthBusy = false;
 var qishuiTokenBusy = false;
 var qishuiManualCookieOpen = false;
+var qishuiQrToken = '';
 var loginProvider = 'netease';
 var activeAccountProvider = 'netease';
 var dualAccountMode = false;

@@ -439,91 +439,6 @@ async function readQishuiLoginCookieHeader(cookieSession) {
 }
 
 
-async function openQishuiMusicLoginWindow(owner) {
-  const imported = await readQishuiOfficialClientCookieHeader();
-  if (imported && imported.cookie) {
-    let importedStatus = null;
-    try {
-      importedStatus = await handleQishuiStatus(imported.cookie);
-    } catch (error) {
-      console.warn('Imported Qishui cookie validation skipped:', error && error.message || error);
-    }
-    return {
-      ...(importedStatus || {}),
-      ok: true,
-      provider: 'qishui',
-      webSession: true,
-      opened: false,
-      cookieSaved: false,
-      cookie: imported.cookie,
-      loggedIn: true,
-      configured: true,
-      searchReady: true,
-      publicCatalog: false,
-      playbackMode: 'direct-url',
-      localPcImport: true,
-      importedOfficialClient: true,
-      source: imported.source,
-      importMethod: imported.method || 'cookie-db',
-      localSessionDiagnostics: imported.diagnostics || null,
-      message: '已读取本机汽水 PC 登录态，正在导入 Mineradio 并同步我的喜欢和歌单',
-    };
-  }
-
-  // Reuse Mineradio's last imported copy only when the official client data is
-  // temporarily unavailable. This keeps normal use stable without ever
-  // falling through to the obsolete QR/OAuth flows.
-  const saved = readSavedQishuiCookieHeader();
-  let savedStatus = null;
-  if (saved && saved.cookie) {
-    try {
-      savedStatus = await handleQishuiStatus(saved.cookie);
-    } catch (error) {
-      console.warn('Saved Qishui cookie validation skipped:', error && error.message || error);
-    }
-  }
-  if (saved && saved.cookie && savedStatus && savedStatus.loggedIn && savedStatus.webSession) {
-    return {
-      ...savedStatus,
-      ok: true,
-      provider: 'qishui',
-      webSession: true,
-      opened: false,
-      cookieSaved: true,
-      cookie: saved.cookie,
-      loggedIn: true,
-      configured: true,
-      searchReady: true,
-      publicCatalog: false,
-      playbackMode: 'direct-url',
-      localPcImport: true,
-      persistedSession: true,
-      source: saved.source,
-      importMethod: saved.method,
-      localSessionDiagnostics: imported && imported.diagnostics || null,
-      message: imported && imported.locked
-        ? '本机汽水登录数据库暂时被占用，已继续使用 Mineradio 上次导入的有效登录态。'
-        : '已继续使用 Mineradio 上次从本机汽水 PC 导入的登录态。',
-    };
-  }
-
-  const locked = !!(imported && imported.locked);
-  return {
-    ok: false,
-    provider: 'qishui',
-    webSession: false,
-    loggedIn: false,
-    localPcImport: true,
-    source: imported && (imported.dbPath || imported.source) || '',
-    locked,
-    localSessionDiagnostics: imported && imported.diagnostics || null,
-    error: locked ? 'QISHUI_LOCAL_COOKIE_DB_LOCKED' : 'QISHUI_LOCAL_COOKIE_NOT_FOUND',
-    message: locked
-      ? '汽水 PC 客户端正在占用本地登录数据库。请先完全退出汽水音乐 PC 端，再点击“重新导入”。'
-      : '没有读到本机汽水 PC 登录态。请先安装并登录汽水音乐 PC 客户端，然后重新导入。',
-  };
-}
-
 async function clearQishuiMusicLoginSession() {
   const cookieSession = session.fromPartition(QISHUI_LOGIN_PARTITION);
   await cookieSession.clearStorageData({
@@ -535,7 +450,6 @@ async function clearQishuiMusicLoginSession() {
 
 module.exports = {
   QISHUI_LOGIN_PARTITION,
-  openQishuiMusicLoginWindow,
   clearQishuiMusicLoginSession,
   qishuiCookieHasLogin,
   readSavedQishuiCookieHeader,

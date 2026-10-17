@@ -1,10 +1,12 @@
 // ============================================================
-//  汽水音乐登录（本机 PC 会话导入 + Token 粘贴）
+//  汽水音乐登录（扫码登录 + Token 粘贴）
 // ============================================================
 // qishuiLoginStatus / qishuiLoginWasLoggedIn / qishuiLoginAutoRefreshTimer /
-// qishuiOAuthBusy / qishuiTokenBusy / qishuiManualCookieOpen 的 var 声明已挪到
+// qishuiOAuthBusy / qishuiTokenBusy / qishuiManualCookieOpen / qishuiQrToken 的 var 声明已挪到
 // 主波 00-state/12a-audio-login-globals.js（boot 期急切读写；此处声明会在延迟波
 // 求值时把运行态覆盖回默认值，且主波引用会 ReferenceError → 白屏）。
+// 扫码流程在 03-login-modal-flows.js（refreshQr 汽水分支 + checkQr 汽水轮询），
+// 走 /api/qishui/login/qrcode + /api/qishui/login/check。
 
 function normalizeQishuiLoginStatus(info) {
   var fallback = {
@@ -84,63 +86,15 @@ function startQishuiLoginStatusAutoRefresh() {
 
 function qishuiLoginStatusText(info) {
   info = info || qishuiLoginStatus || {};
-  if (qishuiOAuthBusy) return '正在读取本机汽水 PC 登录态…';
   if (qishuiTokenBusy) return '正在保存汽水 Token…';
-  if (info.loggedIn && info.webSession) return '本机汽水会话已导入 · 可同步歌单并直接播放';
+  if (info.loggedIn && info.webSession) return '汽水扫码会话已生效 · 可同步歌单并直接播放';
   if (info.loggedIn && info.tokenConfigured) return '汽水 OpenAPI Token 已保存 · 可用作匹配源';
   if (info.loggedIn) return '汽水已登录';
-  return '读取本机汽水音乐 PC 客户端登录态，或粘贴 OpenAPI access-token';
-}
-
-async function openQishuiWebLogin() {
-  if (qishuiOAuthBusy || qishuiTokenBusy) return;
-  var statusEl = document.getElementById('qr-status');
-  var api = window.desktopWindow;
-  if (!api || !api.isDesktop || typeof api.openQishuiMusicLogin !== 'function') {
-    if (typeof updateLoginProviderUi === 'function') updateLoginProviderUi();
-    if (statusEl) { statusEl.textContent = '当前环境不能读取本机汽水 PC 登录态，请使用 Mineradio 桌面版。'; statusEl.className = 'fail'; }
-    return;
-  }
-  qishuiOAuthBusy = true;
-  if (typeof updateLoginProviderUi === 'function') updateLoginProviderUi();
-  if (statusEl) { statusEl.textContent = '正在读取本机汽水音乐 PC 客户端登录态…'; statusEl.className = 'preview'; }
-  var failText = '';
-  try {
-    var result = await api.openQishuiMusicLogin();
-    if (!result || !result.ok || !result.cookie || !result.webSession) {
-      throw new Error((result && (result.message || result.error)) || '没有读取到可用的本机汽水登录态');
-    }
-    if (statusEl) { statusEl.textContent = '正在保存本机会话并验证汽水歌单…'; statusEl.className = 'preview'; }
-    var info = await apiJson('/api/qishui/login/cookie', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cookie: result.cookie })
-    });
-    if (!info || !info.loggedIn || !info.webSession) {
-      throw new Error((info && (info.message || info.error)) || '本机汽水登录态导入后验证失败');
-    }
-    qishuiLoginStatus = normalizeQishuiLoginStatus(info);
-    activeAccountProvider = 'qishui';
-    if (typeof renderUserBtn === 'function') renderUserBtn();
-    if (typeof refreshUserPlaylists === 'function') await refreshUserPlaylists(true);
-    if (typeof loadHomeDiscover === 'function') loadHomeDiscover(true);
-    if (statusEl) { statusEl.textContent = '本机汽水登录态已导入，可同步歌单并直接播放'; statusEl.className = 'scan'; }
-    setTimeout(function () {
-      if (typeof closeLoginModal === 'function') closeLoginModal();
-      showToast('汽水音乐本机会话已导入');
-    }, 420);
-  } catch (e) {
-    failText = e && e.message ? e.message : '本机汽水登录态导入失败';
-    if (statusEl) { statusEl.textContent = failText; statusEl.className = 'fail'; }
-  } finally {
-    qishuiOAuthBusy = false;
-    if (typeof updateLoginProviderUi === 'function') updateLoginProviderUi();
-    if (failText && statusEl) { statusEl.textContent = failText; statusEl.className = 'fail'; }
-  }
+  return '使用抖音 / 汽水音乐 App 扫码登录，或粘贴 OpenAPI access-token';
 }
 
 async function submitQishuiTokenLogin() {
-  if (qishuiTokenBusy || qishuiOAuthBusy) return;
+  if (qishuiTokenBusy) return;
   var input = document.getElementById('qq-cookie-input');
   var statusEl = document.getElementById('qr-status');
   var saveBtn = document.getElementById('qq-cookie-save-btn');

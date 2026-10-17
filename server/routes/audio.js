@@ -74,7 +74,7 @@ module.exports = function register(ctx) {
           res.end(err.message || 'Invalid cover url');
           return;
         }
-        const resp = await fetchProxiedMedia(coverUrl, { 'User-Agent': UA, 'Referer': 'https://music.163.com/' });
+        const resp = await fetchProxiedMedia(coverUrl, audioProxyHeadersFor(coverUrl));
         const ct  = resp.headers.get('content-type') || 'image/jpeg';
         const cl  = resp.headers.get('content-length');
         if (!resp.ok) throw new Error('upstream status ' + resp.status);

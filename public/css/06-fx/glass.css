@@ -109,10 +109,18 @@ html.control-glass-svg-ok #home-btn,
 html.control-glass-svg-ok #upload-btn,
 html.control-glass-svg-ok #visual-guide-btn,
 html.control-glass-svg-ok #fx-fab,
-html.control-glass-svg-ok .top-account-pill,
 html.control-glass-svg-ok #top-right .icon-btn{
   backdrop-filter:var(--saved-button-glass-svg-filter)!important;
   -webkit-backdrop-filter:var(--saved-button-glass-svg-filter)!important;
+}
+/* .top-account-pill 不能吃 #mineradio-control-glass-filter：
+   该 filter 的 feImage 位移图是全局唯一的一张，尺寸取自 #bottom-bar（约 1050×102），
+   pill 只有 ~123×44，preserveAspectRatio="none" 拉伸后 feDisplacementMap(scale:180, dx:-90)
+   的 RGB 三通道只在 pill 中段对齐 → 屏幕上就是「一半深一半浅」的竖直接缝。
+   这里退回纯 blur 玻璃（--saved-button-glass-filter），保持和 #home-btn 一致的观感。 */
+html.control-glass-svg-ok .top-account-pill{
+  backdrop-filter:var(--saved-button-glass-filter)!important;
+  -webkit-backdrop-filter:var(--saved-button-glass-filter)!important;
 }
 #search-results,.search-mode-tabs,#playlist-panel,#fx-panel{
   background:rgba(0,0,0,.90)!important;
@@ -250,7 +258,6 @@ html.control-glass-svg-ok #home-btn,
 html.control-glass-svg-ok #upload-btn,
 html.control-glass-svg-ok #visual-guide-btn,
 html.control-glass-svg-ok #fx-fab,
-html.control-glass-svg-ok .top-account-pill,
 html.control-glass-svg-ok #top-right .icon-btn{
   backdrop-filter:var(--saved-button-glass-svg-filter)!important;
   -webkit-backdrop-filter:var(--saved-button-glass-svg-filter)!important;

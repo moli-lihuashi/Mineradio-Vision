@@ -47,9 +47,9 @@ function syncLoginModeUi() {
     menu.classList.toggle('is-hidden', loginProvider === 'spotify');
   }
   if (officialLabel) {
-    officialLabel.textContent = loginProvider === 'qishui'
-      ? '本机会话'
-      : (loginProvider === 'kugou' ? '官方窗口' : (loginProvider === 'spotify' ? 'OAuth' : '扫码登录'));
+    officialLabel.textContent = loginProvider === 'kugou'
+      ? '官方窗口'
+      : (loginProvider === 'spotify' ? 'OAuth' : '扫码登录');
   }
   if (cookieLabel) {
     cookieLabel.textContent = loginProvider === 'qishui' ? 'Token' : 'Cookie';
@@ -94,7 +94,7 @@ function startSelectedLoginConnection() {
   if (drawer) drawer.classList.add('show');
   if (loginProvider === 'qishui') {
     if (qishuiManualCookieOpen) return; // Token 面板已由方式切换打开，点保存即可
-    if (typeof openQishuiWebLogin === 'function') openQishuiWebLogin();
+    if (typeof refreshQr === 'function') refreshQr(); // 汽水改为二维码扫码登录
     return;
   }
   if (qqManualCookieOpen && (loginProvider === 'qq' || loginProvider === 'kugou')) {

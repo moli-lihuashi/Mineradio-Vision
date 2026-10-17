@@ -160,6 +160,8 @@ const APP_ICON_ICO = path.join(__dirname, '..', 'build', 'icon.ico');
 let tray = null;
 let closeBehavior = 'exit';
 let appQuitting = false;
+// 主窗口渲染进程崩溃时间戳（近 5 分钟内），用于崩溃风暴退避
+const mainWindowCrashTimes = [];
 const CACHE_SETTINGS_FILE = 'cache-settings.json';
 const LYRIC_CACHE_VERSION = 1;
 const LYRIC_CACHE_MAX_BYTES = 96 * 1024 * 1024;
@@ -2386,10 +2388,6 @@ ipcMain.handle('kugou-music-clear-login', async () => {
 
 // ========== Qishui IPC handlers ==========
 
-ipcMain.handle('qishui-music-open-login', async (event) => {
-  return qishuiLocal().openQishuiMusicLoginWindow(getSenderWindow(event));
-});
-
 ipcMain.handle('qishui-music-clear-login', async () => {
   return qishuiLocal().clearQishuiMusicLoginSession();
 });
@@ -3113,6 +3111,7 @@ async function ensureLocalServerStarted() {
     process.env.KUGOU_COOKIE_FILE = path.join(_stableUserData, '.kugou-cookie');
     process.env.QISHUI_COOKIE_FILE = path.join(_stableUserData, '.qishui-cookie');
     process.env.QISHUI_TOKEN_FILE = path.join(_stableUserData, '.qishui-token');
+    process.env.QISHUI_QR_CONFIG_FILE = path.join(_stableUserData, '.qishui-qr-login.json');
     process.env.SPOTIFY_TOKEN_FILE = path.join(_stableUserData, '.spotify-token.json');
     if (!process.env.SPOTIFY_CONFIG_FILE) {
       process.env.SPOTIFY_CONFIG_FILE = path.join(_stableUserData, '.spotify-credentials.json');
@@ -3432,8 +3431,12 @@ async function createWindow() {
     const reason = (details && details.reason) || 'unknown';
     const exitCode = details && details.exitCode;
     console.error('[StartupWindow] render-process-gone:', reason, 'exitCode=', exitCode);
+    // GPU 状态：如果是显卡/raster 侧先挂，这里的 featureStatus 往往已经变成 software/disabled，
+    // 是判断「渲染进程自己炸」还是「显卡加速炸」的关键证据。
+    let gpuStatus = '';
+    try { gpuStatus = JSON.stringify(app.getGPUFeatureStatus()); } catch (_) {}
     if (!startupCompleted) {
-      const error = new Error(`renderer process gone: ${reason} exitCode=${exitCode}`);
+      const error = new Error(`renderer process gone: ${reason} exitCode=${exitCode} gpu=${gpuStatus}`);
       writeStartupErrorLog('Renderer process gone', 'MR-BOOT-GPU', error);
     } else {
       // 启动完成后崩溃：立即整理内存 + 延迟重载页面恢复（针对 WebGL context loss 场景）
@@ -3441,9 +3444,22 @@ async function createWindow() {
       writeStartupErrorLog(
         'Renderer crashed after startup (auto-reload)',
         'MR-RENDER-CRASH',
-        new Error(`reason=${reason} exitCode=${exitCode}`)
+        new Error(`reason=${reason} exitCode=${exitCode} gpu=${gpuStatus}`)
       );
       appMemory.trimAppWorkingSets([process.pid]).catch(() => {});
+      // 崩溃风暴保护：短时间内反复崩溃说明是必现条件，固定 800ms 重载会变成无限重启循环，
+      // 这里做指数退避并把「循环」本身记下来，避免用户在无证据的情况下看到不停重启。
+      mainWindowCrashTimes.push(Date.now());
+      while (mainWindowCrashTimes.length && Date.now() - mainWindowCrashTimes[0] > 5 * 60 * 1000) mainWindowCrashTimes.shift();
+      const crashCount = mainWindowCrashTimes.length;
+      if (crashCount === 3) {
+        writeStartupErrorLog(
+          'Renderer crash loop (3 crashes within 5 minutes)',
+          'MR-RENDER-CRASH-LOOP',
+          new Error(`reason=${reason} exitCode=${exitCode} gpu=${gpuStatus}`)
+        );
+      }
+      const reloadDelay = crashCount <= 1 ? 800 : Math.min(800 * Math.pow(2, crashCount - 1), 8000);
       if (win && !win.isDestroyed()) {
         setTimeout(() => {
           try {
@@ -3451,13 +3467,21 @@ async function createWindow() {
               win.webContents.reload();
             }
           } catch (_) {}
-        }, 800);
+        }, reloadDelay);
       }
     }
   });
 
   win.on('unresponsive', () => {
     console.warn('[StartupWindow] main window unresponsive');
+    // 用户能感知到的「卡顿」大部分发生在这里；落盘以便和崩溃记录对照（是否卡顿后必崩）。
+    try {
+      writeStartupErrorLog('Main window unresponsive', 'MR-WINDOW-UNRESPONSIVE', new Error('unresponsive'));
+    } catch (_) {}
+  });
+
+  win.on('responsive', () => {
+    console.warn('[StartupWindow] main window responsive again');
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -3869,6 +3893,34 @@ if (!gotSingleInstanceLock) {
     screen.on('display-removed', handleDisplayLayoutChanged);
     await createWindow();
   }).catch((e) => reportWindowCreationFailure('Main', e));
+
+  // 子进程崩溃（GPU / raster / utility / audio）——renderer 的 reason=crashed 常常是它们的连锁反应，
+  // 不记录就永远不知道到底是渲染进程自己炸了还是显卡/raster 进程先死。
+  app.on('child-process-gone', (_event, details) => {
+    const d = details || {};
+    const line = `type=${d.type || '?'} reason=${d.reason || '?'} exitCode=${d.exitCode} service=${d.serviceName || '-'} name=${d.name || '-'}`;
+    console.error('[ChildProcessGone]', line);
+    try {
+      writeStartupErrorLog('Child process gone (GPU/raster/utility/audio)', 'MR-CHILD-PROCESS-GONE', new Error(line));
+    } catch (_) {}
+  });
+
+  // 本地 minidump：不联网上传，只落在 userData/Crashpad 下，用于事后定位崩溃模块。
+  try {
+    const { crashReporter } = require('electron');
+    if (crashReporter && typeof crashReporter.start === 'function') {
+      crashReporter.start({
+        productName: APP_NAME,
+        companyName: APP_NAME,
+        submitURL: '',
+        uploadToServer: false,
+        compress: false,
+        extra: { version: String(APP_VERSION || '') },
+      });
+    }
+  } catch (e) {
+    console.warn('[CrashReporter] start failed:', e && e.message);
+  }
 
   app.on('activate', () => {
     if (startupCompleted && focusMainWindow()) return;

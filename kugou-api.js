@@ -210,18 +210,32 @@ const KUGOU_VIP_EXPIRY_KEYS = new Set([
   'svipendtime', 'svipexpiretime', 'supervipendtime', 'luxuryvipendtime',
 ]);
 
+// 网页端 roleinfo（vip.kugou.com/recharge/roleinfo）会员识别：role 数字映射。
+// unionVip 接口漏判时，web role 常能补出会员身份（role 1/2=VIP, 6/11/13=SVIP, 31/33=音乐包）。
+const KUGOU_WEB_MEMBERSHIP_SIGNAL_KEYS = new Set([
+  'role', 'producttype', 'usertype', 'userytype', 'ytype',
+]);
+const KUGOU_WEB_ROLE_KEYS = [
+  'role', 'user_type', 'userType', 'usertype',
+  'user_y_type', 'userYType', 'userytype', 'y_type', 'yType', 'ytype',
+];
+const KUGOU_WEB_VIP_ROLES = new Set([1, 2]);
+const KUGOU_WEB_SVIP_ROLES = new Set([6, 11, 13]);
+const KUGOU_WEB_MUSIC_PACKAGE_ROLES = new Set([31, 33]);
+
 function normalizeKugouMembershipKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-function kugouObjectHasMembershipSignal(value) {
+function kugouObjectHasMembershipSignal(value, allowWebSignals) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value).some(([key, item]) => {
     if (item && typeof item === 'object') return false;
     const normalizedKey = normalizeKugouMembershipKey(key);
     return KUGOU_VIP_SIGNAL_KEYS.has(normalizedKey) ||
       KUGOU_SVIP_SIGNAL_KEYS.has(normalizedKey) ||
-      KUGOU_VIP_EXPIRY_KEYS.has(normalizedKey);
+      KUGOU_VIP_EXPIRY_KEYS.has(normalizedKey) ||
+      (allowWebSignals === true && KUGOU_WEB_MEMBERSHIP_SIGNAL_KEYS.has(normalizedKey));
   });
 }
 
@@ -247,6 +261,25 @@ function kugouTimeState(objects, keys) {
   return { present, future };
 }
 
+// 取对象中首个出现的数值字段状态（用于 web role 数字判定），无依赖。
+function kugouNumberFieldState(objects, keys) {
+  for (const obj of objects || []) {
+    if (!obj || typeof obj !== 'object') continue;
+    for (const key of keys || []) {
+      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+      const raw = obj[key];
+      if (raw == null || String(raw).trim() === '') continue;
+      const value = Number(raw);
+      return {
+        present: true,
+        valid: Number.isFinite(value) && value >= 0,
+        value: Number.isFinite(value) && value >= 0 ? value : 0,
+      };
+    }
+  }
+  return { present: false, valid: false, value: 0 };
+}
+
 function collectKugouVipObjects(value, out, depth) {
   if (depth > 6 || value == null) return out;
   if (Array.isArray(value)) {
@@ -266,6 +299,8 @@ function collectKugouVipObjects(value, out, depth) {
 
 function normalizeKugouVipPayloadV2(payload, fallback) {
   fallback = fallback || {};
+  const membershipOrigin = String(payload && payload.__kugouMembershipOrigin || '');
+  const isWebRolePayload = membershipOrigin === 'kugou-web-roleinfo';
   const data = payload && (payload.data || payload.result || payload.vip || payload) || {};
   const expectedUserId = String(fallback.userid || fallback.userId || '').replace(/\D/g, '');
   const payloadObjects = collectKugouVipObjects(data, [], 0).filter(obj => {
@@ -300,6 +335,34 @@ function normalizeKugouVipPayloadV2(payload, fallback) {
   const isVip = isSvip || vipExpiry.future || (vipType > 0 && !vipExpiry.present) ||
     (objects.some(obj => obj && obj.isVip === true) && !vipExpiry.present);
   const vipLevel = isSvip ? 'svip' : (isVip ? 'vip' : 'none');
+  if (isWebRolePayload) {
+    const roleState = kugouNumberFieldState(payloadObjects, KUGOU_WEB_ROLE_KEYS);
+    if (roleState.present && roleState.valid) {
+      const webRole = roleState.value;
+      const roleIsSvip = KUGOU_WEB_SVIP_ROLES.has(webRole);
+      const roleIsVip = roleIsSvip || KUGOU_WEB_VIP_ROLES.has(webRole);
+      const roleHasMusicPackage = KUGOU_WEB_MUSIC_PACKAGE_ROLES.has(webRole);
+      if (roleIsVip || roleHasMusicPackage) {
+        const outIsVip = roleIsVip;
+        const outIsSvip = roleIsSvip;
+        const outLevel = outIsSvip ? 'svip' : (outIsVip ? 'vip' : 'none');
+        return {
+          vipType: outIsVip ? webRole : 0,
+          svipType: outIsSvip ? webRole : 0,
+          vipLevel: outLevel,
+          isVip: outIsVip,
+          isSvip: outIsSvip,
+          membershipKnown: true,
+          membershipVerified: true,
+          membershipSource: 'kugou-web-roleinfo',
+        };
+      }
+    }
+    return {
+      vipType: 0, svipType: 0, vipLevel: 'none', isVip: false, isSvip: false,
+      membershipKnown: false, membershipVerified: false, membershipSource: 'none',
+    };
+  }
   return {
     vipType: isSvip ? Math.max(vipType, svipType) : vipType,
     svipType,
@@ -312,6 +375,72 @@ function normalizeKugouVipPayloadV2(payload, fallback) {
       ? 'kugou-vip-api'
       : (fallbackMembershipKnown ? 'kugou-cookie-explicit' : 'none'),
   };
+}
+
+// ---- 网页端 roleinfo 会员探测（unionVip 漏判时的 fail-open 补充源）----
+function kugouUnknownWebMembershipPayload() {
+  return {
+    __kugouMembershipUnknown: true,
+    __kugouMembershipOrigin: 'kugou-web-roleinfo',
+  };
+}
+
+function normalizeKugouWebRoleInfoPayload(payload, auth) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return kugouUnknownWebMembershipPayload();
+  }
+  const data = payload.data || payload.result || payload;
+  const errorObjects = [payload, data].filter(value => value && typeof value === 'object');
+  const hasErrorCode = errorObjects.some(value => [
+    value.errno, value.error_code, value.errorCode, value.errcode, value.err_code,
+  ].some(code => Number.isFinite(Number(code)) && Number(code) > 0));
+  const explicitlyFailed = errorObjects.some(value =>
+    value.success === false ||
+    (Object.prototype.hasOwnProperty.call(value, 'status') && Number(value.status) === 0) ||
+    /^(-1|false|fail|failed|error)$/i.test(String(value.status == null ? '' : value.status).trim()) ||
+    (typeof value.error === 'string' && value.error.trim() !== '')
+  );
+  if (hasErrorCode || explicitlyFailed) return kugouUnknownWebMembershipPayload();
+
+  const expectedUserId = String(auth && auth.userid || '').replace(/\D/g, '');
+  const objects = collectKugouVipObjects(payload, [], 0);
+  const roleInfoRecord = objects.find(value =>
+    kugouNumberFieldState([value], KUGOU_WEB_ROLE_KEYS).present
+  ) || objects.find(value => kugouObjectHasMembershipSignal(value, true));
+  if (!roleInfoRecord) return kugouUnknownWebMembershipPayload();
+  return {
+    data: Object.assign({}, roleInfoRecord),
+    __kugouMembershipOrigin: 'kugou-web-roleinfo',
+  };
+}
+
+async function fetchKugouWebVipInfo(cookie, auth) {
+  auth = auth || extractKugouAuth(cookie);
+  if (!auth.loggedIn || !cookie) return kugouUnknownWebMembershipPayload();
+  const url = new URL(KUGOU_VIP_ROLEINFO_URL);
+  url.searchParams.set('n', String(Date.now()));
+  let timer = null;
+  try {
+    const payload = await Promise.race([
+      requestJson(url.toString(), {
+        timeoutMs: 2500,
+        headers: {
+          Accept: 'application/json, text/javascript, */*; q=0.01',
+          Referer: 'https://vip.kugou.com/',
+          'User-Agent': KUGOU_H5_UA,
+          'X-Requested-With': 'XMLHttpRequest',
+          Cookie: buildKugouRequestCookie(cookie),
+        },
+      }).catch(() => null),
+      new Promise(resolve => {
+        timer = setTimeout(() => resolve(null), 2500);
+        if (typeof timer.unref === 'function') timer.unref();
+      }),
+    ]);
+    return normalizeKugouWebRoleInfoPayload(payload, auth);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function extractKugouAuth(cookie) {
@@ -1221,9 +1350,9 @@ function decryptKrcContent(content) {
   try { return zlib.inflateSync(body).toString('utf8'); } catch (_) { return body.toString('utf8'); }
 }
 
-// 酷狗翻译声明行（如"以下歌词翻译由文曲大模型提供"），不应显示为译文
+// 酷狗翻译声明行（如"以下歌词翻译由文曲大模型提供"、"TME享有本翻译作品的著作权"），不应显示为译文
 function isKugouTranslationCreditLine(text) {
-  return /歌词翻译|翻译由|机译|AI生成|机器翻译/.test(String(text || ''));
+  return /歌词翻译|翻译由|机译|AI生成|机器翻译|本翻译作品|翻译作品|著作权/.test(String(text || ''));
 }
 
 // 从 krctype=2 的 KRC 文本中提取 [language:base64JSON] 翻译，
@@ -1234,10 +1363,24 @@ function krcLanguageTranslationsToLrc(krcText, mainLrc) {
   let payload;
   try { payload = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch (_) { return ''; }
   const groups = payload && Array.isArray(payload.content) ? payload.content : [];
-  const rows = [];
-  for (const g of groups) {
+  const groupRows = groups.map((g) => {
     const lc = g && Array.isArray(g.lyricContent) ? g.lyricContent : [];
-    for (const row of lc) rows.push(Array.isArray(row) ? row.join('') : String(row || ''));
+    return {
+      type: Number(g && g.type) || 0,
+      rows: lc.map((row) => (Array.isArray(row) ? row.join('') : String(row || ''))),
+    };
+  });
+  // [language:] 里可能同时带多条轨：type=0 是**音译**（汉字谐音，如「弄 那诶 A N G E L」），
+  // type=1 才是**真正的中文翻译**（如「你是我的天使」）。
+  // 旧实现把所有轨按顺序首尾拼成一个数组，等于只取第一条（音译），真译文被整条丢弃
+  // → 韩语歌的「双语翻译」显示成谐音乱码。优先取 type=1，取不到再退回旧行为。
+  const usable = (rows) => rows.some((t) => String(t || '').trim());
+  const preferred = groupRows.find((entry) => entry.type === 1 && usable(entry.rows));
+  const rows = [];
+  if (preferred) {
+    rows.push(...preferred.rows);
+  } else {
+    for (const entry of groupRows) rows.push(...entry.rows);
   }
   if (!rows.length) return '';
   const mainLines = String(mainLrc || '').split(/\r?\n/).filter((l) => /^\[\d{2,}:\d{2}/.test(l.trim()));
@@ -1263,20 +1406,58 @@ async function downloadKugouLyricCandidate(candidate, fmt) {
   return requestJson(dl.toString(), { headers: KUGOU_HEADERS });
 }
 
-async function handleKugouLyric(hash, albumAudioId, durationSec) {
-  const fileHash = String(hash || '').trim();
-  if (!fileHash) return { provider: 'kugou', error: 'Missing Kugou hash', lyric: '' };
+function kugouLyricSearchUrl(fileHash, albumAudioId, durationMs) {
   const u = new URL(KUGOU_LYRIC_SEARCH);
   u.searchParams.set('ver', '1');
   u.searchParams.set('man', 'yes');
   u.searchParams.set('client', 'pc');
   u.searchParams.set('keyword', '');
-  u.searchParams.set('duration', String(Math.max(0, Number(durationSec) || 0)));
+  // krcs 的 duration 单位是毫秒，候选里的 duration 也是毫秒（如 226403）
+  u.searchParams.set('duration', String(Math.max(0, Math.round(Number(durationMs) || 0))));
   u.searchParams.set('hash', fileHash);
-  if (albumAudioId) u.searchParams.set('album_audio_id', albumAudioId);
-  const search = await requestJson(u.toString(), { headers: KUGOU_HEADERS });
-  const candidates = (search && Array.isArray(search.candidates)) ? search.candidates : [];
-  if (!candidates.length || !candidates[0].id) {
+  if (albumAudioId) u.searchParams.set('album_audio_id', String(albumAudioId));
+  return u.toString();
+}
+
+// krcs 同时收到 hash 与 album_audio_id 时**只认 album_audio_id，hash 被完全忽略**（实测）：
+//   hash=法语曲 + album_audio_id=别的曲子 → 返回那一首的歌词；album_audio_id 查不到 → 0 候选 → 无歌词。
+// 而前端 song.albumAudioId 并不可靠（历史记录重建、「今天听过」回填、
+// server.js mapKugouTrack 的 `... || raw.songid || raw.id` 兜底都会把外来 id 贴到歌上），
+// 一旦透传就会整首歌词错位：表现为「歌词全变了 / 变成中文有声书」或「原本的歌词直接没有」。
+// hash 是当前正在播放的音频哈希，最权威 —— 因此先用 hash 单查，查不到才用 album_audio_id 兜底。
+async function fetchKugouLyricCandidates(fileHash, albumAudioId, durationMs) {
+  const primary = await requestJson(kugouLyricSearchUrl(fileHash, '', durationMs), { headers: KUGOU_HEADERS }).catch(() => null);
+  let candidates = (primary && Array.isArray(primary.candidates)) ? primary.candidates : [];
+  if (!candidates.length && albumAudioId) {
+    const fallback = await requestJson(kugouLyricSearchUrl(fileHash, albumAudioId, durationMs), { headers: KUGOU_HEADERS }).catch(() => null);
+    candidates = (fallback && Array.isArray(fallback.candidates)) ? fallback.candidates : [];
+  }
+  return candidates.filter((c) => c && c.id);
+}
+
+// 时长守卫：album_audio_id 兜底可能命中别的曲子，用时长把明显对不上的候选剔掉。
+// 只在有多个候选、且存在时长接近的候选时才过滤，避免误伤（最长 20s 容差）。
+function filterKugouLyricCandidatesByDuration(candidates, durationMs) {
+  const want = Number(durationMs) || 0;
+  if (!(want > 5000) || candidates.length <= 1) return candidates;
+  const near = candidates.filter((c) => {
+    const d = Number(c.duration) || 0;
+    return !d || Math.abs(d - want) <= 20000;
+  });
+  return near.length ? near : candidates;
+}
+
+async function handleKugouLyric(hash, albumAudioId, durationSec) {
+  const fileHash = String(hash || '').trim();
+  if (!fileHash) return { provider: 'kugou', error: 'Missing Kugou hash', lyric: '' };
+  // 前端传的是秒（playbackDurationFromSong），krcs 用毫秒
+  const rawDuration = Math.max(0, Number(durationSec) || 0);
+  const durationMs = rawDuration > 1000 ? Math.round(rawDuration) : Math.round(rawDuration * 1000);
+  const candidates = filterKugouLyricCandidatesByDuration(
+    await fetchKugouLyricCandidates(fileHash, albumAudioId, durationMs),
+    durationMs,
+  );
+  if (!candidates.length) {
     return { provider: 'kugou', hash: fileHash, lyric: '', trans: '' };
   }
   // 主歌词：优先 krctype=1（原文歌词），否则第一个候选
@@ -1352,6 +1533,12 @@ async function fetchKugouVipInfo(cookie, auth) {
     ]);
     const primaryMembership = normalizeKugouVipPayloadV2(primary, { userid: auth.userid });
     if (primaryMembership.membershipKnown) return primary;
+
+    // unionVip 主探测未确认会员（接口失败/未知）时，补充网页端 roleinfo 探测。
+    // web role 常能识别 unionVip 漏判的会员身份，作为 fail-open 兜底而非覆盖。
+    const webRoleInfo = await fetchKugouWebVipInfo(cookie, auth).catch(() => kugouUnknownWebMembershipPayload());
+    const webMembership = normalizeKugouVipPayloadV2(webRoleInfo, { userid: auth.userid });
+    if (webMembership.membershipKnown && webMembership.isVip) return webRoleInfo;
 
     return new Promise(resolve => {
       let settled = false;

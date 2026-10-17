@@ -5,7 +5,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
 ![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
-![version](https://img.shields.io/badge/version-3.0.1-success?style=flat-square)
+![version](https://img.shields.io/badge/version-3.1.0-success?style=flat-square)
 
 ![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-10-12.webp)
 
@@ -17,7 +17,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 
 | 对比项 | 上游 Mineradio | Mineradio Vision（本仓库） |
 | --- | --- | --- |
-| 维护状态 | 2026-09-21 起停更，仓库改名 `Mineradio-paused` | 持续维护中，最近更新 2026-10-16 |
+| 维护状态 | 2026-09-21 起停更，仓库改名 `Mineradio-paused` | 持续维护中，最近更新 2026-10-17 |
 | 音乐平台 | 上游原有接入能力 | 网易云 / QQ / **酷狗** / 汽水 / **Spotify** 五源统一登录、歌单同步与账号状态 |
 | 酷狗链路 | — | KRC 加密歌词解密（krc1 XOR + zlib）、翻译歌词显示修复、云歌单 dfid 设备身份修复、歌单顺序同步、VIP 状态同步 |
 | QQ 登录 | 授权失效需重新登录 | Cookie 失效自动判定 + 服务端静默续期，失败才提示重登 |
@@ -27,7 +27,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 
 ## 下载安装
 
-- **Windows 安装包（推荐）**：[Mineradio-3.0.1-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.0.1/Mineradio-3.0.1-Setup.exe) —— 2026-10-16 构建，包含本仓库最新代码
+- **Windows 安装包（推荐）**：[Mineradio-3.1.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.1.0/Mineradio-3.1.0-Setup.exe) —— 2026-10-17 构建，包含本仓库最新代码
 - 免安装便携版：[Mineradio-Vision-v3.0.1-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.0.1/Mineradio-Vision-v3.0.1-portable-win-x64.zip)（2026-08-29 构建）
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 

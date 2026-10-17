@@ -393,6 +393,7 @@ function ensureSourceFallbackRecovery(opts, song, idx, token) {
     rootIndex: idx,
     rootToken: token,
     queueAdvances: 0,
+    skipDepth: 0,
     providerAttempts: 0,
     silent: !!(opts && opts.startupAutoplay),
     visitedSongKeys: Object.create(null),
@@ -508,12 +509,51 @@ function alternatePlaybackProviders(song) {
 function alternatePlaybackProvider(song) {
   return alternatePlaybackProviders(song)[0] || '';
 }
-async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
-  var target = requestedTarget || alternatePlaybackProvider(song);
-  if (!target || !sourceFallbackProviderReady(target)) return null;
-  if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
-  var artist = artistNameParts(song)[0] || '';
-  var query = [song.name || song.title || '', song.artist || artist].filter(Boolean).join(' ').trim();
+// 汽水公共目录（UGC）行的 artist 是上传者、原唱只写在标题括号里（后端已解析成 originalArtist/originalTitle）。
+// 拿上传者去拼关键词或做「同名同歌手」校验，永远匹配不到可播版本 —— 这就是用户侧「无法播放」的最后一道墙。
+function sourceFallbackCatalogMatchOnly(song) {
+  if (!song || song.playable !== false) return false;
+  if (song.recommendationSource === 'qishui-public-catalog') return true;
+  var restriction = song.restriction || {};
+  return restriction.action === 'switch_source' && restriction.category === 'provider_limited';
+}
+function sourceFallbackMatchIdentity(song) {
+  var rawTitle = String((song && (song.name || song.title)) || '').trim();
+  var rawArtist = String((song && song.artist) || '').trim();
+  var catalog = sourceFallbackCatalogMatchOnly(song);
+  var title = String((song && song.originalTitle) || '').trim() || rawTitle;
+  var artist = String((song && song.originalArtist) || '').trim();
+  // 目录行的 artist 是上传者，不能当歌手用；非目录行保持原行为（含 artists[] 兜底）。
+  if (!artist && !catalog) artist = rawArtist || (artistNameParts(song)[0] || '');
+  var source = song;
+  if (title !== rawTitle || artist !== rawArtist) {
+    source = Object.assign({}, song, {
+      name: title,
+      title: title,
+      artist: artist,
+      artists: artist ? [{ name: artist }] : []
+    });
+  }
+  return { title: title, artist: artist, catalog: catalog, source: source };
+}
+// 目录行没有任何原唱线索时只能按同名匹配；必须排除翻唱/伴奏/片段等衍生版本。
+// 注意：**不能用候选的 playable 字段过滤**——搜索结果里的 playable 来自 Privilege，实测周杰伦的原唱
+// 会被标成 playable:false/fee:1 却仍能解析出 hires 播放地址；拿它过滤会把排在第 1 的原唱跳过、
+// 反而选中后面的翻唱版本（实测「晴天」会错选蓝心羽、「搁浅」会错选杨丞琳 Live）。
+// 可播性交给后面的 resolveAlbumGaplessPlaybackData 真解析去判定。
+function sourceFallbackTitleOnlyMatch(title, candidate) {
+  if (!candidate) return false;
+  var norm = typeof simpleSearchNorm === 'function' ? simpleSearchNorm : normalizeMatchText;
+  var sourceTitle = norm(title || '');
+  var candidateTitle = norm((candidate.name || candidate.title) || '');
+  if (!sourceTitle || !candidateTitle || sourceTitle !== candidateTitle) return false;
+  if (typeof sourceSwitchSongHasBlockedArtist === 'function' && sourceSwitchSongHasBlockedArtist(candidate)) return false;
+  var raw = String((candidate.name || '') + ' ' + (candidate.artist || '') + ' ' + (candidate.album || '')).toLowerCase();
+  if (typeof searchLooksLikeDerivative === 'function' && searchLooksLikeDerivative(raw)) return false;
+  return true;
+}
+async function sourceFallbackSearchCandidates(identity, target, recovery, keywordArtist) {
+  var query = [identity.title, keywordArtist].filter(Boolean).join(' ').trim();
   if (!query) return null;
   var url = target === 'qq'
     ? '/api/qq/search?keywords=' + encodeURIComponent(query) + '&limit=8'
@@ -525,10 +565,36 @@ async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
     recovery
   );
   if (data === sourceFallbackBudgetTimeoutResult || (recovery && !sourceFallbackRecoveryCanContinue(recovery))) return null;
-  var list = data && (data.songs || data.result || []);
-  for (var i = 0; i < list.length; i++) {
-    if (typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(song, list[i], target)) continue;
-    if (isSameTitleArtist(song, list[i])) return cloneSong(list[i]);
+  return (data && (data.songs || data.result)) || [];
+}
+async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
+  var target = requestedTarget || alternatePlaybackProvider(song);
+  if (!target || !sourceFallbackProviderReady(target)) return null;
+  if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
+  if (!song || !(song.name || song.title)) return null;
+  var identity = sourceFallbackMatchIdentity(song);
+  if (identity.artist) {
+    var list = await sourceFallbackSearchCandidates(identity, target, recovery, identity.artist);
+    if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
+    for (var i = 0; list && i < list.length; i++) {
+      if (typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(identity.source, list[i], target)) continue;
+      if (isSameTitleArtist(identity.source, list[i])) {
+        var strictHit = cloneSong(list[i]);
+        strictHit.autoFallbackConfidence = 'same-title-artist';
+        return strictHit;
+      }
+    }
+    return null;
+  }
+  // 只有「纯匹配源」目录行、且确实没有原唱信息时才走同名匹配。
+  if (!identity.catalog) return null;
+  var looseList = await sourceFallbackSearchCandidates(identity, target, recovery, '');
+  if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
+  for (var j = 0; looseList && j < looseList.length; j++) {
+    if (!sourceFallbackTitleOnlyMatch(identity.title, looseList[j])) continue;
+    var looseHit = cloneSong(looseList[j]);
+    looseHit.autoFallbackConfidence = 'same-title';
+    return looseHit;
   }
   return null;
 }
@@ -635,6 +701,13 @@ async function skipFailedQueueItem(idx, token, message, opts) {
   if (!sourceFallbackRecoveryCanContinue(recovery)) {
     return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', terminalOpts);
   }
+  // 硬闸：嵌套深度。playQueueAt → skipFailedQueueItem → playQueueAt 会自我递归，
+  // 每层都重跑封面/歌词/UI 重建管线。深度上限与 queueAdvances 双重封顶。
+  var depth = Number(recovery.skipDepth) || 0;
+  if (depth >= SOURCE_FALLBACK_MAX_QUEUE_ADVANCES) {
+    return settleSourceFallbackTerminal(idx, token, '已停止自动切换，避免无可用音源时反复扫描整条队列。', terminalOpts);
+  }
+  recovery.skipDepth = depth + 1;
   hideLoading();
   markQueueItemPlaybackFailed(idx, recovery);
   var currentRecoveryKey = sourceFallbackRecoveryContentKey(playQueue[idx]);
@@ -696,7 +769,21 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
     return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
   }
   if (!alternateProviders.length) {
-    return await skipFailedQueueItem(idx, token, '当前歌曲不可播放，且没有其它已登录、已授权的音乐平台可接管。', skipOpts);
+    // 没有任何已登录/已授权的音源可接管时，不再走 skipFailedQueueItem：
+    // 那条路会 playQueueAt(nextIdx) → 再失败 → 再 skip，一层套一层。
+    // 每层都重跑 封面解码/canvas/深度图/三张 three.js 纹理 + 歌词准备 + 队列面板/ shelf 重建，
+    // 实测一次点击叠 3~4 层，主线程被反复打满 15~30s，渲染进程被反复分配原生内存直到 OOM
+    // （kOomExceptionCode 0xE0000008，minidump 崩溃线程=渲染主线程）。
+    // 这里直接终局：必须走 settleSourceFallbackTerminal 完成结算，
+    // 它会置 terminal、清 activeSourceFallbackRecovery，并回收 album-gapless / cuefield / watchdog / 音频句柄。
+    // 只做 hideLoading 之类的局部收尾会留下「未结算的 recovery」，
+    // 后续换源会被这份旧事务挡住（tests/playback-source-fallback-transaction.test.js 覆盖此契约）。
+    return settleSourceFallbackTerminal(
+      idx,
+      token,
+      '当前歌曲不可播放，并且没有其它已登录、已授权的音源可接管。',
+      skipOpts
+    );
   }
   if (!opts.startupAutoplay) {
     showSourceFallbackNotice('正在自动换源', fromLabel + ' 当前不可播，正在检查 ' + alternateProviders.map(sourceFallbackProviderTitle).join('、') + ' 的同名同歌手版本。');
@@ -749,7 +836,14 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
       if (fallbackToken !== trackSwitchToken) return false;
       if (fallbackStarted === true) {
         completeSourceFallbackRecovery(recovery);
-        if (!opts.startupAutoplay) showSourceFallbackNotice('已自动切换音源', (song.name || '当前歌曲') + ' 已从 ' + fromLabel + ' 切到 ' + targetLabel + '。');
+        if (!opts.startupAutoplay) {
+          if (alternate.autoFallbackConfidence === 'same-title') {
+            // 目录行没有原唱信息，只能按同名匹配 —— 必须让用户知道这一首是「同名」而不是「同名同歌手」。
+            showSourceFallbackNotice('已按同名匹配换源', (song.name || '当前歌曲') + ' 在 ' + fromLabel + ' 只有同名目录版本（无原唱信息），已按同名匹配到 ' + targetLabel + ' 的版本。');
+          } else {
+            showSourceFallbackNotice('已自动切换音源', (song.name || '当前歌曲') + ' 已从 ' + fromLabel + ' 切到 ' + targetLabel + '。');
+          }
+        }
         return true;
       }
       restoreSourceFallbackQueueItem(idx, originalSong, committedCandidate, fallbackToken);

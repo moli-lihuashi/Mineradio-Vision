@@ -82,6 +82,7 @@ const playlist_subscribe = _lazyFn(_neteaseMod, 'playlist_subscribe');
 
 // kugou-api（函数 + 常量）
 const getKugouLoginInfoFromApi = _lazyFn(_kugouMod, 'getKugouLoginInfo');
+const handleKugouSearch = _lazyFn(_kugouMod, 'handleKugouSearch');
 const handleKugouLyric = _lazyFn(_kugouMod, 'handleKugouLyric');
 const handleKugouGuessLike = _lazyFn(_kugouMod, 'handleKugouGuessLike');
 const handleKugouLikeCheck = _lazyFn(_kugouMod, 'handleKugouLikeCheck');
@@ -154,6 +155,7 @@ const tls = require('tls');
 const os = require('os');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
+const { Worker } = require('worker_threads');
 const QRCode = require('qrcode');
 const { analyzePodcastDjStream, analyzePodcastDjIntro, nativeDjAvailable } = require('./dj-analyzer');
 const {
@@ -222,6 +224,99 @@ const qishuiAudioDecryptor = new TrackDecryptor();
 const qishuiAudioDecryptCache = new Map();
 const QISHUI_AUDIO_DECRYPT_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 let qishuiAudioDecryptCacheBytes = 0;
+
+// ---- 汽水音频解密 worker（把逐样本 AES 从主进程事件循环挪到 worker 线程）----
+// 目的：避免解密阻塞主进程 → UI 卡顿；并在独立堆里跑，降低主进程内存尖峰导致整 app 崩的概率。
+// 单 worker 串行解密（解密是 CPU 密集，串行反而最优）；worker 不可用/出错时自动回退同步解密。
+let qishuiDecryptWorker = null;
+let qishuiDecryptWorkerFailed = false;
+const qishuiWorkerPending = new Map();
+let qishuiWorkerSeq = 0;
+
+function ensureQishuiDecryptWorker() {
+  if (qishuiDecryptWorker || qishuiDecryptWorkerFailed) return qishuiDecryptWorker;
+  try {
+    const worker = new Worker(path.join(__dirname, 'qishui-audio-decryptor', 'decrypt-worker.js'));
+    worker.on('message', (msg) => {
+      const pending = msg && qishuiWorkerPending.get(msg.id);
+      if (!pending) return;
+      qishuiWorkerPending.delete(msg.id);
+      if (msg.ok) pending.resolve({ buffer: msg.buffer, extension: msg.extension });
+      else pending.reject(new Error(msg.error || 'qishui decrypt worker failed'));
+    });
+    const failAll = (err) => {
+      const entries = [...qishuiWorkerPending.values()];
+      qishuiWorkerPending.clear();
+      entries.forEach((p) => p.reject(err));
+    };
+    worker.on('error', (err) => {
+      console.error('[QishuiDecryptWorker] worker error, fallback to sync:', err && err.message);
+      qishuiDecryptWorkerFailed = true;
+      qishuiDecryptWorker = null;
+      failAll(err || new Error('qishui decrypt worker error'));
+    });
+    worker.on('exit', (code) => {
+      if (qishuiWorkerPending.size) {
+        console.error('[QishuiDecryptWorker] worker exited code', code, ', fallback to sync');
+        qishuiDecryptWorkerFailed = true;
+        failAll(new Error('qishui decrypt worker exited ' + code));
+      }
+      qishuiDecryptWorker = null;
+    });
+    qishuiDecryptWorker = worker;
+  } catch (err) {
+    console.error('[QishuiDecryptWorker] worker create failed, using sync decrypt:', err && err.message);
+    qishuiDecryptWorkerFailed = true;
+    qishuiDecryptWorker = null;
+  }
+  return qishuiDecryptWorker;
+}
+
+function qishuiDecryptInWorker(encryptedBuffer, spadeA) {
+  const worker = ensureQishuiDecryptWorker();
+  if (!worker) return Promise.reject(new Error('qishui decrypt worker unavailable'));
+  const id = ++qishuiWorkerSeq;
+  return new Promise((resolve, reject) => {
+    qishuiWorkerPending.set(id, { resolve, reject });
+    try {
+      // transfer 加密 buffer（只传底层 ArrayBuffer），避免结构化克隆再复制一份。
+      // encryptedBuffer 由 Buffer.from(arrayBuffer) 得到，byteOffset=0、长度=整个 ArrayBuffer，
+      // 因此 transfer .buffer 即恰好转移这段加密数据。
+      worker.postMessage({ id, encryptedBuffer, spadeA }, [encryptedBuffer.buffer]);
+    } catch (transferErr) {
+      // 兜底：极少数情况底层 ArrayBuffer 不可 transfer（如来自共享池），退回复制传递
+      try {
+        worker.postMessage({ id, encryptedBuffer, spadeA });
+      } catch (err) {
+        qishuiWorkerPending.delete(id);
+        reject(err);
+      }
+    }
+  });
+}
+
+async function qishuiDecryptAudio(encryptedBuffer, spadeA) {
+  if (!qishuiDecryptWorkerFailed) {
+    try {
+      return await qishuiDecryptInWorker(encryptedBuffer, spadeA);
+    } catch (err) {
+      // worker 任务失败：若 worker 已不可用，后续会走同步；本条因 buffer 已 transfer，直接抛出（该曲播放失败但不崩）
+      console.error('[QishuiDecrypt] worker decrypt failed:', err && err.message);
+      throw err;
+    }
+  }
+  return qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA });
+}
+
+function looksLikeValidDecryptedAudio(buffer, extension) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 16) return false;
+  if (extension === '.flac') {
+    return buffer[0] === 0x66 && buffer[1] === 0x4c && buffer[2] === 0x61 && buffer[3] === 0x43; // 'fLaC'
+  }
+  // m4a: 前 4 字节是 box 大小，第 5-8 字节应为 'ftyp'，且应包含 'moov'
+  const ftyp = buffer.toString('latin1', 4, 8);
+  return ftyp === 'ftyp' && buffer.includes(Buffer.from('moov'));
+}
 
 function applySystemCertificateAuthorities() {
   try {
@@ -3391,24 +3486,343 @@ async function buildRadioFromMood(mood, seedQueries, weatherShell) {
   };
 }
 
-async function buildSceneRadio(sceneKey) {
-  const id = String(sceneKey || '').toLowerCase();
-  const preset = SCENE_PRESETS[id] || SCENE_PRESETS.focus;
-  const mood = Object.assign({}, preset, { keywords: preset.keywords.slice() });
-  const payload = await buildRadioFromMood(mood, mood.keywords.slice(0, 4), {
-    provider: 'scene',
-    label: mood.title,
-    temperature: null,
-    mood,
-    updatedAt: Date.now(),
-  });
-  if (payload && payload.radio) {
-    payload.radio.sceneId = id in SCENE_PRESETS ? id : 'focus';
-    payload.radio.visualPreset = preset.visualPreset;
-    payload.radio.coverGradient = preset.coverGradient.slice();
-    payload.radio.moodVisualLink = preset.moodVisualLink !== false;
+// ====================================================================
+//  场景电台（Scene Radio）
+//  旧实现：只打网易云 cloudsearch + 固定取 keywords.slice(0,4) + 再套天气过滤器。
+//  三个后果叠在一起 = 用户感知的「只有固定的那几首歌」：
+//    1. 关键词固定 → 上游返回的也是同一批
+//    2. orderWeatherSongs → isLowSignalWeatherSong 会把「纯音乐 / 钢琴 / instrumental /
+//       雨声 / 白噪音 / 助眠」整类过滤掉，而这些**正是 focus / sleep / rain 场景的关键词**，
+//       结果只剩少数漏网曲目，每次都是同样几首
+//    3. 只接网易云，没登录网易云时列表更窄
+//  现在：多音源轮转交错 + 关键词池随机抽 + 每 20 分钟换一批 + 场景专用过滤器（不误杀纯音乐）。
+// ====================================================================
+
+const SCENE_RADIO_ROTATE_MS = 20 * 60 * 1000;   // 每 20 分钟换一批歌
+const SCENE_RADIO_CACHE_TTL_MS = 20 * 60 * 1000;
+const SCENE_RADIO_MAX_SONGS = 18;
+const SCENE_RADIO_PER_KEYWORD = 8;
+const sceneRadioCache = new Map();
+
+// 每个场景的补充关键词池（和 SCENE_PRESETS.keywords 合并后使用）
+const SCENE_KEYWORD_EXTRA = {
+  focus: [
+    'chill instrumental', 'study beats', '钢琴 专注', '氛围 电子 纯音乐',
+    'minimal techno', '电影原声 专注', '吉他 指弹 安静', 'lo-fi 工作',
+    'deep focus ambient', 'post rock 纯音乐',
+  ],
+  commute: [
+    'morning pop', '华语 流行 轻快', 'funk 通勤', 'synthpop',
+    'city pop 夜', '摇滚 路上', '日语 city pop', 'indie rock 白天',
+    '公路 旅行 歌单', 'britpop 上班',
+  ],
+  party: [
+    'latin party', '华语 说唱 燃', 'disco funk', 'kpop 舞曲',
+    'techno 派对', 'trap 燃', 'funk 律动', 'reggaeton',
+    'afrobeats party', '电子 高能 舞曲',
+  ],
+  sleep: [
+    'ambient drone', 'rain piano', '吉他 摇篮曲', 'soft jazz 夜',
+    '冥想 助眠', 'chillhop sleep', '竖琴 安静', '梦境 纯音乐',
+    'delta waves 睡眠', 'slow piano 晚安',
+  ],
+  rain: [
+    '雨声 钢琴', 'jazz 雨夜', 'shoegaze', 'trip hop',
+    '华语 慢歌 夜', 'soul 慢板', 'dark ambient', '雨天 民谣',
+    'rainy lofi', '细雨 纯音乐',
+  ],
+};
+
+function sceneRadioBucket(now) {
+  return Math.floor((Number(now) || Date.now()) / SCENE_RADIO_ROTATE_MS);
+}
+
+// 稳定的确定性哈希/洗牌：同一个 bucket 内结果不变（避免点两次就换）、跨 bucket 自动换一批
+function sceneRotateSeed(text) {
+  let hash = 2166136261;
+  const str = String(text || '');
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
   }
-  return payload;
+  return hash >>> 0;
+}
+
+function sceneShuffle(list, seed) {
+  const out = Array.isArray(list) ? list.slice() : [];
+  let state = (seed >>> 0) || 1;
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const j = state % (i + 1);
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
+}
+
+function sceneKeywordCandidates(sceneId, preset) {
+  const list = []
+    .concat(Array.isArray(preset && preset.keywords) ? preset.keywords : [])
+    .concat(SCENE_KEYWORD_EXTRA[sceneId] || []);
+  const seen = new Set();
+  return list.filter((item) => {
+    const key = String(item || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// 当前可用的音源。网易云永远在（匿名也能搜），其余看 cookie 是否存在/可用。
+function sceneRadioProviders() {
+  const providers = ['netease'];
+  if (kugouCookie) providers.push('kugou');
+  if (qqCookie) providers.push('qq');
+  try {
+    if (qishuiCookie && qishuiCookieHasLogin(qishuiCookie)) providers.push('qishui');
+  } catch (e) {}
+  return providers;
+}
+
+async function searchSceneProvider(key, keyword, limit) {
+  if (key === 'kugou') {
+    const songs = await handleKugouSearch(keyword, limit, kugouCookie, 0);
+    return Array.isArray(songs) ? songs : [];
+  }
+  if (key === 'qq') {
+    const songs = await handleQQSearch(keyword, limit);
+    return Array.isArray(songs) ? songs : [];
+  }
+  if (key === 'qishui') {
+    const result = await handleQishuiSearch(keyword, limit, qishuiCookie, 0);
+    return Array.isArray(result && result.songs) ? result.songs : [];
+  }
+  const songs = await handleSearch(keyword, limit);
+  return Array.isArray(songs) ? songs : [];
+}
+
+// 场景专用低信号过滤：和天气那套相反 —— **纯音乐 / 钢琴 / instrumental / 雨声 / 白噪音是场景本体**，
+// 不能像 isLowSignalWeatherSong 那样整类砍掉。只拦 AI 生成、翻唱冒充原唱、伴奏、karaoke、测试音频。
+function isLowSignalSceneSong(song) {
+  const text = String([song && song.name, song && song.artist, song && song.album].filter(Boolean).join(' ')).toLowerCase();
+  if (!text) return true;
+  if (/(^|[\s\-_/（(])ai(?:\s*(歌|歌曲|音乐|cover|翻唱|生成|作曲|演唱|女声|男声|伴奏|纯音乐)?|$|[\s\-_/）)])/i.test(text)) return true;
+  if (/suno|udio|人工智能|生成歌曲|ai歌曲|虚拟歌手|测试音频|beat\s*maker/i.test(text)) return true;
+  if (/翻自|伴奏|karaoke|去人声|消音版/i.test(text)) return true;
+  const name = String(song && song.name || '').trim();
+  if (/^(test|测试|未知歌曲|untitled|track\s*\d+)$/i.test(name)) return true;
+  return false;
+}
+
+function sceneSongKey(song) {
+  const name = String(song && song.name || '').toLowerCase().replace(/[（(][^）)]*[）)]/g, '').replace(/[\s._\-·'’"“”「」《》:：/\\|]+/g, '');
+  const artist = String(song && song.artist || '').split(/\s*\/\s*|、|,|&/)[0].toLowerCase().replace(/\s+/g, '');
+  return (name + '|' + artist).trim();
+}
+
+// 「关键词回声」= 歌名就是把搜索词念一遍（UGC 填充曲的典型特征，汽水公共目录尤其多：
+// 搜「纯音乐 学习」能返回「纯音乐学习 / 学习静心治愈纯音乐 / 静心阅读学习纯音乐」…）。
+// 这类曲目**不是全丢**（它们有时确实是可用的环境音乐），而是：
+//   · 同一个关键词的回声最多留 1 首（按族去重）
+//   · 全部排到列表末尾，且总量封顶 2 首
+function normalizeSceneText(text) {
+  // 〜 / ～ / ~ / ・ 也算分隔符：日文曲名常拿它们拼副标题
+  // （「真夜中のドア〜stay with me」 vs「真夜中のドア/Stay With Me」是同一首）。
+  // ヴ→ブ：日本曲库里「プラスティック・ラヴ」「プラスティック・ラブ」是同一首的两种写法。
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/[\s._\-·・'’"“”「」《》:：/\\|〜～~]+/g, '')
+    .replace(/ヴ/g, 'ブ');
+}
+
+function sceneEchoFamily(song, keywords) {
+  const name = normalizeSceneText(song && song.name);
+  if (!name) return '';
+  for (let i = 0; i < (keywords || []).length; i += 1) {
+    const keyword = String(keywords[i] || '').trim();
+    const flat = normalizeSceneText(keyword);
+    if (!flat) continue;
+    if (name === flat || name.indexOf(flat) >= 0) return 'kw:' + keyword;
+    // 「纯音乐」+「学习」这种被拆开重排的，用 token 覆盖判定（至少两个 token 才判，避免单词误杀）
+    const tokens = keyword.toLowerCase().split(/\s+/).map((t) => normalizeSceneText(t)).filter((t) => t.length >= 2);
+    if (tokens.length >= 2 && tokens.every((t) => name.indexOf(t) >= 0)) return 'kw:' + keyword;
+  }
+  return '';
+}
+
+async function buildSceneRadioSongs(sceneId, preset) {
+  const bucket = sceneRadioBucket();
+  const providers = sceneRadioProviders();
+  const providerSig = providers.join(',');
+  const cacheKey = sceneId + '|' + bucket + '|' + providerSig;
+  const cached = sceneRadioCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SCENE_RADIO_CACHE_TTL_MS) return cached.value;
+
+  const pool = sceneKeywordCandidates(sceneId, preset);
+  const seed = sceneRotateSeed(sceneId + '|' + bucket);
+  // 每次从池里抽 3 个不同关键词；每个音源按顺序分到一个，避免所有音源打同一句
+  const picks = sceneShuffle(pool, seed).slice(0, Math.min(3, pool.length));
+  if (!picks.length) return { songs: [], sources: providers, keywords: [] };
+
+  // 每个音源 × 每个关键词都搜一遍（3 关键词 × N 音源），而不是一个音源只分到一个关键词 ——
+  // 一对一的话候选量太少（正片只剩 7 首），凑不满 18 首。有 20 分钟缓存兜底，上游压力可接受。
+  const rawBatches = await Promise.all(providers.map((provider) => {
+    return Promise.all(picks.map((keyword) => searchSceneProvider(provider, keyword, SCENE_RADIO_PER_KEYWORD)
+      .catch((err) => {
+        console.warn('[SceneRadio] ' + provider + ' search failed (' + keyword + '):', err && err.message);
+        return [];
+      })))
+      .then((groups) => {
+        const merged = [];
+        const seen = new Set();
+        groups.forEach((songs) => {
+          (Array.isArray(songs) ? songs : []).forEach((song) => {
+            if (!song || typeof song !== 'object') return;
+            const key = String(song.id || '') + '|' + String(song.name || '');
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(song);
+          });
+        });
+        return merged;
+      });
+  }));
+
+  // 每个音源内部先按「像正规曲目」排序（有专辑信息 / 有封面），同分保持搜索原序 ——
+  // 酷狗/汽水的 UGC 里大量「歌名就叫关键词」的填充曲，这些通常 album 为空，靠这一步沉到后面。
+  const batches = rawBatches.map((batch) => batch
+    .map((song, index) => ({
+      song,
+      index,
+      q: (song && song.album ? 2 : 0) + (song && song.cover ? 1 : 0),
+    }))
+    .sort((a, b) => (b.q - a.q) || (a.index - b.index))
+    .map((item) => item.song));
+
+  // 按音源轮转交错：不交错的话前十几首会全是第一个音源
+  const interleaved = [];
+  const maxLen = batches.reduce((max, batch) => Math.max(max, batch.length), 0);
+  for (let i = 0; i < maxLen; i += 1) {
+    batches.forEach((batch) => { if (batch[i]) interleaved.push(batch[i]); });
+  }
+
+  // 去重两档：
+  //   ① 跨音源同曲 —— 按「歌名（去括号/符号）」，不按 id（不同平台 id 不同、艺术家写法也不同）；
+  //      这一档同时解决「五个不同艺人各唱一首 Lofi Study」把队列刷成同名的问题。
+  //   ② 同一首但艺术家写法不同 —— 按「歌名+主唱」兜底。
+  // 另外把「歌名就是关键词」的 UGC 回声曲单独归组，最后最多保 2 首、且排末尾。
+  const seenTitle = new Set();
+  const seenSong = new Set();
+  const seenEchoFamily = new Set();
+  const normalSongs = [];
+  const echoSongs = [];
+  interleaved.forEach((song) => {
+    if (!song || !song.name || !song.id) return;
+    if (isLowSignalSceneSong(song)) return;
+    const titleKey = normalizeSceneText(song.name) || sceneSongKey(song);
+    const songKey = sceneSongKey(song);
+    if (!titleKey || seenTitle.has(titleKey) || (songKey && seenSong.has(songKey))) return;
+    seenTitle.add(titleKey);
+    if (songKey) seenSong.add(songKey);
+    const echoFamily = sceneEchoFamily(song, picks);
+    if (echoFamily) {
+      if (seenEchoFamily.has(echoFamily)) return;
+      seenEchoFamily.add(echoFamily);
+      echoSongs.push(song);
+      return;
+    }
+    normalSongs.push(song);
+  });
+
+  // 同一位歌手最多 2 首（只约束正片，回声曲本来就在末尾）
+  const artistCounts = new Map();
+  const primary = [];
+  const deferred = [];
+  normalSongs.forEach((song) => {
+    const artist = weatherArtistKey(song);
+    const count = artistCounts.get(artist) || 0;
+    if (count < 2) {
+      primary.push(song);
+      artistCounts.set(artist, count + 1);
+    } else {
+      deferred.push(song);
+    }
+  });
+  const diverse = primary.concat(deferred);
+
+  // 前 6 首保留搜索相关度顺序，其余用同一 bucket 内的稳定洗牌打散 —— 既不打乱最相关的，又不永远同一序列
+  const head = diverse.slice(0, 6);
+  const tailPool = diverse.slice(6);
+  // 正片够满（≥16）时回声只补 2 首压尾；正片不足（某些场景上游全是回声曲）才多放，否则列表会短得没法听
+  const echoBudget = diverse.length >= SCENE_RADIO_MAX_SONGS - 2
+    ? Math.min(2, echoSongs.length)
+    : echoSongs.length;
+  const tail = sceneShuffle(tailPool.concat(echoSongs.slice(0, echoBudget)), seed ^ 0x9e3779b9);
+  const songs = head.concat(tail).slice(0, SCENE_RADIO_MAX_SONGS);
+
+  // 音源保底：某个已登录音源一首都没进（典型情况＝它的搜索结果全是关键词回声，被压掉了），
+  // 用它自己候选里质量最高的那首顶到末尾，保证「多音源」不是名义上的。
+  const present = new Set(songs.map((song) => (song && (song.source || song.provider)) || 'netease'));
+  providers.forEach((provider, index) => {
+    if (present.has(provider)) return;
+    const candidate = (batches[index] || []).find((song) => song && song.id && !songs.some((item) => item && item.id === song.id && (item.source || item.provider) === provider));
+    if (!candidate) return;
+    if (songs.length >= SCENE_RADIO_MAX_SONGS) {
+      const dropAt = songs.length - 1;
+      songs[dropAt] = candidate;
+    } else {
+      songs.push(candidate);
+    }
+    present.add(provider);
+  });
+
+  const value = {
+    songs,
+    sources: providers,
+    keywords: picks,
+  };
+
+  // 只留当前 bucket 的缓存，避免 Map 无限长大
+  if (sceneRadioCache.size > 24) {
+    for (const key of sceneRadioCache.keys()) {
+      if (!key.includes('|' + bucket + '|')) sceneRadioCache.delete(key);
+    }
+  }
+  sceneRadioCache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}
+
+async function buildSceneRadio(sceneKey) {
+  const raw = String(sceneKey || '').toLowerCase();
+  const sceneId = raw in SCENE_PRESETS ? raw : 'focus';
+  const preset = SCENE_PRESETS[sceneId];
+  const mood = Object.assign({}, preset, { keywords: preset.keywords.slice() });
+  const picked = await buildSceneRadioSongs(sceneId, preset);
+  return {
+    ok: true,
+    weather: {
+      provider: 'scene',
+      label: mood.title,
+      temperature: null,
+      mood,
+      updatedAt: Date.now(),
+    },
+    radio: {
+      title: mood.title,
+      subtitle: mood.tagline,
+      seedQueries: picked.keywords,
+      songs: picked.songs,
+      sources: picked.sources,
+      sceneId,
+      sceneKey: mood.key || '',
+      visualPreset: preset.visualPreset,
+      coverGradient: preset.coverGradient.slice(),
+      moodVisualLink: preset.moodVisualLink !== false,
+      updatedAt: Date.now(),
+    },
+  };
 }
 
 async function buildWeatherRadio(params) {
@@ -3960,7 +4374,12 @@ const PROXY_MEDIA_HOST_SUFFIXES = [
   'volccdn.com',
   'byteimg.com',
   'ibytedtos.com',
+  'douyinpic.com',
   'douyin.com',
+  // 汽水(H5 取址回退链)下发的是 ByteDance VOD 音频流，主机形如
+  // v26-luna.douyinvod.com / v5-luna.douyinvod.com（vNN-luna 前缀会轮换）。
+  // 注意 douyinvod.com 不是 douyin.com 的子域，用后缀 'douyin.com' 匹配不到。
+  'douyinvod.com',
   'toutiao.com',
 ];
 
@@ -4043,7 +4462,7 @@ function audioProxyHeadersFor(audioUrl, range) {
     else if (
       host.includes('huoshanstatic.com') || host.includes('bytecdntp.com') || host.includes('volccdn.com') ||
       host.includes('byteimg.com') || host.includes('ibytedtos.com') || host.includes('douyin.com') ||
-      host.includes('toutiao.com')
+      host.includes('douyinvod.com') || host.includes('toutiao.com')
     ) headers.Referer = 'https://music.qishui.com/';
   } catch (e) {}
   if (range) headers.Range = range;
@@ -4052,12 +4471,16 @@ function audioProxyHeadersFor(audioUrl, range) {
 
 function audioContentTypeForUrl(audioUrl, upstreamType) {
   let pathname = '';
-  try { pathname = new URL(audioUrl).pathname.toLowerCase(); } catch (e) {}
+  let host = '';
+  try { const parsed = new URL(audioUrl); pathname = parsed.pathname.toLowerCase(); host = parsed.hostname.toLowerCase(); } catch (e) {}
   if (/\.flac$/.test(pathname)) return 'audio/flac';
   if (/\.mp3$/.test(pathname)) return 'audio/mpeg';
   if (/\.(m4a|mp4)$/.test(pathname)) return 'audio/mp4';
   if (/\.ogg$/.test(pathname)) return 'audio/ogg';
   if (/\.wav$/.test(pathname)) return 'audio/wav';
+  // 汽水 VOD 音频流的路径没有扩展名（/…/video/tos/cn/…/），上游给的是 video/mp4。
+  // 内容是纯音频 m4a，按 audio/mp4 下发，避免下游把它当视频处理。
+  if (host.endsWith('douyinvod.com') && /^video\/mp4/i.test(String(upstreamType || ''))) return 'audio/mp4';
   return upstreamType || 'audio/mpeg';
 }
 
@@ -4134,12 +4557,37 @@ async function getQishuiDecryptedAudio(audioUrl) {
       if (encryptedBuffer.length > QISHUI_ENCRYPTED_AUDIO_MAX_BYTES) {
         throw new Error('Qishui encrypted audio too large: ' + encryptedBuffer.length + ' bytes');
       }
-      const result = qishuiAudioDecryptor.decrypt({ encryptedBuffer, spadeA: parsed.auth });
+      // [临时诊断-确认后删除] 转储首个汽水加密音频（transfer 前），排查渲染崩溃
+      if (!global.__qishuiAudioDumpEnc) {
+        global.__qishuiAudioDumpEnc = true;
+        try {
+          const dir = 'D:/Mineradio/_qishui_audio_dump';
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'encrypted.bin'), encryptedBuffer);
+          console.log('[QishuiDump] encrypted.bin ' + encryptedBuffer.length + ' -> ' + dir);
+        } catch (e) { console.log('[QishuiDump] enc failed', e.message); }
+      }
+      const result = await qishuiDecryptAudio(encryptedBuffer, parsed.auth);
       const payload = {
         buffer: result.buffer,
         contentType: result.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
         extension: result.extension,
       };
+      // 产物校验：解密失败/曲目结构不符时会产出非音视频数据，喂给渲染端可能打崩媒体管线。
+      // 校验不过就当该曲解密失败，返回错误让播放走降级，绝不把脏数据发出去。
+      if (!looksLikeValidDecryptedAudio(payload.buffer, payload.extension)) {
+        throw new Error('Qishui decrypted audio failed signature check');
+      }
+      // [临时诊断-确认后删除] 转储首个汽水解密产物，排查渲染崩溃
+      if (!global.__qishuiAudioDumpDec) {
+        global.__qishuiAudioDumpDec = true;
+        try {
+          const dir = 'D:/Mineradio/_qishui_audio_dump';
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'decrypted' + payload.extension), payload.buffer);
+          console.log('[QishuiDump] decrypted' + payload.extension + ' ' + payload.buffer.length + ' -> ' + dir);
+        } catch (e) { console.log('[QishuiDump] dec failed', e.message); }
+      }
       rememberQishuiDecryptedAudio(key, payload);
       return payload;
     } finally {
@@ -6043,6 +6491,7 @@ const routeCtx = {
   // ---- kugou ----
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,
   normalizeKugouCookieInput, saveKugouCookie,
+  handleKugouSearch,
   handleKugouUserPlaylists, handleKugouPlaylistTracks, handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
   handleKugouLikeCheck, handleKugouLikeToggle, handleKugouPlaylistAddSong,
   // ---- qishui ----

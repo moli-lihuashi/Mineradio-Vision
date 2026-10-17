@@ -120,10 +120,20 @@ async function testFiniteQueueRecovery() {
   };
   const result = await sandbox.tryAutoPlaybackFallback(queue[0], { category: 'url_unavailable' }, 0, 1, {});
   assert.strictEqual(result, false);
-  assert.strictEqual(childCalls, 2, 'recovery may advance at most two queue entries');
-  assert(recovery && recovery.terminal, 'the finite recovery transaction must settle');
-  assert.strictEqual(recovery.queueAdvances, 2);
+  // 契约变更（2026-10-17）：这个沙箱里没有任何已登录/已授权音源可接管，
+  // 新实现直接终局、不再沿队列逐首跳过（旧的 playQueueAt → 再失败 → 再 skip 每层都会重跑
+  // 封面/歌词/UI 重建，实测把渲染进程推向 OOM）。
+  // 新流程不会再调用 playQueueAt，所以无法再从那里取 recovery 对象，
+  // 改为直接断言 settleSourceFallbackTerminal 的副作用：事务结算、状态回收、队列项标记失败。
+  assert.strictEqual(childCalls, 0, 'no authorized provider must stop without advancing the queue');
+  assert.strictEqual(childCalls <= 2, true, 'recovery may never advance more than two queue entries');
+  assert.strictEqual(recovery, null);
   assert.strictEqual(sandbox.activeSourceFallbackRecovery, null);
+  assert(queue[0]._lastPlaybackFailAt > 0, 'terminal settlement must mark the queue item as failed');
+  assert(sandbox.albumGaplessClears >= 1, 'terminal settlement must drop album-gapless preload');
+  assert(sandbox.cuefieldClears >= 1, 'terminal settlement must reset cuefield automix');
+  assert(sandbox.watchdogClears >= 1, 'terminal settlement must clear resume watchdogs');
+  assert.strictEqual(sandbox.currentIdx, 0, 'terminal settlement must not advance the queue');
   assert.strictEqual(sandbox.audio.src, '');
   assert.strictEqual(sandbox.audio.onended, null);
   assert.strictEqual(sandbox.playbackResumeRecovery.serial, 4, 'terminal state invalidates late media watchdogs');

@@ -153,6 +153,11 @@ body.idle-guide-dragging #canvas-container{cursor:grabbing}
 .splash-handwrite{font-family:'Caveat',cursive;font-size:clamp(68px,13vw,148px);font-weight:600;color:#1a3a6e;white-space:nowrap;line-height:1;--reveal:0%;opacity:0;-webkit-mask-image:linear-gradient(to right,#000 0%,#000 var(--reveal),transparent calc(var(--reveal) + 14%));mask-image:linear-gradient(to right,#000 0%,#000 var(--reveal),transparent calc(var(--reveal) + 14%));text-shadow:0 0 18px rgba(80,140,220,.35),0 0 36px rgba(120,180,255,.25)}
 .splash-handwrite.ready{opacity:1;animation:splash-write 5200ms cubic-bezier(.25,.1,.45,1) forwards}
 @keyframes splash-write{to{--reveal:100%}}
+/* 手写笔迹层：平板采集的真笔迹逐笔绘出（替代文本 mask 擦除）
+   canvas 比 wordmark 大（要容纳画进线的回环和画出线的底线），所以居中定位、显式 px 尺寸 */
+.splash-ink{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;pointer-events:none}
+.splash-ink.done{filter:drop-shadow(0 0 16px rgba(80,140,220,.32)) drop-shadow(0 0 34px rgba(120,180,255,.20))}
+.splash-handwrite.splash-ink-hidden{opacity:0!important;animation:none!important}
 .splash-word-mine,.splash-word-radio{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);white-space:nowrap;will-change:opacity,transform}
 .splash-word-mine{opacity:0;animation:splash-mine-in 3200ms cubic-bezier(.22,1,.36,1) forwards;text-shadow:0 4px 20px rgba(255,255,255,0.6)}
 .splash-word-radio{opacity:0;letter-spacing:-.018em;background:linear-gradient(94deg,#ffffff 0%,#e0f0ff 48%,#9cd8ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;animation:splash-radio-in 3200ms cubic-bezier(.22,1,.36,1) forwards}

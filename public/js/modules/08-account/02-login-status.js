@@ -625,6 +625,10 @@ function startSpotifyLoginStatusAutoRefresh() {
 }
 
 function renderUserBtn() {
+  // 「我的歌单」面板那个 chip 要跟着登录态实时变（这里是所有 provider 状态刷新的公共出口）
+  if (typeof renderPlaylistSourceChip === 'function') {
+    try { renderPlaylistSourceChip(); } catch (e) {}
+  }
   var btn = document.getElementById('user-btn');
   if (!btn) return;
   var topRight = document.getElementById('top-right');

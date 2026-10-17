@@ -88,12 +88,20 @@ function updateFxFabAutoHideFromPointer(x, y) {
   if (!nearBottomRight) fxFabAutoHideRevealArmed = true;
   document.body.classList.toggle('fx-fab-peek', panelOpen || (nearBottomRight && fxFabAutoHideRevealArmed));
 }
+// 全屏 DIY 区的定位锚点必须是「整组账号 pill」，不能是第一个 pill：
+// 多账号时 pill 在 #user-btn 里纵向堆叠（flex-direction:column），
+// 取第一个 pill 的 bottom 会把 DIY 按钮塞进第二个 pill 内部 → UI 叠在一起。
+function fullscreenDiyAnchorElement() {
+  var userBtn = document.getElementById('user-btn');
+  if (userBtn && userBtn.querySelector('.top-account-pill')) return userBtn;
+  return document.querySelector('#top-right .top-account-pill') || userBtn || document.getElementById('top-right');
+}
 function layoutFullscreenDiyZone() {
   var width = innerWidth < 820 ? 104 : 128;
   var height = innerWidth < 720 ? 48 : 52;
   var left = innerWidth - 510;
   var top = 24;
-  var anchor = document.querySelector('#top-right .top-account-pill') || document.getElementById('user-btn') || document.getElementById('top-right');
+  var anchor = fullscreenDiyAnchorElement();
   if (anchor) {
     var rect = anchor.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
@@ -123,7 +131,7 @@ function updateFullscreenDiyPeekFromPointer(x, y) {
     return;
   }
   var rect = layoutFullscreenDiyZone();
-  var anchor = document.querySelector('#top-right .top-account-pill') || document.getElementById('user-btn') || document.getElementById('top-right');
+  var anchor = fullscreenDiyAnchorElement();
   var anchorRect = anchor ? anchor.getBoundingClientRect() : rect;
   var hitLeft = Math.min(rect.left, anchorRect.left) - 26;
   var hitRight = Math.max(rect.left + rect.width, anchorRect.right) + 26;

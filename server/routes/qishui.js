@@ -17,8 +17,121 @@ module.exports = function register(ctx) {
     handleQishuiSongUrl, handleQishuiLyric,
   } = ctx;
 
+  // 汽水音乐 v6 二维码登录桥接（仅主进程运行时懒加载，避免非 electron 上下文 require 失败）
+  // 注意：本路由文件位于 server/routes/，桥接文件位于项目根目录，需向上两级定位。
+  let _qishuiQrLogin = null;
+  function getQishuiQrLogin() {
+    if (!_qishuiQrLogin) {
+      try { _qishuiQrLogin = require('../../qishui-qr-login'); }
+      catch (e) { console.error('[QishuiQR] failed to load bridge:', e && e.message); throw e; }
+    }
+    return _qishuiQrLogin;
+  }
+
   return async function(req, res, url, pn) {
     // ========== Qishui (汽水音乐) API ==========
+
+    if (pn === '/api/qishui/login/qrcode') {
+      try {
+        const qrLogin = getQishuiQrLogin();
+        const result = await qrLogin.createQrCode();
+        const data = result && result.data || {};
+        sendJSON(res, {
+          provider: 'qishui',
+          token: String(data.token || ''),
+          qrcode: String(data.qrcode || ''),
+          qrcodeIndexUrl: String(data.qrcode_index_url || ''),
+          expireTime: Number(data.expire_time || 0),
+          message: '请使用抖音 / 汽水音乐 App 扫码并确认登录',
+        });
+      } catch (err) {
+        console.error('[QishuiQRCode]', err);
+        sendJSON(res, {
+          provider: 'qishui',
+          token: '',
+          qrcode: '',
+          error: err && err.code || 'QISHUI_QR_CREATE_FAILED',
+          message: err && err.message || '汽水音乐二维码生成失败',
+        }, 500);
+      }
+      return;
+    }
+
+    if (pn === '/api/qishui/login/check') {
+      try {
+        const token = String(url.searchParams.get('token') || '').trim();
+        if (!token) {
+          sendJSON(res, {
+            provider: 'qishui',
+            loggedIn: false,
+            status: 'missing_token',
+            error: 'QISHUI_QR_TOKEN_REQUIRED',
+            message: '二维码登录 token 缺失',
+          }, 400);
+          return;
+        }
+        const qrLogin = getQishuiQrLogin();
+        const result = await qrLogin.checkQrConnect(token);
+        const data = result && result.data || {};
+        const errorCode = Number(data.error_code || 0);
+        const bridgeStatus = qrLogin.getStatus();
+        if (data.confirmed === true && errorCode === 0 && bridgeStatus.loggedIn) {
+          const cookie = qrLogin.getCookie();
+          if (!qishuiCookieHasLogin(cookie)) throw new Error('QISHUI_QR_SESSION_COOKIE_MISSING');
+          const status = await handleQishuiStatus(cookie);
+          if (status.reauthRequired) {
+            sendJSON(res, { ...status, ok: false, status: 'reauth_required' });
+            return;
+          }
+          if (status.loggedIn !== true) {
+            sendJSON(res, { ...status, ok: false, status: 'verifying' });
+            return;
+          }
+          saveQishuiCookie(cookie);
+          sendJSON(res, {
+            ...status,
+            provider: 'qishui',
+            ok: true,
+            loggedIn: true,
+            webSession: true,
+            cookieReady: true,
+            status: 'confirmed',
+            errorCode: 0,
+            error_code: 0,
+            message: '登录成功',
+          });
+          return;
+        }
+        let status = String(data.status || '').trim();
+        if (errorCode === 2) status = 'expired';
+        else if (errorCode === 7) status = 'rate_limited';
+        else if (status === '2') status = 'scanned';
+        else if (!status || status === '1') status = 'waiting';
+        sendJSON(res, {
+          provider: 'qishui',
+          loggedIn: false,
+          status,
+          errorCode,
+          error_code: errorCode,
+          retryAfterMs: errorCode === 7 ? 60000 : 0,
+          message: result && result.message || data.description || '',
+        });
+      } catch (err) {
+        console.error('[QishuiLoginCheck]', err);
+        const code = err && err.code;
+        const cancelled = code === 'QISHUI_MFA_CANCELLED';
+        const mfaFailed = code === 'QISHUI_MFA_FAILED';
+        sendJSON(res, {
+          provider: 'qishui',
+          loggedIn: false,
+          status: cancelled ? 'mfa_cancelled' : (mfaFailed ? 'mfa_failed' : 'error'),
+          error: code || 'QISHUI_QR_CHECK_FAILED',
+          message: err && err.message || '汽水音乐登录状态检查失败',
+        }, (cancelled || mfaFailed) ? 409 : 500);
+      }
+      return;
+    }
+
 
     if (pn === '/api/qishui/status' || pn === '/api/qishui/login/status') {
       try {
@@ -69,6 +182,10 @@ module.exports = function register(ctx) {
 
     if (pn === '/api/qishui/logout') {
       try {
+        try {
+          const qrLogin = getQishuiQrLogin();
+          await qrLogin.clear();
+        } catch (_) { /* 桥接未初始化时忽略 */ }
         saveQishuiCookie('');
         sendJSON(res, {
           ...clearQishuiAccessToken(),

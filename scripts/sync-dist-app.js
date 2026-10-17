@@ -72,6 +72,8 @@ const rootFiles = [
   'spotify-api.js',
   'qishui-api.js',
   'qq-vip-api.js',
+  'qishui-auth-v6.js',
+  'qishui-qr-login.js',
   'package.json',
 ];
 for (const rel of rootFiles) {
@@ -86,7 +88,7 @@ const decryptorSrc = path.join(root, 'qishui-audio-decryptor');
 if (fs.existsSync(decryptorSrc)) files += copyTree(decryptorSrc, path.join(app, 'qishui-audio-decryptor'));
 
 // Optional trees if present in pack / source
-for (const dir of ['server', 'cuefield', 'build']) {
+for (const dir of ['server', 'cuefield', 'build', 'qishui-auth-v6']) {
   const src = path.join(root, dir);
   const dst = path.join(app, dir);
   if (fs.existsSync(src)) files += copyTree(src, dst);

@@ -2,7 +2,47 @@
 // 歌单详情 / 用户歌单列表 / 收藏取消
 // =============================================================================
 
+// ---- 「我的歌单」面板左上角那个 chip：按真实登录态显示有哪些音源 ----
+// 以前是一句写死的「登录后显示网易云 / QQ / 酷狗歌单」，与实际登录的账号无关。
+var PLAYLIST_SOURCE_CHIP_ORDER = ['netease', 'qq', 'kugou', 'qishui', 'spotify'];
+var PLAYLIST_SOURCE_CHIP_SHORT = { netease: '网易云', qq: 'QQ', kugou: '酷狗', qishui: '汽水', spotify: 'Spotify' };
+var PLAYLIST_SOURCE_CHIP_LOGGED_OUT = '登录后显示网易云 / QQ / 酷狗歌单';
+var playlistSourceChipLastText = '';
+
+function playlistSourceChipSnapshot() {
+  var canCheckLogin = typeof hasPlatformLogin === 'function';
+  var logged = PLAYLIST_SOURCE_CHIP_ORDER.filter(function (provider) {
+    return canCheckLogin && !!hasPlatformLogin(provider);
+  });
+  if (!logged.length) {
+    return { text: PLAYLIST_SOURCE_CHIP_LOGGED_OUT, title: '登录任意音源后，这里会实时显示已登录的音源', logged: 0 };
+  }
+  // 只列音源名，不带任何数量（数量会让人误读成「账号里有多少歌单」）
+  var names = logged.map(function (provider) { return PLAYLIST_SOURCE_CHIP_SHORT[provider]; });
+  var labels = logged.map(function (provider) {
+    return typeof platformMeta === 'function' ? platformMeta(provider).label : PLAYLIST_SOURCE_CHIP_SHORT[provider];
+  });
+  return {
+    text: names.join(' · '),
+    title: '已登录音源：' + labels.join(' / '),
+    logged: logged.length,
+  };
+}
+
+function renderPlaylistSourceChip() {
+  var el = document.getElementById('pl-source-chip');
+  if (!el) return;
+  var snap;
+  try { snap = playlistSourceChipSnapshot(); } catch (e) { return; }
+  if (snap.title) el.setAttribute('title', snap.title); else el.removeAttribute('title');
+  el.classList.toggle('is-live', snap.logged > 0);
+  if (snap.text === playlistSourceChipLastText && el.textContent === snap.text) return;
+  playlistSourceChipLastText = snap.text;
+  el.textContent = snap.text;
+}
+
 async function refreshUserPlaylists(force) {
+  renderPlaylistSourceChip();
   if (!loginStatus.loggedIn && !qqLoginStatus.loggedIn && !kugouLoginStatus.loggedIn && !qishuiLoginStatus.loggedIn && !spotifyLoginStatus.loggedIn) {
     resetPlaylistPanelRenderLimit();
     var podcastListLoggedOut = document.getElementById('podcast-list');
@@ -26,6 +66,7 @@ async function refreshUserPlaylists(force) {
   var needsSpotifyRefresh = spotifyLoginStatus.loggedIn && !hasCachedSpotifyPlaylists;
   if (!force && !needsQQRefresh && !needsKugouRefresh && !needsQishuiRefresh && !needsSpotifyRefresh && (userPlaylists.length || myPodcastCollections.length)) {
     var cachedAnimate = isPlaylistPanelVisibleForRender();
+    renderPlaylistSourceChip();
     renderUserPlaylistsList({ animate: cachedAnimate });
     renderMyPodcastCollections({ animate: cachedAnimate });
     return;
@@ -54,6 +95,8 @@ async function refreshUserPlaylists(force) {
     spotifyPlaylists = (result[5].playlists || []).map(function(pl){ pl.provider = 'spotify'; pl.source = 'spotify'; return pl; });
     userPlaylists = neteaseLists.concat(qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists);
     myPodcastCollections = result[1].collections || [];
+    // 数据落地之后再刷一次 chip：此时才知道每个音源实际拿到几个歌单
+    renderPlaylistSourceChip();
     var animatePanel = isPlaylistPanelVisibleForRender();
     renderUserPlaylistsList({ animate: animatePanel, reset: true });
     renderMyPodcastCollections({ animate: animatePanel });

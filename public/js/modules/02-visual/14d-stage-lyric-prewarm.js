@@ -65,6 +65,26 @@ function stageLyricMeshCanServePayload(mesh, payload) {
   return true;
 }
 
+/**
+ * 整曲持久轨能否直接服务这份 payload。
+ * 持久轨建立后，整首歌的行层都在同一个 mesh 里，换行只是 setLyricTrackTarget 重定位
+ * （≈0.2ms）。此时再为「下一行」预热建一份 lightweight 窗纯属重复劳动 —— 实测每次换行
+ * 都会同步 buildLyricMesh 8~20ms（内含 makeLyricRowLayerGroup 重画 14~19 张字符遮罩画布
+ * + 纹理上传），而且它落在换行后一两帧内，表现就是「每切换下一行整个播放器顿一下」。
+ * trackKey 含 songKey，所以换歌后不会误判成「旧轨能服务新歌」。
+ * 只对「整曲持久轨」短路：轨道仍处轻量窗口阶段时，预热带下一行仍然有意义。
+ */
+function stageLyricPersistentTrackServes(payload) {
+  var mesh = stageLyrics && stageLyrics.current;
+  if (!mesh || !mesh.userData || !mesh.userData.lyric || !payload) return false;
+  var data = mesh.userData.lyric;
+  if (!data.usesTrack || !data.trackPersistent || data.trackLightweight) return false;
+  if (!data.rowLayers || !data.rowLayers.length) return false;
+  return typeof stageLyricMeshCanServePayload === 'function'
+    ? stageLyricMeshCanServePayload(mesh, payload)
+    : false;
+}
+
 function stageLyricPrewarmCanServePayload(payload) {
   if (typeof stageLyricPrewarm === 'undefined' || !stageLyricPrewarm || !stageLyricPrewarm.mesh) return false;
   var key = stageLyricPreparedKey(payload);
@@ -133,6 +153,8 @@ function scheduleStageLyricDemandMeshPrewarm(index, reason, delay) {
       if (payload && typeof normalizeStageLyricPayload === 'function') payload = normalizeStageLyricPayload(payload);
     } catch (_) { payload = null; }
     if (!payload || !payload.trackEntries || !payload.trackEntries.length) return;
+    // 整曲持久轨已经在服务这一行 → 不建预热 mesh（见 stageLyricPersistentTrackServes）
+    if (stageLyricPersistentTrackServes(payload)) return;
     var key = stageLyricPreparedKey(payload);
     if (stageLyricPrewarm.mesh && stageLyricPrewarm.key === key) return;
     if (stageLyricPrewarm.mesh && typeof disposeLyricMesh === 'function') {

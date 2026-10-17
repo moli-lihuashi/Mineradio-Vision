@@ -36,6 +36,9 @@ backups/
 /_*.js
 /_*.bat
 /_*.png
+/_*.txt
+/_*.jsonl
+/_*.json
 /_debug-archive/
 
 # Local development noise

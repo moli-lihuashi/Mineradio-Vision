@@ -1496,6 +1496,18 @@ const QISHUI_TRACK_ACCOUNT_CONTAINER_KEYS = new Set([
   'membership', 'membershipinfo', 'usermembership', 'accountmembership',
   'account', 'userinfo', 'userprofile', 'me',
 ]);
+// quality_map 是「按音质档」的权益表（{play_detail:{need_vip}, download_detail:{need_vip}}），
+// 描述的是**某一档音质**能不能播/能不能下载，不是整曲要不要会员。实测汽水 UGC 曲目
+// （如 7657031609262819354）medium/higher 的 play_detail.need_vip 都是 false，只有
+// download_detail.need_vip=true、lossless/spatial/hi_res 的 play_detail.need_vip=true；
+// 把它算进整曲判定会把免费曲目误判成「需要会员」而拒绝播放。
+// 音质档权益由下游已有的三道机制负责：流级 qishuiStreamAllowedForMembership 过滤、
+// resolveQishuiDownloadInfo 的 QISHUI_STANDARD_AUDIO_SOURCE_EMPTY、
+// 以及 handleQishuiSongUrl 的 trial（流时长 + 5s < 曲目时长 → 试听片段 + 前端横幅）。
+// 整曲级旗标（label_info.only_vip_playable 等）不在这个容器里，不受影响。
+const QISHUI_TRACK_PER_QUALITY_CONTAINER_KEYS = new Set([
+  'qualitymap', 'qualitydetailmap',
+]);
 
 function qishuiTrackPlaybackRestriction(value) {
   let vipRequired = false;
@@ -1513,6 +1525,7 @@ function qishuiTrackPlaybackRestriction(value) {
       const normalizedKey = qishuiNormalizedFieldKey(key);
       const nextPath = pathKeys.concat(normalizedKey);
       if (QISHUI_TRACK_ACCOUNT_CONTAINER_KEYS.has(normalizedKey)) continue;
+      if (QISHUI_TRACK_PER_QUALITY_CONTAINER_KEYS.has(normalizedKey)) continue;
       if (QISHUI_TRACK_VIP_KEYS.has(normalizedKey)) {
         membershipHintKnown = true;
         if (qishuiExplicitPositive(item)) {
@@ -2014,6 +2027,20 @@ function qishuiPlaylistPrimaryLikeName(name) {
   return /favorite|liked/i.test(text) || text.indexOf('\u559c\u6b22') >= 0;
 }
 
+// 上游「我喜欢的音乐 / Ta喜欢的音乐」与我们合成的虚拟卡片 qishui-liked 是**同一条歌单**，
+// 两条都下发就是 UI 上两张一模一样的卡片（同封面、同曲数）。
+// 判定策略：
+//   - 拿得到 likedCard.id 时**只按 id 精确匹配** → 不可能误杀别的歌单（id 唯一）。
+//   - 拿不到 id 的降级路径才按名字，且只认汽水官方 likes 歌单的固定命名形态，
+//     不认「我喜欢的歌」这类用户自建名，避免把用户自建歌单吞掉。
+function qishuiPlaylistIsLikedCard(pl, likedCardId) {
+  if (!pl || !pl.id) return false;
+  const id = normalizeText(likedCardId || '');
+  if (id) return String(pl.id) === id;
+  const name = String(pl.name || '').trim();
+  return !!pl.isLiked && /^(?:Ta|TA|ta|我|他|她)?(?:的)?喜欢的音乐$/.test(name);
+}
+
 function qishuiPlaylistIdFromItem(item) {
   item = item || {};
   return normalizeText(
@@ -2416,6 +2443,39 @@ async function fetchQishuiWebPlaylistTracks(playlistId, cookieText, opts) {
   });
 }
 
+// 汽水公共目录（volcengine api-vehicle）是 UGC 目录：`author_info.name` 是**上传者**，不是原唱
+// （实测「晴天」的 36 条里 author 是 季星白 / 球球想睡觉 / J.sheoy / DJ三秒心动 等），上游根本没有
+// 「原唱」字段。原唱只可能被上传者写进标题的括号里：「晴天 (鋼琴版) [原唱: 周杰倫]」
+// 「搁浅(Cover 周杰伦)」「擱淺 (原唱：周杰倫)」。播放侧的回退是按「同名同歌手」找可播版本，
+// 所以必须把这两条信息解析出来，否则这批行永远匹配不到任何音源（用户侧表现为「无法播放」）。
+const QISHUI_PUBLIC_ORIGINAL_ARTIST_RULES = [
+  /(?:原唱|原曲|原歌手)\s*[:：]\s*(.+)/i,
+  /cover\s*(?:by)?\s*[:：]?\s*(.+)/i,
+  /(?:翻自|翻唱自)\s*[:：]?\s*(.+)/i,
+];
+const QISHUI_PUBLIC_TITLE_BRACKET_RE = /[（(【\[][^）)】\]]*[）)】\]]/g;
+const QISHUI_PUBLIC_BRACKET_RE = /[（(【\[][^）)】\]]*[）)】\]]/;
+
+function parseQishuiPublicOriginalInfo(title) {
+  const raw = normalizeText(title || '');
+  const brackets = raw.match(QISHUI_PUBLIC_TITLE_BRACKET_RE) || [];
+  let originalArtist = '';
+  for (const part of brackets) {
+    const inner = normalizeText(String(part).replace(/^[（(【\[]/, '').replace(/[）)】\]]$/, ''));
+    if (!inner) continue;
+    for (const rule of QISHUI_PUBLIC_ORIGINAL_ARTIST_RULES) {
+      const matched = inner.match(rule);
+      if (matched && matched[1]) {
+        const hint = normalizeText(matched[1]);
+        if (hint) { originalArtist = hint; break; }
+      }
+    }
+    if (originalArtist) break;
+  }
+  const stripped = normalizeText(raw.replace(QISHUI_PUBLIC_TITLE_BRACKET_RE, ' '));
+  return { originalArtist, originalTitle: stripped || raw };
+}
+
 function mapQishuiPublicItem(raw, index, query) {
   raw = raw || {};
   const author = pickObject(raw.author_info, raw.author, raw.artist);
@@ -2424,6 +2484,7 @@ function mapQishuiPublicItem(raw, index, query) {
   const name = normalizeText(raw.title || raw.name || raw.song_name);
   if (!id || !name) return null;
   const artistName = normalizeText(author.name || raw.author_name || raw.artist_name || raw.singer || '');
+  const originalInfo = parseQishuiPublicOriginalInfo(name);
   const lyricInfo = pickObject(raw.lyric_info, raw.lyric);
   const lyric = normalizeLyricBody(lyricInfo.lyric_text || lyricInfo.content || lyricInfo.lyric || raw.lyric_text || '');
   cacheQishuiLyric(id, lyric, '', 'qishui-public-search-cache');
@@ -2443,6 +2504,10 @@ function mapQishuiPublicItem(raw, index, query) {
     playable: false,
     playbackMode: 'recommend-match',
     recommendationSource: 'qishui-public-catalog',
+    // 供播放回退使用：上传者不是原唱，匹配只能靠这两个字段。
+    originalTitle: originalInfo.originalTitle,
+    originalArtist: originalInfo.originalArtist,
+    uploader: artistName || '',
     qishuiRank: index,
     qishuiQuery: query || '',
     lyric,
@@ -2749,6 +2814,7 @@ async function handleQishuiUserPlaylists(cookieText) {
       const feed = await fetchQishuiFeedSongs(24, cookieText).catch(() => ({ songs: [], rawCount: 0 }));
       const likedTracks = library.likedTracks || [];
       const likedCard = library.likedCard || {};
+      const likedId = normalizeText(likedCard.id || '');
       const profile = library.profile || {};
       const recentTracks = library.recentTracks || [];
       const playlists = [
@@ -2764,6 +2830,11 @@ async function handleQishuiUserPlaylists(cookieText) {
       ];
       (library.playlists || []).forEach(pl => {
         if (!pl || !pl.id || playlists.some(item => item.id === pl.id)) return;
+        // 上游「我喜欢的音乐」与我们合成的虚拟卡片「汽水我的喜欢」(qishui-liked) 是**同一条歌单**：
+        // 实测 likedCard.id=7270418412470304808、name='Ta喜欢的音乐'、7 首、封面与虚拟卡片完全一致，
+        // 点进去上游自己报的 playlist.name 就是「我喜欢的音乐」。两条都留 = 卡片重复。
+        // 保留虚拟卡片（它才走 handleQishuiPlaylistTracks 的 liked 分页分支），丢弃上游这条。
+        if (qishuiPlaylistIsLikedCard(pl, likedId)) return;
         playlists.push(pl);
       });
       if (recentTracks.length) {
@@ -3397,6 +3468,76 @@ async function fetchQishuiPcTrackV2(trackId, cookieText) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// H5 取址回退链（2026-10-17 实测）
+// ---------------------------------------------------------------------------
+// /luna/pc/track_v2 现在对没有官方客户端应用签名（x-helios + x-medusa，由官方原生安全组件
+// 逐请求生成，纯软件算不出来）的请求一律返回 200 + content-type:application/json +
+// content-length:0 —— 风控把响应体挖空，接口本身没死。已实测排除的其它解释：
+//   · 换 web 参数形态（device_platform:web / channel:pc_web）→ 一样空
+//   · 换 Chromium 网络栈（electron net.request，真实 Chrome TLS 指纹）→ 一样空
+//   · 抬高 version_name/version_code（3.5.0 / 4.0.0）→ 一样空
+//   · 无 cookie / 假 cookie / 不存在的 track_id → 一样空（同族 /luna/pc/me 无 cookie 会
+//     正常返回 status_code:1000016，所以不是账号问题，是这一条路由的风控）
+// H5 家族（beta-luna.douyin.com）的 track_v2 / seo_track 不需要签名、不需要登录态，
+// 返回同一形状的 payload：track（元数据 + label_info）+ track_player.url_player_info
+// （签过名的 VOD GetPlayInfo 地址）。把它喂给既有的 resolveQishuiDownloadInfo 就能拿到
+// PlayInfoList 里的整曲流（实测 m4a，MainPlayUrl 可直接 Range GET，206 + ftypM4A）。
+// 注意：会员曲目在 H5 链路上只给 30~60s 试听流，trial 标记由调用方既有的
+// duration + 5 < fullDuration 逻辑识别，前端会弹试听横幅，不会把试听段当整曲。
+const QISHUI_H5_TRACK_BASE = (process.env.QISHUI_H5_API_BASE || 'https://beta-luna.douyin.com').replace(/\/+$/, '');
+const QISHUI_H5_TRACK_PATHS = (process.env.QISHUI_H5_TRACK_PATHS || '/luna/h5/track_v2,/luna/h5/seo_track')
+  .split(',')
+  .map(item => item.trim())
+  .filter(Boolean);
+
+async function fetchQishuiH5TrackV2Once(trackId, apiPath, cookieText) {
+  const json = await requestJson(urlWithParams(QISHUI_H5_TRACK_BASE + apiPath, qishuiWebCommonParams({
+    track_id: normalizeText(trackId),
+  })), {
+    timeoutMs: 10000,
+    headers: qishuiWebHeaders(cookieText, { sessionOnly: true }),
+  });
+  const err = qishuiPcStatusError(json, 'QISHUI_H5_TRACK_V2_FAILED');
+  if (err) throw err;
+  return json;
+}
+
+// seo_track 把内容嵌在 seo_track 下；统一成 { track, track_player } 形状，
+// 让 qishuiPrimaryTrackFromV2 / qishuiTrackPlayerFromV2 / resolveQishuiDownloadInfo 原样复用。
+function normalizeQishuiH5TrackPayload(payload) {
+  if (payload && payload.seo_track && typeof payload.seo_track === 'object') {
+    const seo = payload.seo_track;
+    return Object.assign({}, payload, {
+      track: seo.track || payload.track,
+      track_player: seo.track_player || payload.track_player,
+    });
+  }
+  return payload;
+}
+
+async function fetchQishuiH5TrackV2(trackId, cookieText) {
+  const id = normalizeText(trackId);
+  if (!id) throw new Error('QISHUI_H5_TRACK_ID_REQUIRED');
+  return qishuiTrackMetadataCache.wrap('h5-track|' + id, 20 * 1000, async () => {
+    let lastErr = null;
+    for (const apiPath of QISHUI_H5_TRACK_PATHS) {
+      try {
+        const json = normalizeQishuiH5TrackPayload(await fetchQishuiH5TrackV2Once(id, apiPath, cookieText));
+        const player = qishuiTrackPlayerFromV2(json, qishuiPrimaryTrackFromV2(json));
+        const playerUrl = qishuiObjectString(player, ['url_player_info', 'URLPlayerInfo', 'urlPlayerInfo']);
+        if (playerUrl) return json;
+        // H5 不认识这首歌时返回 risk_result:0 / status_code:1000091（SEO页面歌曲未知），
+        // 没有 url_player_info，换下一条候选。
+        lastErr = new Error('QISHUI_H5_NO_PLAYER_INFO');
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('QISHUI_H5_TRACK_UNAVAILABLE');
+  });
+}
+
 async function fetchQishuiPlayerInfo(playerInfoUrl, cookieText, membership) {
   playerInfoUrl = normalizeText(playerInfoUrl);
   if (!/^https?:\/\//i.test(playerInfoUrl)) return null;
@@ -3472,6 +3613,18 @@ function qishuiUrlWithAuth(url, auth) {
   return url + '#auth=' + encodeURIComponent(auth);
 }
 
+// 整曲级权益旗标（label_info.only_vip_playable 等）只挂在 track 对象上。
+// 直接扫整个 payload 会把响应里嵌着的**其它实体**误算成这首也要会员：
+// H5 seo_track 一次返回 200KB，里面有 album_tracks / artist_tracks / chart_tracks /
+// relation_media，其中真有 only_vip_playable=true 的会员曲（实测强制走 seo_track 时，
+// 免费曲 7657031609262819354 被误判成 vip_required）。
+// payload 里取不到有内容的 track 时退回整包扫描，保持 PC 链路原行为。
+function qishuiRestrictionScopeFromPayload(payload) {
+  const track = qishuiPrimaryTrackFromV2(payload);
+  if (track && typeof track === 'object' && Object.keys(track).length) return track;
+  return payload;
+}
+
 async function handleQishuiSongUrl(opts, cookieText) {
   opts = opts && typeof opts === 'object' ? opts : { id: opts };
   const id = normalizeText(opts.id || opts.trackId || opts.track_id || '');
@@ -3485,20 +3638,30 @@ async function handleQishuiSongUrl(opts, cookieText) {
   }
   const requestedQuality = normalizeText(opts.quality || '');
   let payload;
+  let payloadSource = 'qishui-pc-track-v2';
   try {
     payload = await fetchQishuiPcTrackV2(id, cookie);
-  } catch (err) {
-    return qishuiUnavailable('Qishui did not return track playback metadata: ' + (err && err.message || String(err)), 'source_unavailable', {
-      loggedIn: true,
-      playbackKeyReady: false,
-      membershipKnown: false,
-      vipType: 0,
-      vipLevel: 'none',
-      isVip: false,
-      isSvip: false,
-      vipLabel: '无VIP',
-      rawError: err && err.message || String(err),
-    });
+  } catch (pcTrackError) {
+    // PC 端点被风控挖空响应体时走 H5 回退链（详见 fetchQishuiH5TrackV2 上方注释）。
+    // PC 端点恢复后这里会自动回到原链路，不需要人工干预。
+    try {
+      payload = await fetchQishuiH5TrackV2(id, cookie);
+      payloadSource = 'qishui-h5-track-v2';
+    } catch (h5Error) {
+      const rawError = 'h5: ' + (h5Error && h5Error.message || String(h5Error)) +
+        ' | pc: ' + (pcTrackError && pcTrackError.message || String(pcTrackError));
+      return qishuiUnavailable('Qishui did not return track playback metadata: ' + rawError, 'source_unavailable', {
+        loggedIn: true,
+        playbackKeyReady: false,
+        membershipKnown: false,
+        vipType: 0,
+        vipLevel: 'none',
+        isVip: false,
+        isSvip: false,
+        vipLabel: '无VIP',
+        rawError,
+      });
+    }
   }
   let membership = qishuiPlaybackMembershipFromPayload(payload);
   if (!membership.membershipKnown) membership = await fetchQishuiPlaybackMembership(cookie);
@@ -3508,7 +3671,7 @@ async function handleQishuiSongUrl(opts, cookieText) {
   const cacheKey = 'track-v2|' + qishuiCookieFingerprint(cookie) + '|' + membershipKey + '|' + id + '|' + requestedQuality;
   return qishuiPlaybackCache.wrap(cacheKey, 4 * 60 * 1000, async () => {
     try {
-      const trackRestriction = qishuiTrackPlaybackRestriction(payload);
+      const trackRestriction = qishuiTrackPlaybackRestriction(qishuiRestrictionScopeFromPayload(payload));
       const requestRestriction = qishuiTrackPlaybackRestriction(opts);
       if ((trackRestriction.vipRequired || requestRestriction.vipRequired) && !membership.isVip) {
         return qishuiUnavailable('汽水音乐歌曲需要会员权限，当前账号未取得可验证的会员权益。', 'vip_required', {
@@ -3551,7 +3714,7 @@ async function handleQishuiSongUrl(opts, cookieText) {
         size: Number(stream.size) || 0,
         duration,
         requestedQuality,
-        source: 'qishui-pc-track-v2',
+        source: payloadSource,
         encrypted: !!stream.auth,
       };
     } catch (err) {
@@ -3615,5 +3778,6 @@ module.exports = {
     qishuiTrackRequiresVip,
     qishuiStreamAllowedForMembership,
     qishuiBestStreamCandidateForMembership,
+    qishuiPlaylistIsLikedCard,
   },
 };

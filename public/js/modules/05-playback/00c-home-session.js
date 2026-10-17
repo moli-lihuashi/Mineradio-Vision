@@ -424,6 +424,7 @@ function sceneRadioContext() {
     title: radio.title || '场景电台',
     subtitle: radio.subtitle || '',
     mood: weather.mood && weather.mood.key || '',
+    sources: radio.sources || [],
   };
 }
 function applyScenePresentation(sceneId, data) {
@@ -511,7 +512,10 @@ async function startSceneRadio(sceneId, opts) {
     refreshHomeSceneRow();
     await playSceneRadio(opts);
     var meta = Mineradio.scene && Mineradio.scene.getSceneMeta ? Mineradio.scene.getSceneMeta(sceneId) : null;
-    showToast((data.radio.title || meta && meta.title || '场景电台') + ' · ' + playQueue.length + ' 首');
+    var sceneSources = (data.radio.sources || []).map(function (provider) {
+      return typeof platformMeta === 'function' ? platformMeta(provider).label : provider;
+    }).filter(Boolean).join(' / ');
+    showToast((data.radio.title || meta && meta.title || '场景电台') + ' · ' + playQueue.length + ' 首' + (sceneSources ? '（' + sceneSources + '）' : ''));
   } catch (e) {
     console.warn('[SceneRadio]', e);
     homeSceneRadioState.error = 'SCENE_FAILED';

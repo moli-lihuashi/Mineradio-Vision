@@ -112,6 +112,38 @@ function getPixelRatio() {
   return Math.min(ratio || window.devicePixelRatio || 1, 2);
 }
 var canvasDimensionLimit = 16384;
+// ── 捕获体积闸（防 app 卡死，2026-10-16）──
+// 背景：html-to-image 的 cloneCSSStyle 用 getComputedStyle().cssText 序列化每个节点的
+// **全部**计算样式（Chromium 下约 20KB/节点）。节点多的子树（如 #fx-panel 内容 1432 节点）
+// 会产出 27MB 的 SVG data URL：构建本身同步占主线程 ~1.8s（卡顿），随后
+// createImage(img.src=<27MB dataURL>) 在 SVG+foreignObject 光栅化中**永久阻塞**主线程
+// （整个 app 冻住，用户感知「卡顿自动重启」）。实测正常捕获 ≤127 节点 / ≤2.9MB / <350ms。
+var lgCaptureNodeLimit = 400;
+var lgCaptureSvgByteLimit = 1.5 * 1024 * 1024;
+// 中止后的冷却：避免脏标记反复触发重试，每次重试仍要付出克隆+序列化的主线程代价
+var lgCaptureAbortCooldownMs = 15000;
+var lgCaptureAbortLast = /* @__PURE__ */ new Map();
+function lgCaptureTooHeavy(element) {
+  try {
+    if (!element || !element.querySelectorAll) return false;
+    return element.querySelectorAll("*").length > lgCaptureNodeLimit;
+  } catch (e) {
+    return false;
+  }
+}
+function lgCaptureAbort(node, reason) {
+  try { lgCaptureAbortLast.set(node, Date.now()); } catch (e) {}
+  throw new Error("LG_CAPTURE_ABORTED: " + reason);
+}
+function lgCaptureInCooldown(node) {
+  try {
+    var last = lgCaptureAbortLast.get(node);
+    if (!last) return false;
+    if (Date.now() - last < lgCaptureAbortCooldownMs) return true;
+    lgCaptureAbortLast.delete(node);
+  } catch (e) {}
+  return false;
+}
 function checkCanvasDimensions(canvas) {
   if (canvas.width > canvasDimensionLimit || canvas.height > canvasDimensionLimit) {
     if (canvas.width > canvasDimensionLimit && canvas.height > canvasDimensionLimit) {
@@ -304,12 +336,16 @@ async function resourceToDataURL(resourceUrl, contentType, options) {
     }
   }
   cache[cacheKey] = dataURL;
+  if (dataURL && dataURL.length > 200000) {
+    console.log('[LG-STAGE] embedImage BIG: ' + dataURL.length + ' bytes <- ' + String(resourceUrl).slice(0, 120));
+  }
   return dataURL;
 }
 
 // node_modules/html-to-image/es/clone-node.js
 async function cloneCanvasElement(canvas) {
   const dataURL = canvas.toDataURL();
+  console.log('[LG-STAGE] cloneCanvas: ' + canvas.width + 'x' + canvas.height + ' -> dataURL ' + dataURL.length + ' bytes');
   if (dataURL === "data:,") {
     return canvas.cloneNode(false);
   }
@@ -387,7 +423,17 @@ function cloneCSSStyle(nativeNode, clonedNode, options) {
     targetStyle.cssText = sourceStyle.cssText;
     targetStyle.transformOrigin = sourceStyle.transformOrigin;
   } else {
-    getStyleProperties(options).forEach((name) => {
+    // ── 性能关键：现代 Chromium 上 getComputedStyle().cssText 恒为 ''，所以这里永远是有值的分支。
+    // 而 getStyleProperties() 返回的是「全部」CSS 属性名（本机实测每节点 516 个非空值 ≈ 15KB），
+    // 其中约 60 个是本项目自定义属性（--glass-* / --font-* / --panel-* 等），单节点合计 ~3.3KB。
+    // 自定义属性是「继承」的：同一节点上的所有 longhand 已经把它们解析成了具体值（例如 background-image
+    // 已经是展开后的 gradient，而不是 var(--glass-bg)），所以再往克隆节点上逐个写 --* 纯属重复，
+    // 而且会被每个后代节点各写一遍 —— 这是 SVG 体积与 CPU 占用的最大单一来源。
+    // 伪元素走 clonePseudoElements/formatCSSProperties，不受这里影响。
+    var __props = getStyleProperties(options);
+    for (let __i = 0; __i < __props.length; __i++) {
+      const name = __props[__i];
+      if (typeof name === "string" && name.charCodeAt(0) === 45 && name.charCodeAt(1) === 45) continue;
       let value = sourceStyle.getPropertyValue(name);
       if (isInstanceOfElement(nativeNode, HTMLIFrameElement) && name === "display" && value === "inline") {
         value = "block";
@@ -396,7 +442,7 @@ function cloneCSSStyle(nativeNode, clonedNode, options) {
         value = `path(${clonedNode.getAttribute("d")})`;
       }
       targetStyle.setProperty(name, value, sourceStyle.getPropertyPriority(name));
-    });
+    }
   }
 }
 function cloneInputValue(nativeNode, clonedNode) {
@@ -461,8 +507,23 @@ async function ensureSVGSymbols(clone, options) {
   }
   return clone;
 }
+// ── 性能：不参与绘制的子树必须在克隆阶段就剪掉。
+// 本项目每个节点光「计算样式 longhand」就是 ~15KB，而控制栏里塞了大量默认 display:none 的弹层
+// （音量/音质/心情等），它们对最终位图没有任何贡献，却占了 `#controls` 一半以上的节点。
+// display:none 的后代无法再通过自身样式把自己显示出来，所以跳过它是绝对安全的（不像 visibility:hidden）。
+function lgIsNotPainted(node) {
+  if (!node || node.nodeType !== 1) return false;
+  try {
+    return window.getComputedStyle(node).display === "none";
+  } catch (e) {
+    return false;
+  }
+}
 async function cloneNode(node, options, isRoot) {
   if (!isRoot && options.filter && !options.filter(node)) {
+    return null;
+  }
+  if (!isRoot && lgIsNotPainted(node)) {
     return null;
   }
   return Promise.resolve(node).then((clonedNode) => cloneSingleNode(clonedNode, options)).then((clonedNode) => cloneChildren(node, clonedNode, options)).then((clonedNode) => decorate(node, clonedNode, options)).then((clonedNode) => ensureSVGSymbols(clonedNode, options));
@@ -787,9 +848,49 @@ async function toSvg(node, options = {}) {
   return datauri;
 }
 async function toCanvas(node, options = {}) {
+  const __t0 = Date.now();
+  // ── 体积闸（真正生效）：克隆前先拦，杜绝 DOM 克隆 + cssText 序列化占死主线程
+  if (lgCaptureInCooldown(node)) {
+    throw new Error("LG_CAPTURE_ABORTED: cooldown");
+  }
+  if (lgCaptureTooHeavy(node)) {
+    console.warn("[LiquidGlass] capture skipped: subtree too heavy (" +
+      node.querySelectorAll("*").length + " > " + lgCaptureNodeLimit + " nodes)");
+    lgCaptureAbort(node, "nodes>" + lgCaptureNodeLimit);
+  }
   const { width, height } = getImageSize(node, options);
+  var __ident = '';
+  try {
+    __ident = (node.id ? '#' + node.id : '') + (node.className && typeof node.className === 'string' ? '.' + String(node.className).trim().split(/\s+/).join('.') : '') + '<' + node.tagName + '>';
+    var __imgs = node.querySelectorAll ? node.querySelectorAll('img').length : -1;
+    var __cvs = node.querySelectorAll ? node.querySelectorAll('canvas').length : -1;
+    var __nodes = node.querySelectorAll ? node.querySelectorAll('*').length : -1;
+    __ident += ' imgs=' + __imgs + ' canvases=' + __cvs + ' nodes=' + __nodes;
+  } catch (e) {}
+  console.log('[LG-STAGE] toCanvas:start ' + __ident + ' w=' + width + ' h=' + height);
   const svg = await toSvg(node, options);
+  console.log('[LG-STAGE] toSvg:done len=' + (svg ? svg.length : -1) + ' ms=' + (Date.now() - __t0));
+  if (svg && svg.length > lgCaptureSvgByteLimit) {
+    // ── 体积闸：巨型 SVG 喂给 createImage/drawImage 会让光栅化打爆渲染进程（原生崩溃，无 JS 异常）
+    // 先留一份解剖日志（归因用），再中止
+    try {
+      var __dataUrls = svg.match(/data:[^"')]*/g) || [];
+      var __dataTotal = __dataUrls.reduce(function (a, s) { return a + s.length; }, 0);
+      var __bigText = (svg.match(/>[^<>]{800,}</g) || []).map(function (s) { return s.length; }).sort(function (a, b) { return b - a; }).slice(0, 3);
+      console.warn('[LG-STAGE] SVG-ANATOMY len=' + svg.length +
+        ' dataUrlCount=' + __dataUrls.length + ' dataUrlBytes=' + __dataTotal +
+        ' styleTags=' + (svg.match(/<style/g) || []).length +
+        ' fontFace=' + (svg.match(/@font-face/g) || []).length +
+        ' foreignObj=' + (svg.match(/foreignObject/g) || []).length +
+        ' bigTextNodes=' + JSON.stringify(__bigText) +
+        ' head=' + svg.slice(0, 300));
+    } catch (e) { console.log('[LG-STAGE] SVG-ANATOMY failed ' + e); }
+    console.warn('[LiquidGlass] capture aborted: SVG ' + (svg.length / 1048576).toFixed(1) +
+      'MB exceeds ' + (lgCaptureSvgByteLimit / 1048576) + 'MB limit');
+    lgCaptureAbort(node, 'svg>' + lgCaptureSvgByteLimit);
+  }
   const img = await createImage(svg);
+  console.log('[LG-STAGE] createImage:done ms=' + (Date.now() - __t0));
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   const ratio = options.pixelRatio || getPixelRatio();
@@ -806,7 +907,9 @@ async function toCanvas(node, options = {}) {
     context.fillStyle = options.backgroundColor;
     context.fillRect(0, 0, canvas.width, canvas.height);
   }
+  console.log('[LG-STAGE] drawImage:begin canvas=' + canvas.width + 'x' + canvas.height + ' ms=' + (Date.now() - __t0));
   context.drawImage(img, 0, 0, canvas.width, canvas.height);
+  console.log('[LG-STAGE] drawImage:done ms=' + (Date.now() - __t0));
   return canvas;
 }
 
@@ -2151,22 +2254,26 @@ var LiquidGlass = class _LiquidGlass {
   async _captureGlassContent(targets = null) {
     if (this._capturingGlassContent) return;
     this._capturingGlassContent = true;
+    console.log('[LG-STAGE] _captureGlassContent:start targets=' + (targets ? targets.size : 'ALL'));
     try {
       for (const [el, glassCanvas] of this.glassCanvases) {
         if (targets && !targets.has(el)) continue;
         const rect = el.getBoundingClientRect();
+        console.log('[LG-STAGE] captureToCanvas:begin el=' + (el.className || el.tagName) + ' rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height));
         const img = await this.capture.captureToCanvas(
           el,
           rect.width,
           rect.height,
           [glassCanvas]
         );
+        console.log('[LG-STAGE] captureToCanvas:end el=' + (el.className || el.tagName) + ' ok=' + !!img);
         if (img) {
           this._glassContentImages.set(el, img);
         }
       }
     } finally {
       this._capturingGlassContent = false;
+      console.log('[LG-STAGE] _captureGlassContent:end');
     }
   }
   /**
