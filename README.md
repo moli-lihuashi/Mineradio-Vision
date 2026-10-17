@@ -28,7 +28,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 ## 下载安装
 
 - **Windows 安装包（推荐）**：[Mineradio-3.1.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.1.0/Mineradio-3.1.0-Setup.exe) —— 2026-10-17 构建，包含本仓库最新代码
-- 免安装便携版：[Mineradio-Vision-v3.0.1-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.0.1/Mineradio-Vision-v3.0.1-portable-win-x64.zip)（2026-08-29 构建）
+- 免安装便携版：[Mineradio-Vision-v3.1.0-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.1.0/Mineradio-Vision-v3.1.0-portable-win-x64.zip) —— 2026-10-17 构建，解压后运行 `Mineradio\Mineradio.exe`
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可正常安装。安装路径优先 D–Z 盘，卸载只清理本程序自己的文件。
