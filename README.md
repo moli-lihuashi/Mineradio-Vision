@@ -13,17 +13,28 @@
 
 ## 为什么会有这个版本
 
-Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused) 并停止更新，本仓库在停止维护的上游基础上继续开发：保留其歌词舞台、粒子视觉、电影镜头与 3D 歌单架，同时做了大规模架构重构与功能扩展。
+Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused)，README 写明「长期停更」。本仓库从较早的快照（上游 v2.1.0 + 酷狗修改版）继续维护，并陆续把上游后续版本的部分实现同步回来 —— 例如汽水扫码登录 v6 与上游是同一份代码。
 
-| 对比项 | 上游 Mineradio | Mineradio Vision（本仓库） |
+下面的差异都按两边仓库的实际代码核对过（不含主观描述）；「无」指该仓库里没有对应实现。
+
+| 能力（可在仓库内核对） | 上游 `Mineradio-paused` v2.2.0 | 本仓库 v3.1.0 |
 | --- | --- | --- |
-| 维护状态 | 2026-09-21 起停更，仓库改名 `Mineradio-paused` | 持续维护中，最近更新 2026-10-17 |
-| 音乐平台 | 上游原有接入能力 | 网易云 / QQ / **酷狗** / 汽水 / **Spotify** 五源统一登录、歌单同步与账号状态 |
-| 酷狗链路 | — | KRC 加密歌词解密（krc1 XOR + zlib）、翻译歌词显示修复、云歌单 dfid 设备身份修复、歌单顺序同步、VIP 状态同步 |
-| QQ 登录 | 授权失效需重新登录 | Cookie 失效自动判定 + 服务端静默续期，失败才提示重登 |
-| 视觉系统 | 歌词舞台 / 粒子 / 电影镜头 / 3D 歌单架 | 追加 LiquidGlass 液态玻璃、Sonic Topography 音域回响、独立桌面歌词窗口、天气雨滴、像素伙伴桌宠 |
-| 性能工程 | — | 原生 C++ BPM 分析加速、前端延迟波懒加载启动、按 P95 帧时间自适应降级 |
-| 细节体验 | — | 久听休息提醒（连续聆听计时 + 整屏休息提示）、开屏真实加载进度 |
+| 维护状态 | 2026-09-21 停更 | 持续维护中 |
+| 五源接入（网易云 / QQ / 酷狗 / 汽水 / Spotify） | 有 | 有 |
+| 汽水扫码登录 v6 / 音频解密 | 有 | 有（同步自上游的同一份实现） |
+| 酷狗 KRC 加密歌词解密（XOR + zlib） | 无 | 有 |
+| QQ Cookie 自动续期（`QQConnectLogin`） | 无 | 有 |
+| LiquidGlass 液态玻璃 | 无 | 有 |
+| 原生 C++ BPM 分析 | 无 | 有 |
+| WASAPI 旁路输出 | 无 | 有 |
+| 前端延迟波懒加载（第二波模块） | 无（单波加载） | 有 |
+| 久听休息提醒 | 无 | 有 |
+| 登录包跨设备同步（导出 / 扫码互传） | 无 | 有 |
+| 本地音乐库 / 内置歌单库 | 有 | **尚未合并** |
+| Sonic Workshop 预设 | 有 | **尚未合并** |
+| cuefield 过渡引擎 / 自动化测试 | 13 个模块 / 54 个测试 | 8 个模块 / 24 个测试 |
+
+> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游在本地音乐库、内置歌单库、Sonic Workshop、文档与测试覆盖上更完整，这些还没有合并过来。
 
 ## 下载安装
 
