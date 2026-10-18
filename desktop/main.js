@@ -23,6 +23,13 @@ const secretStore = require('./secret-store');
 const { registerWallpaperEngineScheme } = require('./wallpaper-engine-library');
 registerWallpaperEngineScheme(protocol);
 
+// 本地音乐库协议同样必须在 app ready 前注册（installProtocol 在 whenReady 内做）
+const {
+  LocalMusicLibrary,
+  registerLocalMusicScheme,
+} = require('./local-music-library');
+registerLocalMusicScheme(protocol);
+
 const wasapiOutputRuntime = require('./wasapi-output-runtime');
 wasapiOutputRuntime.registerIpc(ipcMain);
 
@@ -32,6 +39,8 @@ const { LoginEasterEggGate, LOGIN_EASTER_EGG_GATE_VERSION, LOGIN_EASTER_EGG_STAT
 // 内存管理模块（缓解 WebGL context loss）
 const appMemory = require('./app-memory');
 const systemMemory = require('./system-memory');
+// 内置歌单库（自包含，只依赖 node 内置模块）
+const { BuiltInPlaylistLibrary } = require('./built-in-playlist-library');
 
 // ---- 懒加载：重模块首次 IPC 时再 require / 实例化 ----
 let _spotifyApiMod = null;
@@ -2461,6 +2470,164 @@ ipcMain.handle('spotify-playlist-tracks', async (_event, playlistId, options) =>
   }
 });
 
+// ---- 内置歌单库（Mineradio 本机歌单，可混存五个平台的歌曲）----
+function builtInPlaylistMutationError(error) {
+  return { ok: false, error: (error && (error.code || error.message)) || 'BUILT_IN_PLAYLIST_MUTATION_FAILED' };
+}
+
+// ---- 本地音乐库（用户主动导入的音频，经 mineradio-local:// 播放）----
+function pruneLocalMusicImportCapabilities() {
+  const now = Date.now();
+  for (const [token, capability] of localMusicImportCapabilities) {
+    if (!capability || capability.expiresAt <= now) localMusicImportCapabilities.delete(token);
+  }
+  while (localMusicImportCapabilities.size > 8) {
+    const oldest = localMusicImportCapabilities.keys().next().value;
+    if (!oldest) break;
+    localMusicImportCapabilities.delete(oldest);
+  }
+}
+
+ipcMain.handle('mineradio-local-library-list', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
+  try {
+    return await localMusicLibrary.listTracks();
+  } catch (error) {
+    return { ok: false, count: 0, tracks: [], error: error.message || 'LOCAL_LIBRARY_READ_FAILED' };
+  }
+});
+
+ipcMain.handle('mineradio-local-library-lyric', async (event, localFileId) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, lyric: '', lyricSource: '', error: 'UNTRUSTED_SENDER' };
+  try {
+    return localMusicLibrary.lyricForTrack(localFileId);
+  } catch (error) {
+    return { ok: false, lyric: '', lyricSource: '', error: error.message || 'LOCAL_LYRIC_READ_FAILED' };
+  }
+});
+
+ipcMain.handle('mineradio-local-library-authorize', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, error: 'UNTRUSTED_SENDER' };
+  const files = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(payload && payload.files) ? payload.files : []).slice(0, 50000)) {
+    const requestedPath = String(item && item.path || '').trim();
+    if (!requestedPath || /^[\\/]{2}/.test(requestedPath) || !path.isAbsolute(requestedPath)) continue;
+    if (!/\.(mp3|flac|wav|ogg|m4a|aac|opus)$/i.test(requestedPath)) continue;
+    let filePath = '';
+    try {
+      filePath = fs.realpathSync.native ? fs.realpathSync.native(requestedPath) : fs.realpathSync(requestedPath);
+      if (/^[\\/]{2}/.test(filePath) || !fs.statSync(filePath).isFile()) continue;
+    } catch (_) {
+      continue;
+    }
+    const identity = process.platform === 'win32' ? filePath.toLowerCase() : filePath;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    files.push({
+      path: filePath,
+      relativePath: String(item && item.relativePath || path.basename(filePath)).replace(/\0/g, '').slice(0, 2000),
+    });
+  }
+  if (!files.length) return { ok: false, count: 0, error: 'NO_AUTHORIZED_LOCAL_AUDIO' };
+  pruneLocalMusicImportCapabilities();
+  const token = crypto.randomBytes(24).toString('hex');
+  localMusicImportCapabilities.set(token, {
+    senderId: event.sender.id,
+    files,
+    expiresAt: Date.now() + 3 * 60 * 1000,
+  });
+  return { ok: true, count: files.length, token };
+});
+
+ipcMain.handle('mineradio-local-library-import', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, count: 0, tracks: [], error: 'UNTRUSTED_SENDER' };
+  pruneLocalMusicImportCapabilities();
+  const token = String(payload && payload.token || '').trim().toLowerCase();
+  const capability = /^[a-f0-9]{48}$/.test(token) ? localMusicImportCapabilities.get(token) : null;
+  if (!capability || capability.senderId !== event.sender.id || capability.expiresAt <= Date.now()) {
+    return { ok: false, count: 0, tracks: [], error: 'LOCAL_IMPORT_CAPABILITY_INVALID' };
+  }
+  localMusicImportCapabilities.delete(token);
+  try {
+    return await localMusicLibrary.importFiles(capability.files, { replace: false });
+  } catch (error) {
+    return { ok: false, count: 0, tracks: [], error: error.code || error.message || 'LOCAL_LIBRARY_IMPORT_FAILED' };
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlists-list', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return builtInPlaylistLibrary.listSync();
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-page', async (event, id, options) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return builtInPlaylistLibrary.page(id, options);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-create', async (event, name) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.create(name);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-rename', async (event, id, name) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.rename(id, name);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-delete', async (event, id) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.delete(id);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-add-track', async (event, id, track) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.addTrack(id, track);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-remove-track', async (event, id, index) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.removeTrack(id, index);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
+ipcMain.handle('mineradio-built-in-playlist-reorder-track', async (event, id, fromIndex, toIndex) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try {
+    return await builtInPlaylistLibrary.reorderTrack(id, fromIndex, toIndex);
+  } catch (e) {
+    return builtInPlaylistMutationError(e);
+  }
+});
+
 ipcMain.handle('spotify-song-url', async (_event, songId) => {
   try {
     return await spotifyApi().handleSpotifySongUrl(songId);
@@ -3902,6 +4069,14 @@ try { app.setPath('cache', cacheSettings.chromiumPath); } catch (_) {}
 try { process.env.MINERADIO_BEAT_CACHE_DIR = cacheSettings.beatmapsPath; } catch (_) {}
 try { process.env.MINERADIO_NATIVE_TEMP_DIR = cacheSettings.nativePath; } catch (_) {}
 
+// 内置歌单库：与 cookie/登录态落在同一稳定目录（_REAL_APP_DATA/APP_NAME），
+// 不用 app.getPath('userData')——setPath('cache') 之后它已被篡改成 chromium 缓存目录。
+const builtInPlaylistLibrary = new BuiltInPlaylistLibrary({ userDataPath: path.join(_REAL_APP_DATA, APP_NAME) });
+// 本地音乐库：用户主动导入的音频文件索引 + 封面/歌词，经 mineradio-local:// 协议播放
+const localMusicLibrary = new LocalMusicLibrary({ userDataPath: path.join(_REAL_APP_DATA, APP_NAME) });
+// 导入能力票据：authorize 签发一次性 token，import 凭 token 消费（3 分钟过期，最多 8 张）
+const localMusicImportCapabilities = new Map();
+
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
@@ -3926,6 +4101,12 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    // mineradio-local:// 必须在任何窗口加载前就位（渲染进程可能一开机就播本地库歌曲）
+    try {
+      await localMusicLibrary.installProtocol(protocol);
+    } catch (error) {
+      console.warn('[LocalMusic] media protocol unavailable:', (error && error.message) || error);
+    }
     const handleDisplayLayoutChanged = () => {
       positionDesktopLyricsWindow();
       positionWallpaperWindow();

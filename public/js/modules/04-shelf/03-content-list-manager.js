@@ -527,6 +527,7 @@ function makeContentListManager() {
         console.warn('[ShelfContentLoadingRender]', playlistId, renderLoadingErr);
       }
       var podcastCollectionKey = String(playlistId || '').indexOf('podcast:') === 0 ? String(playlistId).slice(8) : '';
+      var builtInPlaylistId = String(playlistId || '').indexOf('mineradio:') === 0 ? String(playlistId).slice('mineradio:'.length) : '';
       var qqPlaylistId = String(playlistId || '').indexOf('qq:') === 0 ? String(playlistId).slice(3) : '';
       var kugouPlaylistId = String(playlistId || '').indexOf('kugou:') === 0 ? String(playlistId).slice(6) : '';
       var qishuiPlaylistId = String(playlistId || '').indexOf('qishui:') === 0 ? String(playlistId).slice(7) : '';
@@ -537,6 +538,9 @@ function makeContentListManager() {
       try {
         if (podcastCollectionKey) {
           r = await apiJson('/api/podcast/my/items?key=' + encodeURIComponent(podcastCollectionKey) + '&limit=36');
+        } else if (builtInPlaylistId) {
+          // 内置歌单：主进程分页拉完整套
+          r = { tracks: await loadAllBuiltInPlaylistTracks(builtInPlaylistId) };
         } else {
           var shelfProvider = qqPlaylistId ? 'qq'
             : (kugouPlaylistId ? 'kugou'

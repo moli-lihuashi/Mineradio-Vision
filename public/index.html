@@ -1025,8 +1025,12 @@ try {
   <div id="pl-pane" style="display:none">
     <div class="queue-toolbar">
       <div class="queue-chip" id="pl-source-chip">登录后显示网易云 / QQ / 酷狗歌单</div>
-      <button class="fx-mini-btn ghost" onclick="refreshUserPlaylists(true)" style="height:26px;padding:0 10px;font-size:11px">刷新</button>
+      <div style="display:flex;gap:6px">
+        <button class="fx-mini-btn ghost" onclick="promptCreateBuiltInPlaylist()" style="height:26px;padding:0 10px;font-size:11px">+ 新建内置</button>
+        <button class="fx-mini-btn ghost" onclick="refreshUserPlaylists(true)" style="height:26px;padding:0 10px;font-size:11px">刷新</button>
+      </div>
     </div>
+    <div class="queue-chip" style="margin-top:4px">内置歌单可混合全部平台</div>
     <div id="pl-list" style="margin-top:6px"></div>
   </div>
   <div id="podcast-pane" style="display:none">
@@ -1395,12 +1399,24 @@ try {
     <h2>收藏到歌单</h2>
     <div id="collect-current" class="collect-current"></div>
     <div class="collect-create">
-      <input id="collect-new-name" type="text" placeholder="新建歌单名称" autocomplete="off" maxlength="40">
+      <input id="collect-new-name" type="text" placeholder="新建 Mineradio 内置歌单" autocomplete="off" maxlength="40">
       <button class="modal-btn primary" onclick="createPlaylistFromCollect()">创建</button>
     </div>
     <div id="collect-list" class="collect-list"></div>
     <div class="btn-row">
       <button class="modal-btn" onclick="closeCollectModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="builtin-prompt-modal" class="modal-mask" role="dialog" aria-modal="true" aria-labelledby="builtin-prompt-title">
+  <div class="modal builtin-prompt-modal">
+    <h2 id="builtin-prompt-title">新建 Mineradio 内置歌单</h2>
+    <div id="builtin-prompt-message" class="builtin-prompt-message"></div>
+    <input id="builtin-prompt-input" type="text" autocomplete="off" maxlength="40" placeholder="输入内置歌单名称">
+    <div class="btn-row">
+      <button id="builtin-prompt-cancel" class="modal-btn" type="button">取消</button>
+      <button id="builtin-prompt-ok" class="modal-btn primary" type="button">确定</button>
     </div>
   </div>
 </div>

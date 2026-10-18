@@ -234,14 +234,101 @@ function getRenderLoadTier() {
   if (cssPixels >= 3200000 || renderPixels >= 3600000) return 1;
   return 0;
 }
-var renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
-renderer.setClearColor(0x000000, 0);
-renderer.setPixelRatio(getRenderPixelRatio());
-renderer.setSize(innerWidth, innerHeight);
-renderer.domElement.style.background = 'transparent';
-renderer.domElement.style.display = 'block';
-renderer.domElement.style.width = '100%';
-renderer.domElement.style.height = '100%';
-renderer.domElement.tabIndex = 0;
-document.getElementById('canvas-container').appendChild(renderer.domElement);
+// ============================================================
+//  WebGL 渲染器：必须 fail-open
+//
+//  下面这几行原本是顶层裸语句 `new THREE.WebGLRenderer(...)`。而 125 个模块是合并成
+//  【单个】script 一次求值的（见 index-loader.js 注释：分块求值会打断跨文件 function 提升），
+//  所以任何一行顶层未捕获异常都会把它之后的全部模块一起带走 —— 只留下被提升的函数声明。
+//
+//  实测（.workbuddy/harness/diag-splash-stuck.js，关掉 GPU 起 Electron）：
+//    THREE.WebGLRenderer: Error creating WebGL context → throw
+//    → 从这一行起，02-visual / 03-beat / 05-playback / 07-fx / 10-shell / 11-main-loop
+//      的顶层语句全都不执行：`var splashShownAt = 0` 永不赋值（保持 undefined），
+//      `initSplashDomBindings()` 永不被调用（开屏没有点击监听、没有最短时长计时器），
+//      但 `tryMarkSplashReadyFromBoot` 因函数提升仍然存在 → 它在 loader 把进度推到 100 后被调起，
+//      `elapsed = splashShownAt ? (now - splashShownAt) : 0` 恒为 0 → 每 50ms 重试、永不出队
+//    → 开屏进度停在 100%，点击无反应，主循环也没起来。
+//
+//  所以这里必须兜住：拿不到 WebGL 就给一个惰性桩（不是 null，避免 89 处 renderer.xxx
+//  逐帧抛错把主循环也打死），并留下可见的降级痕迹。
+// ============================================================
+
+/** 惰性替身：任何属性访问都返回「可调用、可继续取属性」的空实现。 */
+function createInertRendererLike() {
+  var fn = function () { return createInertRendererLike(); };
+  return new Proxy(fn, {
+    get: function (target, key) {
+      if (key === 'then') return undefined;                 // 别被 await 当成 thenable
+      if (key === Symbol.toPrimitive) return function (hint) { return hint === 'string' ? '' : 0; };
+      if (key === 'toString' || key === 'valueOf') return function () { return 0; };
+      if (key === 'toJSON') return function () { return null; };
+      if (key === 'length') return 0;
+      if (!(key in target)) target[key] = createInertRendererLike();
+      return target[key];
+    },
+    set: function (target, key, value) { target[key] = value; return true; },
+    apply: function () { return createInertRendererLike(); },
+    construct: function () { return createInertRendererLike(); }
+  });
+}
+
+/** WebGL 不可用时的 renderer 桩：保留一个真 canvas（要被 append 到 #canvas-container），其余全部惰性。 */
+function createInertRendererStub(host) {
+  var canvas = document.createElement('canvas');
+  canvas.className = 'mineradio-renderer-stub';
+  canvas.setAttribute('aria-hidden', 'true');
+  canvas.style.background = 'transparent';
+  canvas.style.display = 'block';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  var stub = createInertRendererLike();
+  // 下面这几个必须给真值：拿桩当数值用会变成 0 / NaN（NaN 一旦进 uniform 就是整行消失那一类问题）
+  stub.domElement = canvas;
+  stub.domElementIsInertStub = true;
+  stub.getPixelRatio = function () { return 1; };
+  stub.getSize = function (target) {
+    if (target && typeof target.set === 'function') { target.set(innerWidth, innerHeight); return target; }
+    return { width: innerWidth, height: innerHeight };
+  };
+  stub.getContext = function () { return createInertRendererLike(); };
+  stub.capabilities = { isWebGL2: false, isWebGL1: false, getMaxAnisotropy: function () { return 1; } };
+  stub.info = { render: { calls: 0, triangles: 0 }, memory: { geometries: 0, textures: 0 }, programs: [], autoReset: true };
+  stub.setSize = function () {};
+  stub.setPixelRatio = function () {};
+  stub.setClearColor = function () {};
+  stub.setClearAlpha = function () {};
+  stub.clear = function () {};
+  stub.render = function () {};
+  stub.compile = function () {};
+  stub.dispose = function () {};
+  if (host && host.appendChild) host.appendChild(canvas);
+  return stub;
+}
+
+var rendererUnavailableReason = '';
+var renderer = (function createMineradioRenderer() {
+  try {
+    var real = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
+    real.setClearColor(0x000000, 0);
+    real.setPixelRatio(getRenderPixelRatio());
+    real.setSize(innerWidth, innerHeight);
+    real.domElement.style.background = 'transparent';
+    real.domElement.style.display = 'block';
+    real.domElement.style.width = '100%';
+    real.domElement.style.height = '100%';
+    real.domElement.tabIndex = 0;
+    var host = document.getElementById('canvas-container');
+    if (host) host.appendChild(real.domElement);
+    return real;
+  } catch (rendererErr) {
+    rendererUnavailableReason = (rendererErr && rendererErr.message) || String(rendererErr);
+    console.error('[renderer] WebGL 不可用，已降级为惰性桩（3D 舞台失效，其余功能继续）:', rendererUnavailableReason);
+    try {
+      window.__mineradioRendererUnavailable = rendererUnavailableReason;
+      document.body.classList.add('mineradio-no-webgl');
+    } catch (_) {}
+    return createInertRendererStub(document.getElementById('canvas-container'));
+  }
+})();
 

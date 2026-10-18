@@ -95,6 +95,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 ### 架构与工程
 
 - **模块化架构重构**：单文件 `index.html` 巨石拆分为 69 个按领域划分的模块（01-scene ~ 10-shell），`index-loader.js` 并行 fetch 加载。
+- **合并求值链的 fail-open 兜底**：125 个模块合并成**单个** script 求值（保留跨文件函数提升），代价是顶层任何未捕获异常都会带走其后全部模块。为此 `new THREE.WebGLRenderer` 已改为 try/catch + 惰性渲染器桩（WebGL 不可用时仍能进主界面，`body.mineradio-no-webgl` 标记降级），开屏计时起点与点击进入也不再依赖模块后段的初始化是否执行过。
 - **三层懒加载架构**：主进程重模块（Wallpaper Engine、Spotify、汽水本地会话）首次 IPC 按需加载，服务端音源模块首次调用才 require，前端模块分两波注入（boot 必需 + 延迟波），显著加快冷启动。
 - **原生 C++ BPM 分析模块**：`native/mineradio-bpm` 提供节拍 / 能量分析加速（可选，带纯 JS 回退）。
 - **DPAPI 凭据加密**：登录 cookie 通过 Windows DPAPI 加密存储在用户数据目录，仓库内不含任何账号信息。

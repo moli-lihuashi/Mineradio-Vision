@@ -11,6 +11,8 @@ var PLAYLIST_DETAIL_VIRTUAL_OVERSCAN = 7;
 var PLAYLIST_DETAIL_OUTER_CHROME_HEIGHT = 142;
 var PLAYLIST_DETAIL_OUTER_FOOTER_HEIGHT = 44;
 var playlistPanelDetailVirtualState = { raf: 0 };
+// 内置歌单详情分页大小（主进程 page() 上限 500，这里取一屏多一点）
+var BUILT_IN_PLAYLIST_PAGE_SIZE = 96;
 // 队列虚拟化：行高 ≈ padding+封面+gap（.queue-list gap:6 / .queue-item ~54）
 var QUEUE_ROW_STEP = 60;
 var QUEUE_VIRTUAL_OVERSCAN = 8;

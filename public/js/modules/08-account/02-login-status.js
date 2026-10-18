@@ -118,7 +118,8 @@ async function refreshLoginStatus(force) {
       if (typeof maybeRestorePlaybackSessionAfterLogin === 'function') maybeRestorePlaybackSessionAfterLogin();
     } else {
       var neteasePlaylists = [];
-      userPlaylists = qqPlaylists.concat(kugouPlaylists || [], qishuiPlaylists || [], spotifyPlaylists || []);
+      // 内置歌单不随网易云登录态清空
+      userPlaylists = (builtInPlaylists || []).concat(qqPlaylists, kugouPlaylists || [], qishuiPlaylists || [], spotifyPlaylists || []);
       playlistCatalogRevision += 1;
       myPodcastCollections = [];
       myPodcastItems = {};

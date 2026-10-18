@@ -15,7 +15,12 @@ var splashTimer = null;
 var reduceSplashMotion = false;
 var splashReadyToEnter = false;
 var splashPendingEnter = false;
-var splashShownAt = 0;
+// 必须是「模块求值那一刻」，不能留 0。
+// 这个值原本只在 initSplashDomBindings()（本文件后段）里赋值；一旦那个函数因为合并 script
+// 顶层中断而没被调用（见 01-scene/00-renderer-quality.js 的说明），它就会一直是 0，
+// tryMarkSplashReadyFromBoot 算出的 elapsed 恒为 0 → 每 50ms 重试、永不出队
+// → 开屏进度停在 100%、点击无反应。已用 .workbuddy/harness/diag-splash-stuck.js 实测复现。
+var splashShownAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 // 树枝生长 + 粒子飘散专用状态
 var splashBranches = [];        // L 系统生成的树枝段数组
 var splashParticles = [];       // 从枝桠末端飘散的音符/星芒粒子
@@ -1122,13 +1127,23 @@ function dismissSplash() {
   }, 1180);
 }
 
-function markSplashReadyToEnter() {
+function markSplashReadyToEnter(degradedReason) {
   var s = document.getElementById('splash');
   if (!s || s.classList.contains('hide') || s.classList.contains('exiting')) return;
   markAppPerf('splash-ready');
   splashReadyToEnter = true;
   splashTimer = null;
   s.classList.add('ready');
+  if (degradedReason) {
+    // 降级必须可见：不能让用户对着一个「看起来正常」的 100% 猜为什么进不去/少了东西。
+    s.classList.add('degraded');
+    var labelEl = document.getElementById('splash-load-label');
+    if (labelEl) {
+      labelEl.textContent = window.__mineradioRendererUnavailable
+        ? '当前环境不支持 WebGL · 已降级'
+        : '主程序模块未加载完 · 已降级';
+    }
+  }
   s.setAttribute('role', 'button');
   s.setAttribute('tabindex', '0');
   s.setAttribute('aria-label', '点击进入 Mineradio');
@@ -1150,16 +1165,33 @@ function requestSplashEnterNow() {
   else splashPendingEnter = true;
 }
 
+// 主波注入本身也可能失败（模块 fetch 全挂 / 合并 script 在更早的模块里抛了未捕获异常）。
+// 若这时还无限 80ms 轮询 __mineradioCoreModulesReady，用户看到的就是「进度 100% 点不动」。
+var SPLASH_CORE_READY_MAX_WAIT_MS = 12000;
+
+function splashElapsedSinceShown() {
+  var shownAt = splashShownAt || splashStartedAt || 0;
+  // 连起始时刻都拿不到（模块被更早的中断连累）时不要再等，宁可放行进主界面
+  if (!shownAt) return Infinity;
+  return Math.max(0, (performance.now ? performance.now() : Date.now()) - shownAt);
+}
+
 function tryMarkSplashReadyFromBoot() {
   if (splashReadyToEnter) return;
   // 必须等 index-loader 注入完主波（__mineradioCoreModulesReady）才能给「点击进入」
   if (!window.__mineradioCoreModulesReady) {
+    var waited = splashElapsedSinceShown();
+    if (waited >= SPLASH_CORE_READY_MAX_WAIT_MS) {
+      console.warn('[splash] 主波 ' + SPLASH_CORE_READY_MAX_WAIT_MS + 'ms 内未就绪，降级放行');
+      markSplashReadyToEnter('core-not-ready');
+      return;
+    }
     if (splashTimer) clearTimeout(splashTimer);
     splashTimer = setTimeout(tryMarkSplashReadyFromBoot, 80);
     return;
   }
   var minMs = reduceSplashMotion ? 900 : 1500;
-  var elapsed = splashShownAt ? (performance.now() - splashShownAt) : 0;
+  var elapsed = splashElapsedSinceShown();
   if (elapsed < minMs) {
     if (splashTimer) clearTimeout(splashTimer);
     splashTimer = setTimeout(tryMarkSplashReadyFromBoot, Math.max(50, minMs - elapsed));
@@ -1168,32 +1200,42 @@ function tryMarkSplashReadyFromBoot() {
   markSplashReadyToEnter();
 }
 
-function initSplashDomBindings() {
-  updateVisualGuideButtonVisibility();
-  paintHomeLocalSnapshot();
-  var s = document.getElementById('splash');
-  if (!s) return;
-  markAppPerf('dom-content-loaded');
-  splashShownAt = performance.now();
-  armSplashSoundFallback();
-  prewarmHomeWallpaperPreview();
-  function requestSplashEnter() {
+// 顶层就绑点击/键盘：不依赖 initSplashDomBindings() 是否被执行过。
+// （那个函数在模块后段，历史上被合并 script 顶层中断连累时，用户点开屏完全没反应。）
+document.addEventListener('click', function (e) {
+  var t = e && e.target;
+  if (!t || !t.closest) return;
+  if (t.closest('#splash')) requestSplashEnterNow();
+}, true);
+document.addEventListener('keydown', function (e) {
+  if (!document.body || !document.body.classList.contains('splash-active')) return;
+  if (e.key === 'Enter' || e.code === 'Space') {
+    e.preventDefault();
     requestSplashEnterNow();
   }
-  s.addEventListener('click', requestSplashEnter);
-  document.addEventListener('keydown', function(e){
-    if (!document.body.classList.contains('splash-active')) return;
-    if (e.key === 'Enter' || e.code === 'Space') {
-      e.preventDefault();
-      requestSplashEnter();
-    }
-  });
+}, true);
+
+function initSplashDomBindings() {
+  var s = document.getElementById('splash');
+  // 顺序很关键：先定「开屏计时起点」并把最短时长的计时器排上，再去碰任何可能抛错的初始化。
+  // 反过来（原来是 paintHomeLocalSnapshot() 在最前）时，前面任何一次抛错都会让后面所有语句
+  // 都不执行 —— 计时器排不上，开屏就永远停在 100%。
+  splashShownAt = performance.now();
+  if (s) {
+    markAppPerf('dom-content-loaded');
+    if (reduceSplashMotion) s.classList.add('reduce-motion');
+  }
+  armSplashSoundFallback();
   // 最短展示：与进度条 minFillMs 对齐，保证能看见爬升
   var minMs = reduceSplashMotion ? 900 : 1500;
-  if (reduceSplashMotion) s.classList.add('reduce-motion');
-  playMineradioIntroSound();
   if (splashTimer) clearTimeout(splashTimer);
   splashTimer = setTimeout(tryMarkSplashReadyFromBoot, minMs);
+  // 点击/键盘进入已在模块顶层用 document 级委托绑好，这里不再重复绑。
+  // 以下都只是锦上添花，任何一项失败都不该影响「能不能进主界面」。
+  try { updateVisualGuideButtonVisibility(); } catch (e) { console.warn('[splash] guide button visibility failed:', e); }
+  try { paintHomeLocalSnapshot(); } catch (e) { console.warn('[splash] paintHomeLocalSnapshot failed:', e); }
+  try { prewarmHomeWallpaperPreview(); } catch (e) { console.warn('[splash] prewarm wallpaper failed:', e); }
+  try { playMineradioIntroSound(); } catch (_) {}
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initSplashDomBindings);
@@ -1269,7 +1311,11 @@ function bootstrapStartupLoginStatus() {
     typeof refreshQQLoginStatus === 'function' ? refreshQQLoginStatus({ forceVip: true, reason: 'startup' }) : Promise.resolve(null),
     typeof refreshKugouLoginStatus === 'function' ? refreshKugouLoginStatus() : Promise.resolve(null),
     typeof refreshQishuiLoginStatus === 'function' ? refreshQishuiLoginStatus() : Promise.resolve(null),
-    typeof refreshSpotifyLoginStatus === 'function' ? refreshSpotifyLoginStatus() : Promise.resolve(null)
+    typeof refreshSpotifyLoginStatus === 'function' ? refreshSpotifyLoginStatus() : Promise.resolve(null),
+    // 内置歌单与平台登录态并行拉：未登录也要能在面板/书架上看到自己的歌单
+    typeof refreshBuiltInPlaylists === 'function' ? refreshBuiltInPlaylists(false) : Promise.resolve(null),
+    // 持久化本地曲库：与登录态并行读索引；上次放的是本地曲目时在这里就把队列/进度恢复掉
+    typeof restorePersistedLocalLibrary === 'function' ? restorePersistedLocalLibrary() : Promise.resolve(false)
   ]);
   // Keep a named hook for 05-startup-bindings.js / guards.
   if (typeof ensureStartupQQVipRecheck === 'function') { /* already included above */ }

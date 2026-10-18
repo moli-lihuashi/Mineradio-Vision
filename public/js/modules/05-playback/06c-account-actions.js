@@ -419,68 +419,66 @@ function renderCollectModal() {
     '<div style="min-width:0"><div class="collect-title">' + escHtml(song.name || '当前歌曲') + '</div><div class="collect-sub">' + escHtml(song.artist || '') + '</div></div>';
   var provider = songAccountProvider(song);
   var adapter = songAccountAdapter(provider);
-  if (!adapter || !adapter.collect) {
-    list.innerHTML = '<div class="collect-empty">' + escHtml(songAccountUnsupportedMessage(provider, 'collect')) + '</div>';
-    return;
-  }
-  if (!isSongAccountLoggedIn(provider)) {
-    list.innerHTML = '<div class="collect-empty">登录' + escHtml(adapter.label) + '后显示你的歌单</div>';
-    return;
-  }
-  if (!userPlaylists.length) {
-    list.innerHTML = miniQueueSkeleton();
-    return;
-  }
-  var mine = userPlaylists.filter(function (pl) {
-    return playlistAccountProvider(pl) === provider && !pl.subscribed && !pl.virtual;
-  });
-  if (!mine.length) {
-    list.innerHTML = '<div class="collect-empty">还没有可写入的歌单</div>';
-    return;
-  }
-  collectModalPlaylists = mine;
-  list.innerHTML = collectModalRowsHtml(mine);
-  if (!list.__collectVirtualBound) {
-    list.__collectVirtualBound = true;
-    list.addEventListener('scroll', throttle(function(){
-      if (!collectModalPlaylists.length) return;
-      list.innerHTML = collectModalRowsHtml(collectModalPlaylists);
-    }, 16), { passive: true });
-  }
-  if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 12 });
-}
-var collectModalPlaylists = [];
-var COLLECT_ROW_STEP = 60;
-var COLLECT_VIRTUAL_OVERSCAN = 5;
-function collectModalRowsHtml(mine) {
-  mine = mine || [];
-  var list = document.getElementById('collect-list');
-  var viewport = Math.max(160, Number(list && list.clientHeight) || 260);
-  var scrollTop = Math.max(0, Number(list && list.scrollTop) || 0);
-  var start = Math.max(0, Math.floor(scrollTop / COLLECT_ROW_STEP) - COLLECT_VIRTUAL_OVERSCAN);
-  var maxRows = Math.ceil(viewport / COLLECT_ROW_STEP) + COLLECT_VIRTUAL_OVERSCAN * 2;
-  var end = Math.min(mine.length, start + maxRows);
-  start = Math.max(0, Math.min(start, Math.max(0, mine.length - maxRows)));
-  end = Math.min(mine.length, Math.max(end, start + maxRows));
-  var html = '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (start * COLLECT_ROW_STEP) + 'px"></div>';
-  html += mine.slice(start, end).map(function (pl) {
+  // 内置歌单分区：不依赖任何平台登录，本地歌曲（provider=local）也能收
+  var builtInRows = (builtInPlaylists || []).map(function (pl) {
     var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
-    return '<div class="collect-item" data-collect-pid="' + escAttr(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
-      (thumb ? imgTagFromSrc(thumb) : '<div class="cover-placeholder"></div>') +
-      '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (pl.trackCount || 0) + ' 首</div></div>' +
-    '</div>';
+    return '<div class="collect-item" data-collect-key="builtin:' + escHtml(String(pl.id || '')) + '" data-built-in-pid="' + escHtml(String(pl.id || '')) + '" onclick="addCollectTargetToBuiltInPlaylist(this.getAttribute(\'data-built-in-pid\'))">' +
+      (thumb ? imgTagFromSrc(thumb) : '<div class="cover-placeholder built-in">MR</div>') +
+      '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (pl.trackCount || 0) + ' 首 · 可混合全部平台</div></div>' +
+      '</div>';
   }).join('');
-  html += '<div class="queue-virtual-spacer" aria-hidden="true" style="height:' + (Math.max(0, mine.length - end) * COLLECT_ROW_STEP) + 'px"></div>';
-  return html;
+  var html = '<div class="collect-section-title"><span>Mineradio 内置歌单</span><small>保存在本机，不受平台账号限制</small></div>' +
+    (builtInRows || '<div class="collect-empty compact">还没有内置歌单，在上方输入名称即可创建</div>');
+  var canWritePlatform = !!(adapter && adapter.collect && adapter.playlistAddUrl && isSongAccountLoggedIn(provider));
+  if (canWritePlatform) {
+    var mine = userPlaylists.filter(function (pl) {
+      return playlistAccountProvider(pl) === provider && !pl.subscribed && !pl.virtual;
+    });
+    var platformCreateBtn = adapter.playlistCreateUrl
+      ? '<button type="button" class="fx-mini-btn ghost" onclick="createPlatformPlaylistFromCollect()">在' + escHtml(adapter.label) + '新建</button>'
+      : '';
+    html += '<div class="collect-section-title secondary"><span>同步到' + escHtml(adapter.label) + '</span>' + platformCreateBtn + '</div>' +
+      (mine.length
+        ? mine.map(function (pl) {
+            var thumb = pl.cover ? coverUrlWithSize(pl.cover, 80) : '';
+            return '<div class="collect-item" data-collect-key="platform:' + escHtml(String(pl.id || '')) + '" data-collect-pid="' + escHtml(String(pl.id || '')) + '" onclick="addCollectTargetToPlaylist(this.getAttribute(\'data-collect-pid\'))">' +
+              (thumb ? imgTagFromSrc(thumb) : '<div class="cover-placeholder"></div>') +
+              '<div style="min-width:0"><div class="collect-title">' + escHtml(pl.name || '') + '</div><div class="collect-sub">' + (pl.trackCount || 0) + ' 首</div></div>' +
+              '</div>';
+          }).join('')
+        : '<div class="collect-empty compact">没有可写入的歌单</div>');
+  } else if (adapter && adapter.label) {
+    html += '<div class="collect-empty compact">' + escHtml(songAccountUnsupportedMessage(provider, 'collect')) + '</div>';
+  }
+  list.innerHTML = html;
+  if (window.gsap) animateListItems(list, '.collect-item', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
 }
-function setCollectBusyPid(pid, busy) {
+function setCollectBusyPid(pid, busy, kind) {
   var list = document.getElementById('collect-list');
   if (!list) return;
+  var key = (kind || 'platform') + ':' + String(pid);
   list.querySelectorAll('.collect-item').forEach(function (item) {
-    item.classList.toggle('busy', !!busy && item.getAttribute('data-collect-pid') === String(pid));
+    item.classList.toggle('busy', !!busy && item.getAttribute('data-collect-key') === key);
   });
 }
+// 「创建」按钮 = 新建 Mineradio 内置歌单，并把当前歌曲直接收进去（不依赖平台登录）
 async function createPlaylistFromCollect() {
+  var input = document.getElementById('collect-new-name');
+  var name = input ? input.value.trim() : '';
+  if (!name) { showToast('先输入歌单名称'); return; }
+  if (typeof createBuiltInPlaylist !== 'function') { showToast('当前环境无法保存内置歌单'); return; }
+  try {
+    var created = await createBuiltInPlaylist(name, collectTargetSong);
+    if (!created) return;
+    if (input) input.value = '';
+    closeCollectModal();
+  } catch (err) {
+    console.warn('[BuiltInPlaylistCreateCollect]', err);
+    showToast('创建内置歌单失败');
+  }
+}
+// 平台账号内新建歌单（仅 netease / spotify 的 adapter 提供该能力）
+async function createPlatformPlaylistFromCollect() {
   var provider = songAccountProvider(collectTargetSong);
   var adapter = songAccountAdapter(provider);
   if (!adapter || !adapter.createPlaylist || !adapter.playlistCreateUrl) {
@@ -507,6 +505,25 @@ async function createPlaylistFromCollect() {
     if (pid && collectTargetSong) addCollectTargetToPlaylist(pid);
   } catch (err) {
     showToast('创建歌单失败');
+  }
+}
+// 收藏到内置歌单
+async function addCollectTargetToBuiltInPlaylist(pid) {
+  if (collectBusy || !collectTargetSong || !pid) return;
+  if (typeof addTrackToBuiltInPlaylist !== 'function') { showToast('当前环境无法保存内置歌单'); return; }
+  collectBusy = true;
+  setCollectBusyPid(pid, true, 'builtin');
+  updateLikeButtons();
+  try {
+    var added = await addTrackToBuiltInPlaylist(pid, collectTargetSong);
+    if (added) closeCollectModal();
+  } catch (err) {
+    console.warn('[BuiltInPlaylistCollect]', err);
+    showToast('加入内置歌单失败');
+  } finally {
+    collectBusy = false;
+    setCollectBusyPid(pid, false, 'builtin');
+    updateLikeButtons();
   }
 }
 function collectResultMessage(r) {

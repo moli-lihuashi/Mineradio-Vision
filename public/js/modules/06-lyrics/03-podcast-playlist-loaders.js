@@ -75,27 +75,44 @@ async function loadPodcastRadioIntoQueue(id, autoplay, title) {
     hideLoading();
   }
 }
+// 内置歌单：主进程分页拉完整套曲目进队列（歌单上限 5000 首，按 500/页拉完）
+async function loadAllBuiltInPlaylistTracks(id) {
+  if (typeof builtInPlaylistTracksPage !== 'function') throw new Error('BUILT_IN_PLAYLIST_UNAVAILABLE');
+  var all = [];
+  var offset = 0;
+  for (var guard = 0; guard < 32; guard++) {
+    var page = await builtInPlaylistTracksPage(id, { limit: 500, offset: offset });
+    if (!page || page.ok !== true) throw new Error((page && page.error) || 'BUILT_IN_PLAYLIST_READ_FAILED');
+    all = all.concat(page.tracks || []);
+    offset = Number(page.nextOffset) || (offset + (page.tracks || []).length);
+    if (!page.hasMore || !(page.tracks || []).length) break;
+  }
+  return all;
+}
 async function loadPlaylistIntoQueueById(id, autoplay, title) {
   if (!id) return;
   prepareLeaveHomeForPlayback();
   updateEmptyHomeVisibility();
   showLoading();
   var idText = String(id || '');
+  var builtInPlaylistId = idText.indexOf('mineradio:') === 0 ? idText.slice('mineradio:'.length) : '';
   var qqPlaylistId = idText.indexOf('qq:') === 0 ? idText.slice(3) : '';
   var kugouPlaylistId = idText.indexOf('kugou:') === 0 ? idText.slice(6) : '';
   var qishuiPlaylistId = idText.indexOf('qishui:') === 0 ? idText.slice(7) : '';
   var spotifyPlaylistId = idText.indexOf('spotify:') === 0 ? idText.slice(8) : '';
   var r = null;
   try {
-    r = qqPlaylistId
-      ? await apiJson('/api/qq/playlist/tracks?id=' + encodeURIComponent(qqPlaylistId))
-      : (kugouPlaylistId
-        ? await apiJson('/api/kugou/playlist/tracks?id=' + encodeURIComponent(kugouPlaylistId))
-        : (qishuiPlaylistId
-          ? await apiJson('/api/qishui/playlist/tracks?id=' + encodeURIComponent(qishuiPlaylistId))
-          : (spotifyPlaylistId
-            ? await apiJson('/api/spotify/playlist/tracks?id=' + encodeURIComponent(spotifyPlaylistId))
-            : await apiJson('/api/playlist/tracks?id=' + encodeURIComponent(id)))));
+    r = builtInPlaylistId
+      ? { tracks: await loadAllBuiltInPlaylistTracks(builtInPlaylistId) }
+      : (qqPlaylistId
+        ? await apiJson('/api/qq/playlist/tracks?id=' + encodeURIComponent(qqPlaylistId))
+        : (kugouPlaylistId
+          ? await apiJson('/api/kugou/playlist/tracks?id=' + encodeURIComponent(kugouPlaylistId))
+          : (qishuiPlaylistId
+            ? await apiJson('/api/qishui/playlist/tracks?id=' + encodeURIComponent(qishuiPlaylistId))
+            : (spotifyPlaylistId
+              ? await apiJson('/api/spotify/playlist/tracks?id=' + encodeURIComponent(spotifyPlaylistId))
+              : await apiJson('/api/playlist/tracks?id=' + encodeURIComponent(id))))));
   } catch (e) {
     console.warn('[PlaylistLoadApi]', id, e);
     showToast('歌单加载失败');

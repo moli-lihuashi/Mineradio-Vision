@@ -29,11 +29,17 @@ function providerLabel(key) {
 }
 
 function normalizePlaylistProvider(provider) {
+  // 'mineradio' = Mineradio 内置歌单（主进程持久化、可混存五个平台歌曲）。
+  // 它不是真实音源，只在「歌单」域出现；歌曲的 provider 仍是各平台，所以这里
+  // 不能把它丢给 normalizeMusicProviderKey 归一成 netease（那会让歌单面板的
+  // key / 分组 / 详情接口全部打到网易云去）。
+  if (provider === 'mineradio') return 'mineradio';
   return normalizeMusicProviderKey(provider);
 }
 
 function playlistProviderLabel(provider) {
   provider = normalizePlaylistProvider(provider);
+  if (provider === 'mineradio') return 'MR';
   return provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : (provider === 'local' ? '本地' : 'NE'))));
 }
 
@@ -50,6 +56,8 @@ function playlistTracksEndpoint(provider, pid, params) {
   if (provider === 'kugou') return '/api/kugou/playlist/tracks?' + query;
   if (provider === 'qishui') return '/api/qishui/playlist/tracks?' + query;
   if (provider === 'spotify') return '/api/spotify/playlist/tracks?' + query;
+  // 内置歌单曲目在主进程（built-in-playlists.json），走 desktopWindow IPC，没有 HTTP 端点
+  if (provider === 'mineradio') return '';
   return '/api/playlist/tracks?' + query;
 }
 
@@ -236,6 +244,8 @@ function collectPlaylistEndpoint(provider) {
   if (provider === 'qishui') return '/api/qishui/playlist/collect';
   if (provider === 'spotify') return '/api/spotify/playlist/collect';
   if (provider === 'netease') return '/api/playlist/subscribe';
+  // 内置歌单没有平台订阅概念
+  if (provider === 'mineradio') return '';
   return '';
 }
 

@@ -162,6 +162,9 @@ var ENABLE_LYRIC_ROW_LAYERS = (function () {
 /** fail-open 后本会话不再进 track，避免切行又空白 */
 var STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = false;
 var userPlaylists = [], qqPlaylists = [], kugouPlaylists = [], qishuiPlaylists = [], spotifyPlaylists = [], myPodcastCollections = [], myPodcastItems = {}, playlistCoverCache = {};
+// 内置歌单库（Mineradio 本机歌单，主进程持久化，可混存五个平台歌曲）；加载去重 promise
+var builtInPlaylists = [];
+var builtInPlaylistLoadPromise = null;
 var playlistCatalogRevision = 0;
 var CUSTOM_COVER_STORE_KEY = 'mineradio-custom-covers';
 var CUSTOM_LYRIC_STORE_KEY = 'mineradio-custom-lyrics-v1';
@@ -222,6 +225,8 @@ var playbackQuality = readPlaybackQualityPreference();
 var qqPlaybackQualityCeiling = '';
 var coverCropState = null, coverCropBound = false;
 var currentLocalSong = null;
+// 持久化本地音乐库（desktop 主进程 mineradio-local:// 索引）的最近一次列表快照
+var persistentLocalLibraryTracks = [];
 var lyricSourceMode = 'original';
 var originalLyricsState = { lines: [], hasNativeKaraoke: false, timingSource: 'none', translationLines: [], translationSource: 'none' };
 var localBeatAnalysis = { song:null, audioUrl:'', mode:'mr', active:false, token:0 };

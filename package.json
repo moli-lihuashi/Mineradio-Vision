@@ -111,6 +111,7 @@
   },
   "dependencies": {
     "NeteaseCloudMusicApi": "^4.32.0",
+    "music-metadata": "11.14.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
@@ -120,6 +121,7 @@
   },
   "overrides": {
     "axios": "1.18.1",
-    "body-parser": "1.20.6"
+    "body-parser": "1.20.6",
+    "music-metadata": "11.14.0"
   }
 }

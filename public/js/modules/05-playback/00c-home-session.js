@@ -581,6 +581,14 @@ async function applyPlaybackSession(session, opts) {
   opts = opts || {};
   if (!session || !session.song) return false;
   if (!opts.force && currentIdx >= 0 && playing) return false;
+  // 本地曲目：换回持久化曲库里的 mineradio-local:// 实时地址再恢复
+  if (typeof isLocalSessionSong === 'function' && isLocalSessionSong(session.song)) {
+    session = (typeof rehydrateLocalSession === 'function' ? rehydrateLocalSession(session) : null) || session;
+    if (!session || !session.song || !session.song.localUrl) {
+      if (typeof showToast === 'function') showToast('本地文件已不在曲库中，请重新导入');
+      return false;
+    }
+  }
   var queue = Array.isArray(session.queue) && session.queue.length ? session.queue.map(cloneSong) : [cloneSong(session.song)];
   var idx = clampRange(Number(session.currentIdx) || 0, 0, queue.length - 1);
   playQueue = queue;
@@ -608,7 +616,12 @@ async function applyPlaybackSession(session, opts) {
 async function restorePlaybackSessionIfAvailable() {
   if (playbackSessionRestoreAttempted) return false;
   playbackSessionRestoreAttempted = true;
-  return applyPlaybackSession(readPlaybackSession(), { toast: true });
+  var session = readPlaybackSession();
+  // 本地会话交给 restorePersistedLocalLibrary（启动时已跑），别用死 blob 地址去放
+  if (session && session.song && (session.song.type === 'local' || session.song.source === 'local' || session.song.localKey || session.song.localFileId)) {
+    return false;
+  }
+  return applyPlaybackSession(session, { toast: true });
 }
 function maybeRestorePlaybackSessionAfterLogin() {
   restorePlaybackSessionIfAvailable();

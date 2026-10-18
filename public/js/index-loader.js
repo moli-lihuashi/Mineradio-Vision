@@ -143,6 +143,7 @@
     'js/modules/05-playback/10-queue-content-fingerprint.js',
     // lyrics / playlists
     'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
+    'js/modules/06-lyrics/00-built-in-playlists.js',
     'js/modules/06-lyrics/01-playlist-panel-shell.js',
     'js/modules/06-lyrics/02-playlist-detail.js',
     'js/modules/06-lyrics/03-podcast-playlist-loaders.js',

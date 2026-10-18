@@ -245,7 +245,8 @@ async function doLogout() {
   loginStatus = { loggedIn: false };
   if (!hasPlatformLogin('netease') || !hasPlatformLogin('qq') || !hasPlatformLogin('kugou') || !hasPlatformLogin('spotify')) dualAccountMode = false;
   activeAccountProvider = firstLoggedProvider();
-  userPlaylists = qqPlaylists.concat(kugouPlaylists).concat(qishuiPlaylists).concat(spotifyPlaylists);
+  // 内置歌单不随登出清空
+  userPlaylists = (builtInPlaylists || []).concat(qqPlaylists).concat(kugouPlaylists).concat(qishuiPlaylists).concat(spotifyPlaylists);
   myPodcastCollections = [];
   myPodcastItems = {};
   likedSongMap = {};

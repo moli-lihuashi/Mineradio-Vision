@@ -313,6 +313,11 @@ function restoreLastPlaybackSnapshot() {
   if (restoredLastPlaybackSnapshot) return false;
   var snapshot = (typeof readPlaybackSession === 'function') ? readPlaybackSession() : null;
   if (!snapshot || !snapshot.song) return false;
+  // 本地曲目由 restorePersistedLocalLibrary 统一恢复：会话里只存了 localKey，
+  // blob URL 活不过重启，必须回主进程曲库换 mineradio-local:// 实时地址后再放。
+  if (snapshot.song.type === 'local' || snapshot.song.source === 'local' || snapshot.song.localKey || snapshot.song.localFileId) {
+    return false;
+  }
   restoredLastPlaybackSnapshot = snapshot;
   // 防止后续登录动作触发重复恢复
   try { if (typeof playbackSessionRestoreAttempted !== 'undefined') playbackSessionRestoreAttempted = true; } catch (e) { }

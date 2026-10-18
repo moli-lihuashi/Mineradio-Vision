@@ -4,6 +4,11 @@
 async function fetchLyric(songOrId, token) {
   try {
     var song = (songOrId && typeof songOrId === 'object') ? songOrId : null;
+    // 本地曲库曲目：歌词走主进程索引按需读取，不打平台歌词接口
+    if (song && (song.type === 'local' || song.source === 'local' || song.localUrl)) {
+      if (typeof applyLocalTrackLyricOnDemand === 'function') applyLocalTrackLyricOnDemand(song, token);
+      return;
+    }
     var cached = song ? await readPersistentLyricCache(song) : null;
     if (token !== trackSwitchToken) return;
     if (cached) {

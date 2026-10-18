@@ -25,6 +25,8 @@ function skipLoginAndFocusSearch() {
 function openHomeLocalImport() {
   prepareLeaveHomeForPlayback();
   updateEmptyHomeVisibility();
+  // 曲库非空直接排队播放（重启后不用重新选文件）；空库才开文件选择器
+  if (typeof loadPersistedLocalLibraryIntoQueue === 'function' && loadPersistedLocalLibraryIntoQueue()) return;
   var input = document.getElementById('file-input');
   if (input) input.click();
 }

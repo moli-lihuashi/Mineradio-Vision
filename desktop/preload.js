@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 let cachedApiToken = '';
 const apiTokenReady = ipcRenderer.invoke('mineradio-get-api-token').then((token) => {
@@ -99,6 +99,36 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   wasapiSetVolume: (volume) => ipcRenderer.invoke('mineradio-wasapi-set-volume', volume),
   wasapiWrite: (float32Interleaved) => {
     try { ipcRenderer.send('mineradio-wasapi-write', float32Interleaved); } catch (_) {}
+  },
+  // 内置歌单库（Mineradio 本机歌单，可混存五个平台的歌曲）
+  listBuiltInPlaylists: () => ipcRenderer.invoke('mineradio-built-in-playlists-list'),
+  readBuiltInPlaylist: (id, options) => ipcRenderer.invoke('mineradio-built-in-playlist-page', String(id || ''), options || {}),
+  createBuiltInPlaylist: (name) => ipcRenderer.invoke('mineradio-built-in-playlist-create', String(name || '')),
+  renameBuiltInPlaylist: (id, name) => ipcRenderer.invoke('mineradio-built-in-playlist-rename', String(id || ''), String(name || '')),
+  deleteBuiltInPlaylist: (id) => ipcRenderer.invoke('mineradio-built-in-playlist-delete', String(id || '')),
+  addBuiltInPlaylistTrack: (id, track) => ipcRenderer.invoke('mineradio-built-in-playlist-add-track', String(id || ''), track || {}),
+  removeBuiltInPlaylistTrack: (id, index) => ipcRenderer.invoke('mineradio-built-in-playlist-remove-track', String(id || ''), Number(index)),
+  reorderBuiltInPlaylistTrack: (id, fromIndex, toIndex) => ipcRenderer.invoke('mineradio-built-in-playlist-reorder-track', String(id || ''), Number(fromIndex), Number(toIndex)),
+  // 本地音乐库（用户主动导入的音频，经 mineradio-local:// 播放）
+  listLocalMusicLibrary: () => ipcRenderer.invoke('mineradio-local-library-list'),
+  readLocalMusicLyric: (localFileId) => ipcRenderer.invoke('mineradio-local-library-lyric', String(localFileId || '')),
+  importLocalMusicFiles: async (files) => {
+    const entries = [];
+    for (const file of Array.from(files || [])) {
+      let filePath = '';
+      try {
+        filePath = webUtils && typeof webUtils.getPathForFile === 'function' ? webUtils.getPathForFile(file) : '';
+      } catch (_) {}
+      if (!filePath) continue;
+      entries.push({
+        path: filePath,
+        relativePath: String((file && (file.webkitRelativePath || file.name)) || ''),
+      });
+    }
+    if (!entries.length) return { ok: false, count: 0, tracks: [], error: 'NO_AUTHORIZED_LOCAL_AUDIO' };
+    const authorization = await ipcRenderer.invoke('mineradio-local-library-authorize', { files: entries });
+    if (!authorization || authorization.ok !== true || !authorization.token) return authorization;
+    return ipcRenderer.invoke('mineradio-local-library-import', { token: authorization.token });
   },
   onStateChange: (callback) => {
     const listener = (_event, state) => callback(state);

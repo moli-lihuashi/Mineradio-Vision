@@ -54,14 +54,15 @@ function makeShelfManager() {
   }
 
   function currentItems() {
-    if (hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) {
+    // 内置歌单不依赖平台登录：未登录也要出现在 3D 架上
+    if ((hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) || builtInPlaylists.length) {
       var source = activePlaylists();
       var items = source.map(function(pl){
-        var provider = pl.provider === 'qq' ? 'qq' : (pl.provider === 'kugou' ? 'kugou' : (pl.provider === 'qishui' ? 'qishui' : (pl.provider === 'spotify' ? 'spotify' : 'netease')));
-        var sourceLabel = provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : 'NE')));
-        var idPrefix = provider === 'qq' ? 'qq:' : (provider === 'kugou' ? 'kugou:' : (provider === 'qishui' ? 'qishui:' : (provider === 'spotify' ? 'spotify:' : '')));
+        var provider = pl.provider === 'qq' ? 'qq' : (pl.provider === 'kugou' ? 'kugou' : (pl.provider === 'qishui' ? 'qishui' : (pl.provider === 'spotify' ? 'spotify' : (pl.provider === 'mineradio' ? 'mineradio' : 'netease'))));
+        var sourceLabel = provider === 'qq' ? 'QQ' : (provider === 'kugou' ? 'KG' : (provider === 'qishui' ? 'QS' : (provider === 'spotify' ? 'SP' : (provider === 'mineradio' ? 'MR' : 'NE'))));
+        var idPrefix = provider === 'qq' ? 'qq:' : (provider === 'kugou' ? 'kugou:' : (provider === 'qishui' ? 'qishui:' : (provider === 'spotify' ? 'spotify:' : (provider === 'mineradio' ? 'mineradio:' : ''))));
         return { type:'playlist', title: pl.name, sub:sourceLabel + ' · ' + (pl.trackCount||0)+' 首 · 播放 '+compactCount(pl.playCount||0),
-          cover: pl.cover || '', tag: pl.subscribed ? '收藏歌单' : (provider === 'qishui' ? '汽水歌单' : '我的歌单'), playlistId: idPrefix + pl.id, provider: provider };
+          cover: pl.cover || '', tag: pl.builtin ? '内置歌单' : (pl.subscribed ? '收藏歌单' : (provider === 'qishui' ? '汽水歌单' : '我的歌单')), playlistId: idPrefix + pl.id, provider: provider };
       });
       if (shelfShowsPodcasts() && (shelfPane === 'mine' || shelfMergesCollections()) && myPodcastCollections.length) {
         myPodcastCollections.forEach(function(pc){
@@ -574,7 +575,7 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
   }
 
   function sig(items) {
-    if (hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) {
+    if ((hasAnyPlatformLogin() && (userPlaylists.length || myPodcastCollections.length)) || builtInPlaylists.length) {
       var source = activePlaylists();
       items = items || currentItems();
       var sampleItems = items.slice(0, 3).concat(items.slice(Math.max(3, items.length - 3)));
