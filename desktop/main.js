@@ -190,6 +190,11 @@ const SPOTIFY_LOGIN_URL = 'https://accounts.spotify.com/authorize';
 const CHROMIUM_PERFORMANCE_SWITCHES = [
   ['autoplay-policy', 'no-user-gesture-required'],
   ['ignore-gpu-blocklist'],
+  // Chromium 129+ 起，无 GPU 环境（远程桌面会话 / 虚拟机 / 驱动被屏蔽）不再自动
+  // 回退 SwiftShader 软件 WebGL，`new THREE.WebGLRenderer()` 直接 throw：
+  // 主舞台靠 00-renderer-quality 的惰性桩兜住，但场景轮播只能降级成扁平列表。
+  // 显式允许软件回退：有 GPU 的机器不受影响，无 GPU 的机器至少能跑轻量 3D。
+  ['enable-unsafe-swiftshader'],
   ['enable-gpu-rasterization'],
   ['enable-oop-rasterization'],
   ['enable-zero-copy'],
