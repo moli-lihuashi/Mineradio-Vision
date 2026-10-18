@@ -1,4 +1,4 @@
-const { fs, os, path, vm, spawnSync, appRoot, rel, fail, logStep, walk, forbiddenPattern, runElectron, jsCheckFiles, runNodeSyntaxCheck } = require('./helpers');
+const { fs, os, path, vm, spawnSync, appRoot, rel, fail, logStep, walk, forbiddenPattern, runElectron, jsCheckFiles, runNodeSyntaxCheck, readQishuiSources, readKugouSources, readServerEntrySources } = require('./helpers');
 
 function checkMainWindowChrome() {
   logStep('Main window chrome guard');
@@ -1143,7 +1143,7 @@ function checkLyricVerticalFloatToggleGuard() {
 
 function checkQishuiProviderGuard() {
   logStep('Qishui provider guard');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
+  const qishuiText = readQishuiSources();   // 族内全部文件（qishui-api.js + server/qishui/*.js）
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
   const coreStoreText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '00-core-stores.js'), 'utf8');
@@ -2013,7 +2013,7 @@ function checkSearchGlassEntranceGuard() {
 function checkProviderEntitlementBoundaryGuard() {
   logStep('Provider entitlement boundary guard');
   const kugouText = fs.readFileSync(path.join(appRoot, 'kugou-api.js'), 'utf8');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
+  const qishuiText = readQishuiSources();   // 族内全部文件（qishui-api.js + server/qishui/*.js）
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
   const loginText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '02-login-status.js'), 'utf8');
@@ -2066,7 +2066,10 @@ function checkProviderEntitlementBoundaryGuard() {
 
 function checkQQVipStatusSyncGuard() {
   logStep('QQ VIP status refresh guard');
-  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
+  // 2026-10-18 服务端拆分第 8 块：QQ 协议族（fetchQQVipStatus / normalizeQQVipPayload /
+  // QQ_*_TIMEOUT_MS 预算常量等）搬进 server/lib/qq-content.js 与 server/lib/qq-session.js。
+  // 本守卫的断言语义是「这些能力还在服务端代码里」，不是「还在 server.js 里」→ 按族读。
+  const serverText = readServerEntrySources(appRoot);
   const vipModuleText = fs.readFileSync(path.join(appRoot, 'qq-vip-api.js'), 'utf8');
   const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
   const preloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
@@ -2398,7 +2401,10 @@ function checkKugouCloudlistIdentityGuard() {
   // 2026-08-29 20017 事故守卫：cloudlist 必须走 lite 客户端身份专用通道 + dfid 注册，
   // server.js 侧不得再出现标准版身份常量。详见 docs/PROJECT_MEMORY.md 同日条目。
   logStep('Kugou cloudlist identity guard');
-  const kugouApiText = fs.readFileSync(path.join(appRoot, 'kugou-api.js'), 'utf8');
+  // 2026-10-18 插件族拆分：kugou-api.js 退化为门面（require + 导出表），实现搬进 server/kugou/*.js。
+  // 本守卫的语义是「这些身份常量 / 调用形态还在代码里」，不是「还在第几行」，
+  // 所以按族读整份拼接文本（与 readQishuiSources() 同一套做法）。文件名排序固定拼接顺序。
+  const kugouApiText = readKugouSources(appRoot);
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const endpoints = ['v7/get_all_list', 'v4/get_list_all_file', 'v6/add_song', 'v4/delete_songs'];
   endpoints.forEach((endpoint) => {
@@ -2409,17 +2415,27 @@ function checkKugouCloudlistIdentityGuard() {
       fail('/' + endpoint + ' must not bypass kugouCloudlistRequest (standard identity returns 20017)');
     }
   });
-  if (!/const KUGOU_LITE_APPID = '3116'/.test(kugouApiText)) fail('kugou-api.js must pin the lite appid 3116 (session signing identity)');
-  if (!/const KUGOU_LITE_CLIENTVER = '11440'/.test(kugouApiText)) fail('kugou-api.js must pin the lite clientver 11440');
-  if (!/LnT6xpN3khm36zse0QzvmgTZ3waWdRSA/.test(kugouApiText)) fail('lite android salt missing from kugou-api.js');
+  if (!/const KUGOU_LITE_APPID = '3116'/.test(kugouApiText)) fail('kugou-api.js family must pin the lite appid 3116 (session signing identity)');
+  if (!/const KUGOU_LITE_CLIENTVER = '11440'/.test(kugouApiText)) fail('kugou-api.js family must pin the lite clientver 11440');
+  if (!/LnT6xpN3khm36zse0QzvmgTZ3waWdRSA/.test(kugouApiText)) fail('lite android salt missing from kugou-api.js family');
   if (!/QDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27/.test(kugouApiText)) {
     fail('device registration must use the lite RSA public key (standard key yields 20010 rsa failure)');
   }
   if (/OIlwieks28dk2k092lksi2UIkp/.test(serverText)) fail('standard android salt must not reappear in server.js (identity drift)');
   if (/DIAG7QOELSYoIJvTFJhMpe1s/.test(serverText)) fail('standard RSA key must not reappear in server.js (identity drift)');
-  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源
-  if (!/KUGOU_LITE_APPID/.test(serverText) || !/KUGOU_ID\.APPID/.test(serverText)) {
-    fail('server.js must reuse the lite identity constants from kugou-api.js (KUGOU_ID getters)');
+  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源。
+  // 2026-10-18 服务端拆分（"只搬不改"）把用到 KUGOU_ID.* 的逻辑整体搬进了 server/lib/*.js，
+  // server.js 只剩 getter 定义，所以使用点要在「server.js + server/lib」整体范围内找。
+  const kugouIdUserTexts = [serverText];
+  const serverLibDir = path.join(appRoot, 'server', 'lib');
+  if (fs.existsSync(serverLibDir)) {
+    fs.readdirSync(serverLibDir).filter((name) => name.endsWith('.js')).forEach((name) => {
+      kugouIdUserTexts.push(fs.readFileSync(path.join(serverLibDir, name), 'utf8'));
+    });
+  }
+  const kugouIdUsers = kugouIdUserTexts.join('\n');
+  if (!/KUGOU_LITE_APPID/.test(serverText) || !/KUGOU_ID\.APPID/.test(kugouIdUsers)) {
+    fail('server.js (or server/lib/*) must reuse the lite identity constants from kugou-api.js (KUGOU_ID getters)');
   }
   if (!/setKugouDfidPersistHook\(/.test(serverText)) fail('server.js must register the dfid persist hook (avoid per-launch device registration)');
   // 2026-08-31：dfid 死门控回归 — WithCloudlistDevice 必须无条件 ensure，不得再依赖未设置的 opts.router
@@ -2461,6 +2477,61 @@ function checkNonCurrentAudioPrefetchGuard() {
     fail('runQueueBeatPrefetch must also be guarded when an old timer fires');
   }
   console.log('[OK] Non-current audio URL prefetch stays disabled by default.');
+}
+
+function checkSplashBootGuard() {
+  logStep('Splash boot / WebGL fail-open guard');
+  const rendererText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-scene', '00-renderer-quality.js'), 'utf8');
+  const splashText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '10-shell', '01-splash-and-boot.js'), 'utf8');
+  const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'index-loader.js'), 'utf8');
+
+  // 125 个模块合并成【单个】script 求值（为了跨文件 function 提升）。代价是：
+  // 任何一行顶层未捕获异常都会把它之后的全部模块一起带走，只留下被提升的函数声明。
+  // renderer 创建是这条链上最典型的爆点 —— WebGL 不可用时 THREE 直接 throw。
+  if (/(^|\n)\s*var renderer = new THREE\.WebGLRenderer\(/.test(rendererText)) {
+    fail('renderer creation must not be a bare top-level statement: one throw aborts every module after it (splash then hangs at 100%)');
+  }
+  if (!/try \{\s*\r?\n\s*var real = new THREE\.WebGLRenderer\(/.test(rendererText)) fail('renderer creation must be wrapped in try/catch');
+  if (!/catch \(rendererErr\)/.test(rendererText)) fail('renderer creation must catch WebGL failures explicitly');
+  if (!/function createInertRendererStub\(/.test(rendererText)) {
+    fail('WebGL failure must degrade to an inert renderer stub — null breaks the 89 renderer.* call sites');
+  }
+  if (!/domElementIsInertStub = true/.test(rendererText)) fail('inert renderer stub must expose the domElementIsInertStub marker so tests can tell it apart');
+  if (!/__mineradioRendererUnavailable/.test(rendererText) || !/mineradio-no-webgl/.test(rendererText)) {
+    fail('renderer fallback must leave a visible trace (window.__mineradioRendererUnavailable + body.mineradio-no-webgl)');
+  }
+
+  // 注释里也会出现同样的字面量（解释历史 bug 时必然要引用），所以先剥掉行注释再断言，
+  // 否则守卫会被自己的说明文字骗过去。
+  const splashCode = splashText.replace(/^\s*\/\/.*$/gm, '');
+
+  // 开屏的时间门禁不能把「还没开始」当成 elapsed=0，否则 50ms 轮询永不出队。
+  if (/var splashShownAt = 0;/.test(splashCode)) fail('splashShownAt must be initialised at module evaluation, not 0');
+  if (!/var splashShownAt = \(typeof performance/.test(splashCode)) fail('splashShownAt must capture performance.now() when the module is evaluated');
+  if (/splashShownAt \? \(performance\.now\(\) - splashShownAt\) : 0/.test(splashCode)) {
+    fail('splash gate must not treat a missing splashShownAt as elapsed=0 (that is the infinite-retry deadlock)');
+  }
+  if (!/function splashElapsedSinceShown\(/.test(splashCode)) fail('splash elapsed helper is missing');
+  if (!/SPLASH_CORE_READY_MAX_WAIT_MS/.test(splashCode) || !/markSplashReadyToEnter\('core-not-ready'\)/.test(splashCode)) {
+    fail('splash must cap the wait for __mineradioCoreModulesReady and degrade open instead of polling forever');
+  }
+  // 点击进入不能只绑在 initSplashDomBindings() 里 —— 那个函数在模块后段，
+  // 顶层一旦中断它就永不执行，用户点开屏完全没反应（实测如此）。
+  if (!/closest\('#splash'\)/.test(splashCode)) fail('splash click must be bound at module top level via document delegation');
+  if (/s\.addEventListener\('click', requestSplashEnter\)/.test(splashCode)) fail('splash click is still only bound inside initSplashDomBindings');
+  // initSplashDomBindings 内部：先定起点 + 排计时器，再去碰可能抛错的初始化
+  const initIdx = splashCode.indexOf('function initSplashDomBindings()');
+  const shownIdx = initIdx < 0 ? -1 : splashCode.indexOf('splashShownAt = performance.now();', initIdx);
+  const paintIdx = initIdx < 0 ? -1 : splashCode.indexOf('try { paintHomeLocalSnapshot(); }', initIdx);
+  if (initIdx < 0 || shownIdx < 0 || paintIdx < 0) fail('initSplashDomBindings shape changed unexpectedly');
+  else if (shownIdx > paintIdx) {
+    fail('initSplashDomBindings must arm the min-duration timer before any fallible init (paintHomeLocalSnapshot can throw on a broken stage)');
+  }
+
+  // loader 侧保留「显示值爬到 100」的兜底，且 main-loop 不能被开屏挡住
+  if (!/minFillMs \+ 400/.test(loaderText)) fail('index-loader lost its splash progress safety window');
+  if (!/typeof window\.tryMarkSplashReadyFromBoot === 'function'/.test(loaderText)) fail('index-loader must hand off to tryMarkSplashReadyFromBoot after reaching 100%');
+  console.log('[OK] renderer creation fails open, splash timing has no zero-start deadlock, and click-to-enter is bound at module top level.');
 }
 
 function checkMusicalProfileGuard() {
@@ -3122,5 +3193,5 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
 }
 
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
 };

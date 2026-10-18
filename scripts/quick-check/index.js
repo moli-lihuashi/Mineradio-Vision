@@ -1,7 +1,7 @@
 const { appRoot, runElectron, jsCheckFiles, runNodeSyntaxCheck } = require('./helpers');
 const { runPlaybackAudioGraphRegressionCheck, runPlaybackSourceFallbackTransactionCheck, runQQVipEntitlementRegressionCheck, runLoginEasterEggGateRegressionCheck, runSpotifyApiResilienceRegressionCheck, runPlatformAccountSyncGuardCheck, runHomeDailyRecommendationRegressionCheck, runQishuiProviderDistributionRegressionCheck } = require('./regression-checks');
 const { parseCombinedIndexModules, scanForbiddenMarkers, checkDeferredEagerDependencyGuard, smokeCoreEvalNoReferenceError } = require('./module-parse');
-const { checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard } = require('./guards');
+const { checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard } = require('./guards');
 const { runElectronRuntimeCheck, runMainStartupRecoveryCheck } = require('./electron-runtime');
 
 // 酷狗修改版:以下 check 因模块拆分粒度不同(功能差异),跳过以避免误报。
@@ -31,7 +31,10 @@ const KUGOU_SKIP_CHECKS = new Set([
   'runQishuiProviderDistributionRegressionCheck',// qishui 功能,酷狗版无
   'checkQishuiProviderGuard',                    // 引用 qishui-api.js / 06-lyrics / 04-shelf 等作者路径
   'checkSpotifyProviderGuard',                   // 引用作者 spotify provider 路径
-  'checkQQVipStatusSyncGuard',                   // QQ VIP 状态同步
+  // checkQQVipStatusSyncGuard — 2026-10-18 已解绑：守卫本身读 server.js 单文件断言 QQ 协议族
+  // 符号，服务端拆分第 8 块把这些符号搬进 server/lib/qq-*.js 后守卫必红。现已改为族读
+  // （readServerEntrySources = server.js + server/lib/*.js），与 tests/qq-vip-entitlement 结论一致。
+  // 'checkQQVipStatusSyncGuard',                   // QQ VIP 状态同步
   // 批 2 排查结果(2026-08-07):18 项中仅 checkVolumeWheelStepGuard 解绑(路径OK+内容匹配);
   // 其余 17 项为功能差异 — JS 路径缺失(模块号在本版不存在)或功能未移植(期望函数全项目找不到)。
   'checkBackgroundTransparencyControlsGuard',      // 功能未移植:custom-bg-glass/backgroundGlassOpacity 等全项目不存在
@@ -52,6 +55,8 @@ const KUGOU_SKIP_CHECKS = new Set([
   'checkAudioOutputWorkflowPanelGuard',            // 内容不匹配:期望函数在 06-lyric-display 而非 00-api-quality
   // checkVolumeWheelStepGuard — 已解绑(2026-08-07):路径OK+adjustVolumeByWheel+step=0.01 匹配
   'checkNonCurrentAudioPrefetchGuard',             // 内容不匹配:QUEUE_BEAT_AUDIO_PREFETCH_ENABLED 不存在
+  'checkInternalBetaPackagingGuard',               // 本仓库不含 electron-builder.internal-beta.json(酷狗改版未提供内部测试包通道);
+                                                   // package.json 的 build:win:internal-beta 脚本属于残留,不是本次回归
 ]);
 
 async function main() {
@@ -103,6 +108,7 @@ async function main() {
   await maybe('checkVolumeWheelStepGuard', checkVolumeWheelStepGuard);
   await maybe('checkKugouCloudlistIdentityGuard', checkKugouCloudlistIdentityGuard);
   await maybe('checkNonCurrentAudioPrefetchGuard', checkNonCurrentAudioPrefetchGuard);
+  await maybe('checkSplashBootGuard', checkSplashBootGuard);
   await maybe('checkMusicalProfileGuard', checkMusicalProfileGuard);
   await maybe('checkCuefieldAutoMixGuard', checkCuefieldAutoMixGuard);
   await maybe('checkAlbumDetailGaplessGuard', checkAlbumDetailGaplessGuard);

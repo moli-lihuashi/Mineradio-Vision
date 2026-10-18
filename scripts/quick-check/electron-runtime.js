@@ -1,4 +1,4 @@
-const { fs, os, path, vm, spawnSync, appRoot, rel, fail, logStep } = require('./helpers');
+const { fs, os, path, vm, spawnSync, appRoot, rel, fail, logStep, readQishuiSources } = require('./helpers');
 
 function electronExecutable() {
   const exe = path.join(appRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
@@ -1749,7 +1749,7 @@ async function checkLargePlaylistVirtualizationGuard() {
   const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '03-podcast-playlist-loaders.js'), 'utf8');
   const shelfText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '01-manager-core.js'), 'utf8');
   const shelfContentText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '04-shelf', '03-content-list-manager.js'), 'utf8');
-  const qishuiText = fs.readFileSync(path.join(appRoot, 'qishui-api.js'), 'utf8');
+  const qishuiText = readQishuiSources();   // 族内全部文件（qishui-api.js + server/qishui/*.js）
   const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
   const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', 'index.css'), 'utf8');
 

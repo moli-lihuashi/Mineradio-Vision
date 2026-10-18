@@ -14,9 +14,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { readKugouSources, readServerEntrySources } = require('../scripts/quick-check/helpers');
+
 const appRoot = path.resolve(__dirname, '..');
-const kugouApiSource = fs.readFileSync(path.join(appRoot, 'kugou-api.js'), 'utf8');
+
+// 2026-10-18 插件族拆分：kugou-api.js 已退化成门面（require + 导出表），身份常量、
+// cloudlist 通道、设备注册全部搬进 server/kugou/*.js。本文件的断言语义是「这些常量
+// 与调用形态还在代码里」，不是「还在 kugou-api.js 这一个文件里」，所以按族读
+// （kugou-api.js + server/kugou/*.js，与 scripts/quick-check/guards.js 同一套做法）。
+//
+// serverSource 故意保持单文件：它守的是「server.js 自己不许硬编码标准身份」——
+// 标准 android 盐合法地存在于 server/kugou/config.js（非 cloudlist 通道要用），
+// 按族读会把这条否定断言变成恒假。
+const kugouApiSource = readKugouSources(appRoot);
 const serverSource = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
+const serverEntryFamilySource = readServerEntrySources(appRoot);
 
 const CLOUDLIST_ENDPOINTS = [
   'v7/get_all_list',
@@ -86,7 +98,8 @@ test('server.js cloudlist must delegate to kugou-api and not gateway-bypass get_
     /kugouGatewayRequest\(\s*['"]\/v7\/get_all_list['"]/,
     'server /v7/get_all_list must not bypass cloudlist channel',
   );
-  assert.match(serverSource, /kugouCloudlistRequest\('\/v7\/get_all_list'/);
+  // 调用点随实现搬进了 server/kugou/*，按族断言「get_all_list 只走 cloudlist 通道」。
+  assert.match(kugouApiSource, /kugouCloudlistRequest\('\/v7\/get_all_list'/);
 });
 
 test('device registration must exist, use the lite RSA key, and cover both response shapes', () => {
@@ -107,12 +120,16 @@ test('dfid registration infrastructure must be wired for persistence', () => {
 });
 
 test('server.js must reuse the lite identity from kugou-api.js with zero standard-identity drift', () => {
-  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源
+  // 懒加载后常量经 KUGOU_ID getter 转发，仍以 kugou-api.js 为唯一来源。
+  // getter 定义留在 server.js；使用点（KUGOU_ID.APPID 等）在服务端拆分后
+  // 随签名/请求代码搬进了 server/lib/kugou-protocol.js / kugou-service.js，
+  // 所以使用点要在 server.js + server/lib/*.js 范围内找（与 guards.js 同一判据）。
   assert.match(serverSource, /KUGOU_LITE_APPID/);
   assert.match(serverSource, /KUGOU_LITE_CLIENTVER/);
   assert.match(serverSource, /KUGOU_LITE_ANDROID_SALT/);
   assert.match(serverSource, /KUGOU_LITE_GATEWAY_UA/);
-  assert.match(serverSource, /KUGOU_ID\.(APPID|CLIENTVER|ANDROID_SIGN_KEY|ANDROID_UA|WEB_SIGN_KEY)/);
+  assert.match(serverEntryFamilySource, /KUGOU_ID\.(APPID|CLIENTVER|ANDROID_SIGN_KEY|ANDROID_UA|WEB_SIGN_KEY)/);
+  // 否定断言只守 server.js 自己：标准身份常量合法地存在于 server/kugou/config.js。
   assert.doesNotMatch(serverSource, new RegExp(STANDARD_ANDROID_SALT), 'standard android salt must not reappear in server.js');
   assert.doesNotMatch(serverSource, new RegExp(STANDARD_RSA_KEY_MARK), 'standard RSA key must not reappear in server.js');
 });

@@ -7,6 +7,21 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const qishui = require('../qishui-api');
 
+// 汽水模块族源码拼合：qishui-api.js + server/qishui/*.js。
+// 拆分后端点常量（related-media / song-tab）搬到了 server/qishui/config.js，
+// 下面的断言语义是「这个能力还在代码里」，不是「在第几行」——所以按族读。
+function readQishuiSources() {
+  const root = path.join(__dirname, '..');
+  const files = [path.join(root, 'qishui-api.js')];
+  const dir = path.join(root, 'server', 'qishui');
+  if (fs.existsSync(dir)) {
+    for (const name of fs.readdirSync(dir).sort()) {
+      if (name.endsWith('.js')) files.push(path.join(dir, name));
+    }
+  }
+  return files.filter((f) => fs.existsSync(f)).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+}
+
 function withHttpsMock(handler, task) {
   const original = https.request;
   https.request = function mockedRequest(targetUrl, options, callback) {
@@ -342,7 +357,7 @@ async function testPcAccountWritesAndComments() {
 }
 
 async function run() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'qishui-api.js'), 'utf8');
+  const source = readQishuiSources();
   assert(source.includes("'/api/luna/v1/platform/feed/related-media/'"));
   assert(source.includes("'/api/luna/v1/platform/feed/song-tab/'"));
   await testPcSearchAndPublicFallback();

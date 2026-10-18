@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const qqVip = require('../qq-vip-api');
+const { readServerEntrySources } = require('../scripts/quick-check/helpers');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -238,7 +239,12 @@ function testDesktopReauthCookieSelectionAndBudgets() {
   const mainSource = fs.readFileSync(path.join(ROOT, 'desktop/main.js'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(ROOT, 'desktop/preload.js'), 'utf8');
   const loginSource = fs.readFileSync(path.join(ROOT, 'public/js/modules/08-account/03-login-modal-flows.js'), 'utf8');
-  const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  // 2026-10-18 服务端拆分第 8 块（QQ 协议族）：内容层搬进 server/lib/qq-content.js、
+  // 会话层搬进 server/lib/qq-session.js。下面这些断言的语义都是「服务端代码里必须/不许
+  // 出现 X」（预算常量 6000/6200、membershipUnknown → vipSyncState、
+  // 禁止的 playbackVipEvidence / member-track-playback），所以按族读
+  // server.js + server/lib/*.js；只读 server.js 会变成假失败（肯定式）与恒真（否定式）。
+  const serverSource = readServerEntrySources(ROOT);
   const playbackSource = fs.readFileSync(path.join(ROOT, 'public/js/modules/05-playback/13-playback-start-audio.js'), 'utf8');
   const prefetchSource = fs.readFileSync(path.join(ROOT, 'public/js/modules/03-beat/00-tempo-worker-cache-prefetch.js'), 'utf8');
   const accountSource = fs.readFileSync(path.join(ROOT, 'public/js/modules/08-account/02-login-status.js'), 'utf8');
