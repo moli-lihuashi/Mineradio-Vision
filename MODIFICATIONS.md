@@ -39,6 +39,22 @@ license. This modified version keeps the original license and copyright notices.
    - Replaced the temporary home placeholder with a polished player start panel.
    - Polished the playlist panel and reduced bottom control bar glare.
 
+4. Added local music library and built-in playlist library.
+   - Added `desktop/local-music-library.js` with the `mineradio-local://`
+     media protocol, tag/cover/lyric extraction via `music-metadata`, and
+     one-shot import capability tokens (48-hex, 3-minute expiry, single use,
+     bound to the requesting window).
+   - Added `desktop/built-in-playlist-library.js` with local JSON persistence
+     for playlists that can mix songs from all five platforms plus local files.
+   - Added IPC channels for library list/lyric/authorize/import and the eight
+     built-in playlist operations, all gated by trusted-sender checks.
+   - Added startup restore so imported tracks and the last local session
+     survive restarts (sessions are rehydrated onto live `mineradio-local://`
+     URLs, since blob URLs do not persist), plus a local early-exit branch in
+     the playback queue.
+   - Added an in-app prompt/confirm modal for playlist create/rename/delete,
+     because Electron renderers disable `window.prompt` / `window.confirm`.
+
 ## Important Notes
 
 Kugou Music does not provide a stable public API for all personal music data.
