@@ -5,7 +5,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
 ![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
-![version](https://img.shields.io/badge/version-3.2.0-success?style=flat-square)
+![version](https://img.shields.io/badge/version-3.3.0-success?style=flat-square)
 
 ![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-10-12.webp)
 
@@ -17,7 +17,7 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 
 下面的差异都按两边仓库的实际代码核对过（不含主观描述）；「无」指该仓库里没有对应实现。
 
-| 能力（可在仓库内核对） | 上游 `Mineradio-paused` v2.2.0 | 本仓库 v3.2.0 |
+| 能力（可在仓库内核对） | 上游 `Mineradio-paused` v2.2.0 | 本仓库 v3.3.0 |
 | --- | --- | --- |
 | 维护状态 | 2026-09-21 停更 | 持续维护中 |
 | 五源接入（网易云 / QQ / 酷狗 / 汽水 / Spotify） | 有 | 有 |
@@ -48,8 +48,8 @@ Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxH
 
 ## 下载安装
 
-- **Windows 安装包（推荐）**：[Mineradio-3.2.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.2.0/Mineradio-3.2.0-Setup.exe) —— 2026-10-17 构建，包含本仓库最新代码
-- 免安装便携版：[Mineradio-Vision-v3.2.0-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.2.0/Mineradio-Vision-v3.2.0-portable-win-x64.zip) —— 2026-10-17 构建，解压后运行 `Mineradio\Mineradio.exe`
+- **Windows 安装包（推荐）**：[Mineradio-3.3.0-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.0/Mineradio-3.3.0-Setup.exe) —— 2026-10-19 构建，包含本地音乐库 / 内置歌单库与最新修复
+- 免安装便携版：[Mineradio-Vision-v3.3.0-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.0/Mineradio-Vision-v3.3.0-portable-win-x64.zip) —— 2026-10-19 构建，解压后运行 `Mineradio\Mineradio.exe`
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可正常安装。安装路径优先 D–Z 盘，卸载只清理本程序自己的文件。
