@@ -115,6 +115,13 @@ test('wiring exposes built-in playlists in panel, queue, shelf and collect modal
     assert.match(html, new RegExp('id="builtin-prompt-' + id + '"'), 'index.html missing builtin-prompt-' + id);
   }
 
+  // openPlaylistPanelDetail 通用分支（netease/qq/kugou/qishui/spotify）必须自带
+  // token 声明：合并内置歌单分支时曾把 `var token = ++...` 弄丢，五个平台的
+  // 歌单卡片一点就 ReferenceError、静默无反应（mineradio/local 分支有自己的 token）
+  const detailFn = panel.slice(panel.indexOf('async function openPlaylistPanelDetail'), panel.indexOf('function playPlaylistPanelDetail'));
+  assert.ok(detailFn.length > 0, 'openPlaylistPanelDetail not found');
+  assert.match(detailFn, /var token = \+\+playlistPanelDetailState\.token;/, 'openPlaylistPanelDetail lost its token declaration');
+
   // 3D 书架与二级列表
   assert.match(shelf, /provider === 'mineradio'/);
   assert.match(shelf, /内置歌单/);

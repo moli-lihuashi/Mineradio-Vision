@@ -330,6 +330,9 @@ async function openPlaylistPanelDetail(provider, pid, title) {
     }
     return;
   }
+  // 合并内置歌单分支时曾把这行弄丢：token 未声明 → 通用分支一执行就
+  // ReferenceError，netease/qq/kugou/qishui/spotify 的歌单卡片全部静默无反应。
+  var token = ++playlistPanelDetailState.token;
   playlistPanelDetailState = { key: key, loading: true, playlist: pl, tracks: [], token: token, renderLimit: PLAYLIST_DETAIL_INITIAL_RENDER, scrollTop: 0 };
   renderPlaylistPanelDetailState();
   scrollPlaylistPanelDetailIntoView(key);
