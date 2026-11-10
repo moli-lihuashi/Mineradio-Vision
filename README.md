@@ -15,36 +15,27 @@
 
 Mineradio Vision 基于开源项目 [XxHuberrr/Mineradio](https://github.com/XxHuberrr/Mineradio) 二次开发，**仅供学习交流使用**。原作者已将仓库改名为 [Mineradio-paused](https://github.com/XxHuberrr/Mineradio-paused)，README 写明「长期停更」。本仓库在该项目基础上继续维护，并陆续把上游后续版本的部分实现同步回来 —— 例如汽水扫码登录 v6 与上游是同一份代码（原实现无法正常播放音乐，因此合并上游实现）。
 
-下面的差异都按两边仓库的实际代码核对过（不含主观描述）；「无」指该仓库里没有对应实现。
+### 我们的优势
 
-| 能力（可在仓库内核对） | 上游 `Mineradio-paused` v2.2.0 | 本仓库 v3.3.0 |
-| --- | --- | --- |
-| 维护状态 | 2026-09-21 停更 | 持续维护中 |
-| 五源接入（网易云 / QQ / 酷狗 / 汽水 / Spotify） | 有 | 有 |
-| 汽水扫码登录 v6 / 音频解密 | 有 | 有（合并上游 v2.2.0，修复原实现无法正常播放） |
-| 酷狗 KRC 加密歌词解密（XOR + zlib） | 无 | 有 |
-| QQ Cookie 自动续期（`QQConnectLogin`） | 无 | 有 |
-| LiquidGlass 液态玻璃 | 无 | 有 |
-| 原生 C++ BPM 分析 | 无 | 有 |
-| WASAPI 旁路输出 | 无 | 有 |
-| 前端延迟波懒加载（第二波模块） | 无（单波加载） | 有 |
-| 久听休息提醒 | 无 | 有 |
-| 登录包跨设备同步（导出 / 扫码互传） | 无 | 有 |
-| 崩溃诊断 / 崩溃风暴退避 | 部分（基础 `render-process-gone` 钩子与 `featureStatus` 读取） | 有（崩溃时间戳、子进程崩溃记录、本地 minidump、指数退避，本仓库实现） |
-| 本地音乐库 / 内置歌单库 | 有 | 有（已合并上线） |
-| Sonic Workshop 预设（本仓库名「音域回响」） | 有（`vendor/sonic-workshop`，预设槽位 8） | 有（`sonic-topography/`，预设槽位 10；同一项目，桥接拆成 html + js + css） |
-| cuefield 过渡引擎 | 19 个模块 | 38 个（`cuefield-next/` 19 模块 v2 **默认引擎** + `cuefield/` 8 模块 v1 兜底 + 前端 5 模块执行层） |
-| 自动化测试 | 54 个（绑定上游的模块划分） | 24 个（按本仓库模块结构编写；两边的模块拆分不同，不套用同一套测试） |
+- **持续维护**：五源接入（网易云 / QQ / 酷狗 / 汽水 / Spotify），支持账号登录、歌单同步与桌面歌词。
+- **酷狗链路深度修复**：KRC 加密歌词解密、翻译歌词修复、云歌单 dfid 设备身份修复、VIP 状态同步。
+- **QQ Cookie 自动续期**：授权失效自动检测（code 1000 / login_required 等）并静默续期写回。
+- **视觉系统**：LiquidGlass 液态玻璃、Folia 歌词样式与 WebGL 玻璃、Sonic 音域回响预设、红心粒子场景、轨道过渡引擎、天气雨滴、桌面歌词、卡片宠物等。
+- **性能与工程**：前端延迟波懒加载、原生 C++ BPM 分析、WASAPI 旁路输出、三层懒加载架构、崩溃诊断与风暴退避。
+- **cuefield 过渡引擎**：v1 兜底 + v2 默认引擎共 38 个模块，automix 听感更强。
+- **自动化测试**：按本仓库模块结构编写。
 
-> 也就是说：本仓库的重点在酷狗 / QQ 链路修复、原生性能与启动优化；上游目前在 `docs/` 文档上更完整。本地音乐库与内置歌单库已从上游合并上线（详见下方「本版本的主要增强」）。cuefield 与测试数量的差异来自两边的模块划分不同 —— 本仓库没有套用上游的统一测试。
->
-> cuefield 的 19 个模块全部收进仓库，并且**已经是默认引擎**：`POST /api/cuefield/transition` 默认 `engine: "v2"`，用 `cuefield-next/`；传 `engine: "v1"` 可回落旧的 `cuefield/`（8 模块）。v2 任何异常都会自动回到 v1，并在响应里带 `engineFallback` 说明原因（回落永远可见，不静默）。
->
-> 前端执行层也换成了配套的 5 个模块（`public/js/modules/05-cuefield/`，`index.html` 按序逐个 `<script>` 载入），能消费 duck / echo / bridge / loop / rate / spectrum 与 A/B 双 deck 独立 volume 曲线（11 种 op）；旧的 v1 执行层只会把 timeline 压成一次 equal-power crossfade（5 种 op），等于「播到结尾再淡出两秒」。
->
-> 两代引擎的产出结构不兼容（v2 没有 `mixConfidence`/`mixType`，改用 `policy`/`route`/`rescueClass`，且多出 `artifact`/`rejected`），所以**请求 v1 / v2 必须与前端执行层配套**，不能混用。另外 v2 在真实歌曲上产出的通常是 `tier: "weak"`（实测 score 0.604），上游默认 `allowWeak: false` 会把它全部拒掉、听感上等于没有 automix，因此本仓库在 `02-cuefield-automix-integration.js` 里显式放开 `allowWeak: true` 并抬门槛到 `minWeakScore: 0.6`。
->
-> v2 的和声证据（`musicalEvidence`，决定 4 个依赖调性/和声走向的 recipe 是否可用）需要 `musicalProfile`。上游靠 `basic-pitch` 的音符事件，本仓库没有那套模型与权重，改为在 beat 分析里自己算 chroma：降采样 12kHz → 4096 点 FFT → 只取谱峰 → 12 音级累积 → Krumhansl 模板定调，结果随 beatmap 一起写盘（pack `v: 2`，约占 2~3.5KB）。实测真实歌曲 key 判定与 confidence 都能过 v2 的 `0.55` 门槛，且 4 分钟整轨耗时约 0.25~0.5s（后台预热时算）。
+### 上游没有的功能
+
+- 酷狗 KRC 加密歌词解密（XOR + zlib）
+- QQ Cookie 自动续期（`QQConnectLogin`）
+- LiquidGlass 液态玻璃
+- 原生 C++ BPM 分析
+- WASAPI 旁路输出
+- 前端延迟波懒加载
+- 久听休息提醒
+- 登录包跨设备同步（导出 / 扫码互传）
+- 崩溃诊断 / 崩溃风暴退避
 
 ## 下载安装
 
