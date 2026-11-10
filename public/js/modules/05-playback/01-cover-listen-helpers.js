@@ -156,6 +156,27 @@ function beginListenSession(song, context) {
     maxProgress: 0,
   };
 }
+/* 纯计量：把「上次累计点 → 现在」这一段的收听时长算进 session。
+ * 绝对不能在这里面调 begin/finalize —— 那会形成
+ *   finalizeListenSession → updateListenStatsTick → beginListenSession → finalizeListenSession
+ * 的互递归（实测单次切歌就递归 1687 层，RangeError 被 safePlaybackStep 吞掉，
+ * 换源链路半途中断：audio.src 被清空、界面显示「播放失败」）。 */
+function accumulateListenSession(session, force) {
+  if (!session || !audio) return 0;
+  var now = Date.now();
+  var audioTime = isFinite(audio.currentTime) ? audio.currentTime : 0;
+  var deltaByAudio = Math.max(0, audioTime - (session.lastAudioTime || 0)) * 1000;
+  var deltaByWall = Math.max(0, now - (session.lastWallAt || now));
+  var delta = deltaByAudio > 0 ? Math.min(deltaByAudio, deltaByWall || deltaByAudio, 4200) : 0;
+  if (force && delta <= 0) delta = Math.min(deltaByWall, 1500);
+  if (delta > 0 && delta < 8000) session.listenMs += delta;
+  session.lastWallAt = now;
+  session.lastAudioTime = audioTime;
+  if (audio.duration) {
+    session.maxProgress = Math.max(session.maxProgress || 0, audioTime / audio.duration);
+  }
+  return delta;
+}
 function updateListenStatsTick(force) {
   if (!audio || !audio.duration || audio.paused) return;
   var song = currentCoverSong();
@@ -163,22 +184,23 @@ function updateListenStatsTick(force) {
   var key = queueItemKey(song);
   if (!listenSession || listenSession.key !== key) beginListenSession(song, activeRadioContext);
   if (!listenSession) return;
-  var now = Date.now();
-  var audioTime = isFinite(audio.currentTime) ? audio.currentTime : 0;
-  var deltaByAudio = Math.max(0, audioTime - (listenSession.lastAudioTime || 0)) * 1000;
-  var deltaByWall = Math.max(0, now - (listenSession.lastWallAt || now));
-  var delta = deltaByAudio > 0 ? Math.min(deltaByAudio, deltaByWall || deltaByAudio, 4200) : 0;
-  if (force && delta <= 0) delta = Math.min(deltaByWall, 1500);
-  if (delta > 0 && delta < 8000) listenSession.listenMs += delta;
-  listenSession.lastWallAt = now;
-  listenSession.lastAudioTime = audioTime;
-  listenSession.maxProgress = Math.max(listenSession.maxProgress || 0, audio.duration ? audioTime / audio.duration : 0);
+  accumulateListenSession(listenSession, force);
 }
+/* 重入闸：即使将来有人又在统计链路里接回 finalize，也只会被丢掉，不会把栈打穿。 */
+var listenSessionFinalizing = false;
 function finalizeListenSession(completed) {
-  if (!listenSession) return;
-  updateListenStatsTick(true);
-  var session = listenSession;
-  listenSession = null;
+  if (!listenSession || listenSessionFinalizing) return;
+  listenSessionFinalizing = true;
+  var session;
+  try {
+    // 先摘链再计量：计量期间任何 beginListenSession 都不该再看到这个旧会话
+    session = listenSession;
+    listenSession = null;
+    accumulateListenSession(session, true);
+  } finally {
+    listenSessionFinalizing = false;
+  }
+  if (!session) return;
   var effective = completed || session.listenMs >= 45000 || session.maxProgress >= 0.5 || (!audio || !audio.duration ? session.listenMs >= 30000 : false);
   if (!effective) return;
   var now = Date.now();

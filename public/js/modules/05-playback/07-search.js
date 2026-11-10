@@ -93,30 +93,26 @@ function runSearchHistory(q) {
   $input.focus();
 }
 function updateSearchModeTabs() {
-  var songBtn = document.getElementById('search-mode-song');
-  var neteaseBtn = document.getElementById('search-mode-netease');
-  var qqBtn = document.getElementById('search-mode-qq');
-  var podcastBtn = document.getElementById('search-mode-podcast');
-  if (songBtn) {
-    songBtn.classList.toggle('active', searchMode === 'song');
-    songBtn.setAttribute('aria-selected', searchMode === 'song' ? 'true' : 'false');
-  }
-  if (neteaseBtn) {
-    neteaseBtn.classList.toggle('active', searchMode === 'netease');
-    neteaseBtn.setAttribute('aria-selected', searchMode === 'netease' ? 'true' : 'false');
-  }
-  if (qqBtn) {
-    qqBtn.classList.toggle('active', searchMode === 'qq');
-    qqBtn.setAttribute('aria-selected', searchMode === 'qq' ? 'true' : 'false');
-  }
-  if (podcastBtn) {
-    podcastBtn.classList.toggle('active', searchMode === 'podcast');
-    podcastBtn.setAttribute('aria-selected', searchMode === 'podcast' ? 'true' : 'false');
+  /* 标签按钮由 index.html 声明，平台数量会随接入源增长（song / netease / qq / kugou / qishui / spotify / podcast）。
+     这里统一遍历 #search-mode-tabs 的按钮、按 id 前缀派生模式名，避免像旧写法那样只硬编码四个：
+     切到未列出的平台时，旧按钮的 active 被清掉却不给新按钮补上，整排标签会一起失去高亮。 */
+  var tabs = document.querySelectorAll('#search-mode-tabs button');
+  for (var i = 0; i < tabs.length; i++) {
+    var btn = tabs[i];
+    var id = String(btn.id || '');
+    var mode = id.indexOf('search-mode-') === 0 ? id.slice('search-mode-'.length) : '';
+    var active = !!mode && mode === searchMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
   }
   if ($input) {
     $input.placeholder = searchMode === 'podcast'
       ? '搜索播客、电台...'
-      : (searchMode === 'qq' ? '搜索 QQ 音乐...' : (searchMode === 'netease' ? '搜索网易云音乐...' : '搜索歌曲、歌手...'));
+      : (searchMode === 'qq' ? '搜索 QQ 音乐...'
+        : (searchMode === 'netease' ? '搜索网易云音乐...'
+          : (searchMode === 'kugou' ? '搜索酷狗音乐...'
+            : (searchMode === 'qishui' ? '搜索汽水音乐...'
+              : (searchMode === 'spotify' ? '搜索 Spotify...' : '搜索歌曲、歌手...')))));
   }
   requestAnimationFrame(updateSearchPillGlassDisplacementMap);
 }

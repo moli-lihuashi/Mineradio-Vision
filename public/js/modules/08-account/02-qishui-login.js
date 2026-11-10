@@ -48,6 +48,7 @@ async function refreshQishuiLoginStatus() {
     var info = await apiJson('/api/qishui/status?t=' + Date.now());
     var prevLogged = !!qishuiLoginStatus.loggedIn;
     qishuiLoginStatus = normalizeQishuiLoginStatus(info);
+    auditProviderVipState('qishui', qishuiLoginStatus);
     if (!qishuiLoginStatus.loggedIn) {
       if (prevLogged || qishuiLoginWasLoggedIn) showToast('汽水音乐登录态已清除');
       qishuiPlaylists = [];
@@ -77,12 +78,6 @@ async function refreshQishuiLoginStatus() {
   }
 }
 
-function startQishuiLoginStatusAutoRefresh() {
-  if (qishuiLoginAutoRefreshTimer) clearInterval(qishuiLoginAutoRefreshTimer);
-  qishuiLoginAutoRefreshTimer = setInterval(function () {
-    refreshQishuiLoginStatus().catch(function (err) { console.warn('Qishui login auto refresh failed:', err); });
-  }, 45000);
-}
 
 function qishuiLoginStatusText(info) {
   info = info || qishuiLoginStatus || {};

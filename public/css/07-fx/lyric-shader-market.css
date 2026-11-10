@@ -17,7 +17,3 @@
 .lyric-shader-preview-aurora { background: linear-gradient(135deg, rgba(51,204,102,0.4), rgba(153,51,204,0.4)); }
 .lyric-shader-preview-neon { background: linear-gradient(180deg, rgba(0,242,255,0.15), rgba(0,242,255,0.6)); }
 .lyric-shader-preview-warm { background: radial-gradient(circle at center, rgba(255,179,77,0.5), rgba(255,179,77,0.05)); }
-.lyric-shader-name { font-size: 11px; color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lyric-shader-desc { font-size: 9.5px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lyric-shader-empty { font-size: 11px; color: rgba(255,255,255,0.4); padding: 12px 8px; text-align: center; line-height: 1.5; }
-.lyric-shader-loading { font-size: 11px; color: rgba(255,255,255,0.4); padding: 12px 8px; text-align: center; }

@@ -151,7 +151,7 @@ async function ensureCuefieldAutoMixBeatMap(song, key, context) {
   var descriptor = await cuefieldAutoMixAudioDescriptor(song);
   if (!contextStillCurrent() || analysisToken !== beatMapToken || beatMapBusy || cuefieldAutoMixVisualTransitionBusy()) return !!beatMapCache[key];
   if (!descriptor || !descriptor.proxyUrl || beatMapCache[key]) return !!beatMapCache[key];
-  var map = await analyzeAudioBeats(descriptor.proxyUrl, null, analysisToken, {
+  var map = await analyzeAudioBeats(descriptor.proxyUrl, normalizeBeatDurationSec(song && song.duration), analysisToken, {
     background: true,
     prefetch: true,
     cuefieldAutoMix: true,

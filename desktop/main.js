@@ -80,7 +80,18 @@ let desktopLyricsMousePoller = null;
 let desktopLyricsMousePollerBuffer = '';
 let desktopLyricsHotBounds = null;
 let desktopLyricsLastMiddleAt = 0;
-let wallpaperWindow = null;
+/* 光标是否落在歌词热区 / 是否正在拖动。用主进程轮询光标位置来判断，
+ * 不依赖页面收到的 mousemove（窗口默认穿透时转发事件不可靠）。 */
+let desktopLyricsCursorTimer = null;
+let desktopLyricsCursorInside = false;
+let desktopLyricsCursorHoldUntil = 0;
+let desktopLyricsDragUntil = 0;
+/* 桌面歌词的位置不再有面板滑块（用户直接拖窗口），所以「上次拖到哪」要跨重启记住。
+ * 只存比例，不存像素：换分辨率 / 换行数导致窗口尺寸变化时，位置仍然对得上。 */
+let desktopLyricsAnchor = null;
+let desktopLyricsAnchorLoaded = false;
+let desktopLyricsAnchorSaveTimer = null;
+const DESKTOP_LYRICS_ANCHOR_DEFAULT = { xRatio: 0.5, yRatio: 0.76 };
 let wallpaperState = {};
 let htmlFullscreenActive = false;
 let windowFullscreenActive = false;
@@ -137,6 +148,7 @@ let wallpaperEngineCaptureGrant = null;
 let wallpaperEngineCaptureOperation = 0;
 let fullDesktopEscapeRegistered = false;
 let fullDesktopEnableOperation = 0;
+let fullDesktopQuitDisposePending = false;
 
 const APP_PACKAGE_INFO = (() => { try { return require('../package.json'); } catch (_) { return {}; } })();
 const APP_VERSION = APP_PACKAGE_INFO.version || '0.0.0';
@@ -534,15 +546,42 @@ function createOrUpdateTray() {
   try {
     tray = new Tray(APP_ICON_ICO);
     tray.setToolTip(APP_NAME);
-    tray.on('click', () => focusMainWindow());
-    tray.on('double-click', () => focusMainWindow());
+    /* 壁纸模式下窗口贴在桌面图标层后面，直接 focus 是没用的：
+       先把窗口从桌面摘回来（恢复到普通窗口），再显示到前台。 */
+    const trayPrimaryAction = () => {
+      const embedded = !!(fullDesktopModeRuntime
+        && typeof fullDesktopModeRuntime.isEnabled === 'function'
+        && fullDesktopModeRuntime.isEnabled());
+      if (!embedded) {
+        focusMainWindow();
+        return;
+      }
+      Promise.resolve(disableFullDesktopMode('tray-restore-window'))
+        .catch(() => {})
+        .then(() => { focusMainWindow(); });
+    };
+    tray.on('click', trayPrimaryAction);
+    tray.on('double-click', trayPrimaryAction);
     const send = (code) => {
-      if (win && !win.isDestroyed()) {
-        try { win.webContents.executeJavaScript(code, true); } catch (_) {}
+      // 这里是模块作用域，没有 `win` 这个标识符（曾是 ReferenceError，
+      // 导致托盘的播放/暂停、上一首、下一首三个菜单项全部失效）。
+      const target = mainWindow;
+      if (target && !target.isDestroyed()) {
+        try { target.webContents.executeJavaScript(code, true); } catch (_) {}
       }
     };
     const menu = Menu.buildFromTemplate([
-      { label: '显示 ' + APP_NAME, click: () => focusMainWindow() },
+      /* 「显示」必须和左键同一条路径：壁纸模式下窗口是桌面的子窗口，
+         不先退出壁纸模式，focus() 唤不出来（用户会以为程序卡死）。 */
+      { label: '显示 ' + APP_NAME, click: () => trayPrimaryAction() },
+      /* 壁纸模式的逃生通道之一：附着到桌面后主窗口在图标层后面，
+         焦点一旦被别的程序抢走，页面里的 Esc 就收不到；托盘永远点得到。 */
+      ...(fullDesktopModeRuntime && typeof fullDesktopModeRuntime.isEnabled === 'function' && fullDesktopModeRuntime.isEnabled()
+        ? [
+            { type: 'separator' },
+            { label: '退出壁纸模式（回到普通窗口）', click: () => { disableFullDesktopMode('tray-exit-wallpaper').catch(() => {}); } },
+          ]
+        : []),
       { type: 'separator' },
       { label: '播放 / 暂停', click: () => send('if(typeof togglePlay==="function")togglePlay();') },
       { label: '上一首', click: () => send('if(typeof prevTrack==="function")prevTrack();') },
@@ -1092,7 +1131,8 @@ async function openNeteaseMusicLoginWindow(owner) {
     loginWindow.on('ready-to-show', () => loginWindow.show());
     loginWindow.on('closed', async () => {
       if (settled) return;
-      if (pollTimer) clearInterval(pollTimer);
+      settled = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       try {
         const cookie = await readNeteaseLoginCookieHeader(cookieSession);
         resolve(neteaseCookieHasLogin(cookie)
@@ -1179,9 +1219,19 @@ async function openQQMusicLoginWindow(owner, options) {
     };
 
     loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url)) {
+      // 和网易 / 酷狗登录窗口一致：只有 QQ 自有域才能在登录分区内导航，
+      // 其余 http(s) 一律交给外部浏览器；非 http(s) 直接拒绝。
+      // 用 URL.hostname 精确比较，避免 "qq.com.evil.com" 这类前缀绕过。
+      let host = '';
+      try { host = new URL(url).hostname.toLowerCase(); } catch (_) {}
+      const trusted = /^https?:\/\//i.test(url) && (
+        host === 'qq.com' || host.endsWith('.qq.com')
+        || host === 'qpic.cn' || host.endsWith('.qpic.cn')
+        || host === 'gtimg.cn' || host.endsWith('.gtimg.cn')
+      );
+      if (trusted) {
         loginWindow.loadURL(url).catch((e) => console.warn('QQ login popup navigation failed:', e.message));
-      } else {
+      } else if (/^https?:\/\//i.test(url)) {
         shell.openExternal(url).catch(() => {});
       }
       return { action: 'deny' };
@@ -1206,7 +1256,8 @@ async function openQQMusicLoginWindow(owner, options) {
     loginWindow.on('ready-to-show', () => loginWindow.show());
     loginWindow.on('closed', async () => {
       if (settled) return;
-      if (pollTimer) clearInterval(pollTimer);
+      settled = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       try {
         const cookie = await readQQLoginCookieHeader(cookieSession);
         if (qqCookieHasPlaybackLogin(cookie)) {
@@ -1264,14 +1315,27 @@ async function openKugouMusicLoginWindow(owner) {
       resolve(result);
     };
 
+    const windowGone = () => settled || !loginWindow || loginWindow.isDestroyed();
+    const startPolling = (fn) => {
+      // 统一的轮询入口：窗口已经关掉/流程已结束时绝不启动定时器。
+      if (windowGone()) return false;
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(fn, 1200);
+      return true;
+    };
+    const stopPolling = () => {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    };
+
     const checkCookies = async () => {
+      if (windowGone()) { stopPolling(); return; }
       try {
         const cookie = await readKugouLoginCookieHeader(cookieSession);
         if (kugouCookieHasLogin(cookie)) {
           finish({ ok: true, cookie });
         }
       } catch (e) {
-        console.warn('Kugou login cookie check failed:', e.message);
+        if (!windowGone()) console.warn('Kugou login cookie check failed:', e.message);
       }
     };
 
@@ -1304,27 +1368,34 @@ async function openKugouMusicLoginWindow(owner) {
     const startKugouQrLogin = async () => {
       try {
         const qr = await localJson('/api/kugou/login/qr/key?t=' + Date.now());
+        // QR key 请求在途时用户可能已经关窗；不在每个 await 之后检查的话，
+        // 后面仍会 setInterval 出一个永远不停的 1.2s 轮询。
+        if (windowGone()) return;
         const key = qr && (qr.key || qr.qrcode);
         if (!key || !qr.url) throw new Error('Kugou QR login URL missing');
         await loginWindow.loadURL(qr.url);
+        if (windowGone()) return;
         const pollLogin = async () => {
+          if (windowGone()) { stopPolling(); return; }
           try {
             const data = await localJson('/api/kugou/login/qr/check?key=' + encodeURIComponent(key) + '&t=' + Date.now());
+            if (windowGone()) { stopPolling(); return; }
             if (data && data.code === 803 && data.loggedIn) {
               finish(Object.assign({ ok: true }, data));
             } else if (data && data.code === 800) {
               finish({ ok: false, error: data.message || 'Kugou QR expired, please try again' });
             }
           } catch (e) {
-            console.warn('Kugou QR login check failed:', e.message);
+            if (!windowGone()) console.warn('Kugou QR login check failed:', e.message);
           }
         };
-        pollTimer = setInterval(pollLogin, 1200);
-        pollLogin();
+        if (startPolling(pollLogin)) pollLogin();
       } catch (e) {
+        if (windowGone()) return;
         console.warn('Kugou QR login failed, falling back to web home:', e.message);
-        pollTimer = setInterval(checkCookies, 1200);
-        loginWindow.loadURL(KUGOU_LOGIN_URL).catch((err) => finish({ ok: false, error: err.message }));
+        if (startPolling(checkCookies)) {
+          loginWindow.loadURL(KUGOU_LOGIN_URL).catch((err) => finish({ ok: false, error: err.message }));
+        }
       }
     };
 
@@ -1356,7 +1427,10 @@ async function openKugouMusicLoginWindow(owner) {
     loginWindow.on('ready-to-show', () => loginWindow.show());
     loginWindow.on('closed', async () => {
       if (settled) return;
-      if (pollTimer) clearInterval(pollTimer);
+      // 关键：QR key 请求 / loadURL 在途时关窗，这里必须先把流程标记为结束，
+      // 否则 startKugouQrLogin 的 await 返回后仍会启动一个永不停止的轮询。
+      settled = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       try {
         const cookie = await readKugouLoginCookieHeader(cookieSession);
         resolve(kugouCookieHasLogin(cookie)
@@ -1478,9 +1552,13 @@ function toggleFullscreen(win) {
   sendWindowState(win);
 }
 
+// 每次启动用一个一次性 token 作查询串：覆盖层页面（桌面歌词 / 壁纸）改版后，
+// 即使 Chromium 磁盘缓存里还留着旧条目也一定会拿新的一份。
+const overlayBootToken = 'b' + Date.now().toString(36);
 function overlayUrl(page) {
   const port = mainServerPort || process.env.PORT || 3000;
-  return `http://127.0.0.1:${port}/${page}`;
+  const sep = String(page).indexOf('?') >= 0 ? '&' : '?';
+  return `http://127.0.0.1:${port}/${page}${sep}_=${overlayBootToken}`;
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -1489,20 +1567,88 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
+function desktopLyricsAnchorPath() {
+  return path.join(app.getPath('userData'), 'desktop-lyrics-anchor.json');
+}
+
+function loadDesktopLyricsAnchor() {
+  if (desktopLyricsAnchorLoaded) return desktopLyricsAnchor || DESKTOP_LYRICS_ANCHOR_DEFAULT;
+  desktopLyricsAnchorLoaded = true;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(desktopLyricsAnchorPath(), 'utf8')) || {};
+    desktopLyricsAnchor = {
+      xRatio: clampNumber(parsed.xRatio, 0, 1, DESKTOP_LYRICS_ANCHOR_DEFAULT.xRatio),
+      yRatio: clampNumber(parsed.yRatio, 0, 1, DESKTOP_LYRICS_ANCHOR_DEFAULT.yRatio),
+    };
+  } catch (_) {
+    desktopLyricsAnchor = null;
+  }
+  return desktopLyricsAnchor || DESKTOP_LYRICS_ANCHOR_DEFAULT;
+}
+
+function saveDesktopLyricsAnchor(anchor) {
+  if (!anchor) return;
+  desktopLyricsAnchor = anchor;
+  desktopLyricsAnchorLoaded = true;
+  if (desktopLyricsAnchorSaveTimer) clearTimeout(desktopLyricsAnchorSaveTimer);
+  desktopLyricsAnchorSaveTimer = setTimeout(() => {
+    desktopLyricsAnchorSaveTimer = null;
+    try {
+      const file = desktopLyricsAnchorPath();
+      const tmp = `${file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...desktopLyricsAnchor }, null, 2), 'utf8');
+      fs.renameSync(tmp, file);
+    } catch (_) {}
+  }, 400);
+  if (desktopLyricsAnchorSaveTimer.unref) desktopLyricsAnchorSaveTimer.unref();
+}
+
+function desktopLyricsAnchorFromBounds(bounds) {
+  if (!bounds) return null;
+  const area = screen.getDisplayMatching(bounds).bounds;
+  const travel = Math.max(1, area.width - bounds.width);
+  return {
+    xRatio: clampNumber((bounds.x - area.x) / travel, 0, 1, DESKTOP_LYRICS_ANCHOR_DEFAULT.xRatio),
+    yRatio: clampNumber((bounds.y + bounds.height / 2 - area.y) / Math.max(1, area.height), 0, 1, DESKTOP_LYRICS_ANCHOR_DEFAULT.yRatio),
+  };
+}
+
 function desktopLyricsDefaultBounds(payload = desktopLyricsState) {
   const display = desktopLyricsUserBounds
     ? screen.getDisplayMatching(desktopLyricsUserBounds)
     : screen.getPrimaryDisplay();
   const bounds = display.bounds;
-  const yRatio = clampNumber(payload.y, 0.08, 0.92, 0.76);
-  const width = Math.round(Math.min(Math.max(880, bounds.width * 0.72), bounds.width - 96));
-  const height = Math.round(Math.min(Math.max(340, bounds.height * 0.38), 560, bounds.height - 96));
+  // 面板里的「高度 / 左右」两个滑块已移除（歌词窗口可以直接拖），位置改由
+  // 用户上次拖动留下的锚点比例决定；没拖过就是「水平居中、屏幕下方 3/4 处」。
+  const anchor = loadDesktopLyricsAnchor();
+  const xRatio = anchor.xRatio;
+  const yRatio = anchor.yRatio;
+  // 多行歌词要更高的窗口：行数变化时窗口跟着长高，否则 7/10 行会被裁掉。
+  // 多行窗口不小于单行窗口的高度，避免切到 3 行时整块反而缩水。
+  const lines = Math.max(1, Math.min(10, Math.round(Number(payload.lineCount) || 1)));
+  // 窗口留得太宽会让整块歌词显得离屏幕边缘太远，0.62 在「一行放得下」和「能拖开」之间取平衡。
+  const width = Math.round(Math.min(Math.max(820, bounds.width * 0.62), bounds.width - 96));
+  const singleLineHeight = Math.round(Math.min(Math.max(340, bounds.height * 0.38), 560, bounds.height - 96));
+  const height = lines <= 1
+    ? singleLineHeight
+    : Math.round(Math.min(Math.max(singleLineHeight, 150 + lines * 68), 880, bounds.height - 96));
   return {
-    x: Math.round(bounds.x + (bounds.width - width) / 2),
+    // x 用「可移动行程」而不是窗口中心来定位：窗口比屏幕窄不了多少，
+    // 若按中心定位，比例一大半会被 constrain 裁掉。这样 0.5 正好居中，0 贴左、1 贴右。
+    x: Math.round(bounds.x + Math.max(0, bounds.width - width) * xRatio),
     y: Math.round(bounds.y + bounds.height * yRatio - height / 2),
     width,
     height,
   };
+}
+
+/* 只有「行数」变了才需要重算窗口尺寸；位置一律沿用用户的锚点，不再回弹到默认点。
+ * （之前的 x / y 比例滑块已经删除，这两个字段不会再出现。） */
+function desktopLyricsLayoutChanged(previous, payload, next) {
+  const has = (key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
+  if (has('lineCount')
+    && Math.round(Number(next.lineCount) || 1) !== Math.round(Number(previous.lineCount) || 1)) return true;
+  return false;
 }
 
 function constrainDesktopLyricsBounds(bounds) {
@@ -1541,7 +1687,12 @@ function setDesktopLyricsBounds(bounds) {
 
 function rememberDesktopLyricsBounds() {
   if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed() || desktopLyricsProgrammaticMove) return;
+  /* 拖动中的位置由 applyDesktopLyricsDrag 直接记录（Windows 上 getBounds() 常常还是
+   * 上一步的旧坐标），这里再回读一次反而会把「拖到哪」写回旧值。 */
+  if (Date.now() < desktopLyricsDragUntil) return;
   desktopLyricsUserBounds = desktopLyricsWindow.getBounds();
+  // 顺手把「拖到哪」落盘，下次启动直接回到这个位置（对应面板里的「保留上次设置」）
+  saveDesktopLyricsAnchor(desktopLyricsAnchorFromBounds(desktopLyricsUserBounds));
 }
 
 function applyDesktopLyricsMouseBehavior() {
@@ -1572,6 +1723,50 @@ function pointInBounds(point, bounds) {
     && point.x <= bounds.x + bounds.width
     && point.y >= bounds.y
     && point.y <= bounds.y + bounds.height;
+}
+
+/* 光标是不是压在歌词上。用主进程自己问系统要光标坐标，而不是等页面报 mousemove：
+ * 窗口为了不挡住桌面，默认是 setIgnoreMouseEvents(true)；穿透状态下能否收到转发的
+ * mousemove 依赖平台实现，一旦收不到，页面就永远打不开 pointer capture，
+ * 用户看到的就是「歌词怎么拖都不动」。这里改成主进程判定，链路不再靠事件转发。 */
+function desktopLyricsCursorOverStage() {
+  if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return false;
+  const area = desktopLyricsHotBoundsOnScreen();
+  if (!area) return false;
+  return pointInBounds(screen.getCursorScreenPoint(), area);
+}
+
+function syncDesktopLyricsCursorCapture() {
+  if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
+  const inside = desktopLyricsCursorOverStage();
+  const dragging = Date.now() < desktopLyricsDragUntil;
+  desktopLyricsCursorInside = inside;
+  /* 迟滞：光标刚离开热区不要立刻恢复穿透。穿透开关每翻一次，Chromium 都会重建
+   * 鼠标命中状态（并补发合成事件），翻得太勤会把正在进行的拖动打断。 */
+  if (inside) desktopLyricsCursorHoldUntil = Date.now() + 600;
+  const holdOpen = Date.now() < desktopLyricsCursorHoldUntil;
+  if (desktopLyricsState.clickThrough !== false) {
+    desktopLyricsPointerCapture = false;
+  } else if (inside || holdOpen || dragging) {
+    // 光标在歌词上 / 刚离开不久 / 正在拖：窗口必须能收到鼠标，否则按不下去也拖不连贯
+    desktopLyricsPointerCapture = true;
+  } else {
+    desktopLyricsPointerCapture = false;
+  }
+  applyDesktopLyricsMouseBehavior();
+}
+
+function startDesktopLyricsCursorWatcher() {
+  if (desktopLyricsCursorTimer) return;
+  desktopLyricsCursorTimer = setInterval(syncDesktopLyricsCursorCapture, 90);
+  if (desktopLyricsCursorTimer.unref) desktopLyricsCursorTimer.unref();
+}
+
+function stopDesktopLyricsCursorWatcher() {
+  if (!desktopLyricsCursorTimer) return;
+  clearInterval(desktopLyricsCursorTimer);
+  desktopLyricsCursorTimer = null;
+  desktopLyricsCursorInside = false;
 }
 
 function handleDesktopLyricsGlobalMiddleClick() {
@@ -1612,11 +1807,14 @@ while ($true) {
 }
 `;
   try {
-    desktopLyricsMousePoller = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    const poller = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    desktopLyricsMousePoller.stdout.on('data', (chunk) => {
+    desktopLyricsMousePoller = poller;
+    poller.stdout.on('data', (chunk) => {
+      // 旧进程还没死透时的输出不能污染新进程的缓冲区。
+      if (desktopLyricsMousePoller !== poller) return;
       desktopLyricsMousePollerBuffer += chunk.toString('utf8');
       const lines = desktopLyricsMousePollerBuffer.split(/\r?\n/);
       desktopLyricsMousePollerBuffer = lines.pop() || '';
@@ -1624,14 +1822,16 @@ while ($true) {
         if (line.trim() === 'MMB') handleDesktopLyricsGlobalMiddleClick();
       });
     });
-    desktopLyricsMousePoller.on('exit', () => {
+    const clearPollerRef = () => {
+      // stop→start 竞态：kill() 后不等待 exit 就把全局引用置 null，
+      // 旧进程晚到的 exit 会把「新」child 的引用清掉，导致新 powershell
+      // 失去引用、后续再也 kill 不掉。只清理自己这份引用。
+      if (desktopLyricsMousePoller !== poller) return;
       desktopLyricsMousePoller = null;
       desktopLyricsMousePollerBuffer = '';
-    });
-    desktopLyricsMousePoller.on('error', () => {
-      desktopLyricsMousePoller = null;
-      desktopLyricsMousePollerBuffer = '';
-    });
+    };
+    poller.on('exit', clearPollerRef);
+    poller.on('error', clearPollerRef);
   } catch (e) {
     desktopLyricsMousePoller = null;
     desktopLyricsMousePollerBuffer = '';
@@ -1663,8 +1863,21 @@ function broadcastDesktopLyricsEnabledState(enabled) {
 
 function positionDesktopLyricsWindow(payload = desktopLyricsState, options = {}) {
   if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
-  const shouldUseManualBounds = desktopLyricsUserBounds && !options.force;
-  setDesktopLyricsBounds(shouldUseManualBounds ? desktopLyricsUserBounds : desktopLyricsDefaultBounds(payload));
+  const desired = desktopLyricsDefaultBounds(payload);
+  if (desktopLyricsUserBounds && !options.force) {
+    /* 用户拖过窗口：水平和宽度听他的，但高度必须按「当前行数」重算。
+     * 否则切到 10 行后窗口还是单行高度，整块会被压成一排 16px 的蚂蚁。 */
+    const manual = desktopLyricsUserBounds;
+    const centerY = manual.y + manual.height / 2;
+    setDesktopLyricsBounds({
+      x: manual.x,
+      y: Math.round(centerY - desired.height / 2),
+      width: manual.width,
+      height: desired.height,
+    });
+  } else {
+    setDesktopLyricsBounds(desired);
+  }
   if (typeof desktopLyricsWindow.setOpacity === 'function') {
     desktopLyricsWindow.setOpacity(clampNumber(payload.opacity, 0.28, 1, 0.92));
   }
@@ -1676,18 +1889,18 @@ function sendDesktopLyricsState() {
 }
 
 function createDesktopLyricsWindow(payload = {}) {
-  const previousY = desktopLyricsState.y;
+  const previousAnchor = { lineCount: desktopLyricsState.lineCount };
   const previousOpacity = desktopLyricsState.opacity;
   desktopLyricsState = { ...desktopLyricsState, ...payload, enabled: true };
-  const hasY = Object.prototype.hasOwnProperty.call(payload || {}, 'y');
-  const nextY = clampNumber(desktopLyricsState.y, 0.08, 0.92, 0.76);
-  const yChanged = hasY && Number.isFinite(Number(previousY)) && Math.abs(nextY - clampNumber(previousY, 0.08, 0.92, 0.76)) > 0.001;
+  const layoutChanged = desktopLyricsLayoutChanged(previousAnchor, payload, desktopLyricsState);
   const opacityChanged = Object.prototype.hasOwnProperty.call(payload || {}, 'opacity')
     && Math.abs(clampNumber(desktopLyricsState.opacity, 0.28, 1, 0.92) - clampNumber(previousOpacity, 0.28, 1, 0.92)) > 0.001;
-  if (yChanged) desktopLyricsUserBounds = null;
+  if (layoutChanged) desktopLyricsUserBounds = null;
   if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
-    if (yChanged) {
-      positionDesktopLyricsWindow(desktopLyricsState, { force: yChanged });
+    /* 只有「行数变了」才重排窗口。状态推送每秒好几次，如果每次都 setBounds，
+     * 正在拖动的手感会被打断（而且 userBounds 可能还没跟上，窗口会被拽回起点）。 */
+    if (layoutChanged) {
+      positionDesktopLyricsWindow(desktopLyricsState, { force: true });
     } else if (opacityChanged && typeof desktopLyricsWindow.setOpacity === 'function') {
       desktopLyricsWindow.setOpacity(clampNumber(desktopLyricsState.opacity, 0.28, 1, 0.92));
     }
@@ -1724,8 +1937,9 @@ function createDesktopLyricsWindow(payload = {}) {
     console.warn('Desktop lyrics topmost setup skipped:', e.message);
   }
   startDesktopLyricsMousePoller();
+  startDesktopLyricsCursorWatcher();
   applyDesktopLyricsMouseBehavior();
-  positionDesktopLyricsWindow(desktopLyricsState, { force: yChanged || !desktopLyricsUserBounds });
+  positionDesktopLyricsWindow(desktopLyricsState, { force: layoutChanged || !desktopLyricsUserBounds });
   desktopLyricsWindow.once('ready-to-show', () => {
     if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
     desktopLyricsWindow.showInactive();
@@ -1733,6 +1947,10 @@ function createDesktopLyricsWindow(payload = {}) {
   });
   desktopLyricsWindow.webContents.once('did-finish-load', sendDesktopLyricsState);
   desktopLyricsWindow.on('closed', () => {
+    // 与 closeDesktopLyricsWindow() 保持一致：窗口以任何路径销毁都要停掉
+    // 常驻的 powershell 轮询子进程，否则会留下一个每 24ms 唤醒的孤儿进程。
+    stopDesktopLyricsMousePoller();
+    stopDesktopLyricsCursorWatcher();
     desktopLyricsWindow = null;
     desktopLyricsMouseIgnored = null;
   });
@@ -1747,6 +1965,7 @@ function closeDesktopLyricsWindow() {
   desktopLyricsMouseIgnored = null;
   desktopLyricsHotBounds = null;
   stopDesktopLyricsMousePoller();
+  stopDesktopLyricsCursorWatcher();
   if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
     sendDesktopLyricsState();
     desktopLyricsWindow.close();
@@ -1761,119 +1980,64 @@ function nativeWindowHandleDecimal(win) {
   return String(handle.readUInt32LE(0));
 }
 
-function attachWallpaperToWorkerW(win) {
-  if (process.platform !== 'win32' || !win || win.isDestroyed()) return;
-  const hwnd = nativeWindowHandleDecimal(win);
-  const script = `
-$ErrorActionPreference = "Stop"
-if (-not ("MineradioNativeWin" -as [type])) {
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class MineradioNativeWin {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+/* ===== 壁纸模式（完整桌面模式）=====
+ * 打开开关后，主窗口整体附着到 Windows 桌面（WorkerW），整个 Mineradio HUD 就是动态壁纸。
+ * 纯壁纸模式下窗口被压在桌面图标层下面：点不到、没有任务栏条目、也拿不到键盘焦点，
+ * 所以唯一可靠的出口是托盘（左键直接切回窗口 / 菜单里的「退出壁纸模式」）。 */
+function wallpaperOpacityValue(value) {
+  return clampNumber(value == null ? wallpaperState.opacity : value, 0.35, 1, 1);
 }
-"@
+
+function applyWallpaperModeOpacity(value) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try { mainWindow.setOpacity(wallpaperOpacityValue(value)); } catch (_) {}
 }
-$progman = [MineradioNativeWin]::FindWindow("Progman", $null)
-$result = [IntPtr]::Zero
-[MineradioNativeWin]::SendMessageTimeout($progman, 0x052C, [IntPtr]::Zero, [IntPtr]::Zero, 0, 1000, [ref]$result) | Out-Null
-$script:workerw = [IntPtr]::Zero
-$enum = [MineradioNativeWin+EnumWindowsProc]{
-  param([IntPtr]$top, [IntPtr]$param)
-  $shell = [MineradioNativeWin]::FindWindowEx($top, [IntPtr]::Zero, "SHELLDLL_DefView", $null)
-  if ($shell -ne [IntPtr]::Zero) {
-    $script:workerw = [MineradioNativeWin]::FindWindowEx([IntPtr]::Zero, $top, "WorkerW", $null)
+
+function restoreWallpaperModeOpacity() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try { mainWindow.setOpacity(1); } catch (_) {}
+}
+
+  async function enableFullDesktopMode(win, payload = {}) {
+    const runtime = ensureFullDesktopModeRuntime();
+    wallpaperState = { ...wallpaperState, ...(payload || {}), enabled: true };
+    fullDesktopEnableOperation += 1;
+    /* 默认走标准 WorkerW 附着（稳定，Win10 / Win11 24H2 都支持，实测画面能出来）。
+       桌面内可交互（explorer 分层色键内嵌）依赖未公开行为，只有显式要求时才尝试，
+       失败就保持「纯壁纸」——用户至少能看到画面，退出走托盘。 */
+    const interactive = payload && payload.interactive === true;
+    const result = await runtime.enable(win, { reason: 'wallpaper-mode-toggle', interactive });
+  if (result && result.ok === true) {
+    fullDesktopEscapeRegistered = true;
+    applyWallpaperModeOpacity(wallpaperState.opacity);
+    broadcastDesktopWallpaperStatus();
   }
-  return $true
-}
-[MineradioNativeWin]::EnumWindows($enum, [IntPtr]::Zero) | Out-Null
-if ($script:workerw -eq [IntPtr]::Zero) { $script:workerw = $progman }
-$target = [IntPtr]::new([Int64]${hwnd})
-[MineradioNativeWin]::SetParent($target, $script:workerw) | Out-Null
-[MineradioNativeWin]::SetWindowPos($target, [IntPtr]::Zero, 0, 0, 0, 0, 0x0013) | Out-Null
-`;
-  execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-    windowsHide: true,
-    timeout: 5000,
-  }, (error) => {
-    if (error) console.warn('Wallpaper WorkerW attach failed:', error.message);
-  });
+  return result;
 }
 
-function positionWallpaperWindow() {
-  if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
-  const bounds = screen.getPrimaryDisplay().bounds;
-  wallpaperWindow.setBounds(bounds, false);
+async function disableFullDesktopMode(reason = 'wallpaper-mode-toggle') {
+  fullDesktopEnableOperation += 1;
+  restoreWallpaperModeOpacity();
+  if (!fullDesktopModeRuntime) return { ok: true, enabled: false };
+  const result = await fullDesktopModeRuntime.disable(reason);
+  broadcastDesktopWallpaperStatus(result && result.status ? result.status : { enabled: false });
+  return result;
 }
 
-function sendWallpaperState() {
-  if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
-  wallpaperWindow.webContents.send('mineradio-wallpaper-state', wallpaperState);
-}
-
-function createWallpaperWindow(payload = {}) {
-  wallpaperState = { ...wallpaperState, ...payload, enabled: true };
-  if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
-    positionWallpaperWindow();
-    sendWallpaperState();
-    return wallpaperWindow;
+async function createWallpaperWindow(payload = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, enabled: false, error: 'NO_MAIN_WINDOW' };
   }
-  const bounds = screen.getPrimaryDisplay().bounds;
-  wallpaperWindow = new BrowserWindow({
-    ...bounds,
-    frame: false,
-    transparent: false,
-    backgroundColor: '#050608',
-    hasShadow: false,
-    resizable: false,
-    movable: false,
-    focusable: false,
-    skipTaskbar: true,
-    show: false,
-    title: 'Mineradio Wallpaper',
-    webPreferences: {
-      preload: path.join(__dirname, 'overlay-preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      backgroundThrottling: false,
-    },
-  });
-  wallpaperWindow.setIgnoreMouseEvents(true, { forward: true });
-  wallpaperWindow.once('ready-to-show', () => {
-    if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
-    positionWallpaperWindow();
-    wallpaperWindow.showInactive();
-    attachWallpaperToWorkerW(wallpaperWindow);
-    sendWallpaperState();
-  });
-  wallpaperWindow.webContents.once('did-finish-load', sendWallpaperState);
-  wallpaperWindow.on('closed', () => {
-    wallpaperWindow = null;
-  });
-  wallpaperWindow.loadURL(overlayUrl('wallpaper.html')).catch((e) => console.warn('Wallpaper load failed:', e.message));
-  return wallpaperWindow;
+  return enableFullDesktopMode(mainWindow, payload);
 }
 
-function closeWallpaperWindow() {
-  wallpaperState = { ...wallpaperState, enabled: false };
-  if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
-    sendWallpaperState();
-    wallpaperWindow.close();
-  }
-  wallpaperWindow = null;
+async function closeWallpaperWindow() {
+  return disableFullDesktopMode('wallpaper-mode-off');
 }
 
 function closeOverlayWindows() {
   closeDesktopLyricsWindow();
-  closeWallpaperWindow();
+  Promise.resolve(closeWallpaperWindow()).catch(() => {});
 }
 
 // ========== 辅助函数：IPC 信任检查 ==========
@@ -2342,7 +2506,29 @@ ipcMain.handle('mineradio-hotkeys-configure-global', (_event, bindings) => {
   return configureMineradioGlobalHotkeys(bindings);
 });
 
+// 「进入卡顿随车记录仪」：渲染层把每次冷启动进入主界面的卡顿采样写成一行 JSON，
+// 追加到稳定数据目录下的 logs/enter-perf.log。仅本地诊断用，无任何遥测上报。
+// 注意：这里不能用 app.getPath('userData') —— setPath('cache') 会把它篡改成
+// chromium 缓存目录（见 _REAL_APP_DATA 处的注释），日志会被当缓存清掉。
+ipcMain.handle('mineradio-perf-note', (_event, payload) => {
+  try {
+    const line = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    if (!line || line.length > 256 * 1024) return false;
+    let root;
+    try { root = _REAL_APP_DATA; } catch (_) { root = ''; }
+    if (!root) { try { root = app.getPath('appData'); } catch (_) { root = app.getPath('userData'); } }
+    const dir = path.join(root, APP_NAME, 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'enter-perf.log'), line + '\n', 'utf8');
+    return true;
+  } catch (e) {
+    console.warn('[PerfNote] write failed:', e.message);
+    return false;
+  }
+});
+
 ipcMain.handle('mineradio-export-json-file', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
     const owner = getSenderWindow(event);
     const defaultName = String(payload.defaultName || 'mineradio-export.json').replace(/[\\/:*?"<>|]+/g, '-');
@@ -2361,6 +2547,7 @@ ipcMain.handle('mineradio-export-json-file', async (event, payload = {}) => {
 });
 
 ipcMain.handle('mineradio-import-json-file', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
     const owner = getSenderWindow(event);
     const result = await dialog.showOpenDialog(owner, {
@@ -2852,12 +3039,7 @@ ipcMain.handle('full-desktop-enable', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'DESKTOP_MODE_UNTRUSTED_SENDER' };
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'NO_MAIN_WINDOW' };
   try {
-    const runtime = ensureFullDesktopModeRuntime();
-    fullDesktopEnableOperation += 1;
-    const result = await runtime.enableDesktopMode(mainWindow, 'renderer-enable');
-    if (result && result.ok === true) {
-      broadcastDesktopWallpaperStatus();
-    }
+    const result = await enableFullDesktopMode(mainWindow, {});
     return result;
   } catch (e) {
     return { ok: false, error: e.message || 'FULL_DESKTOP_ENABLE_FAILED' };
@@ -2866,11 +3048,8 @@ ipcMain.handle('full-desktop-enable', async (event) => {
 
 ipcMain.handle('full-desktop-disable', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'DESKTOP_MODE_UNTRUSTED_SENDER' };
-  if (!fullDesktopModeRuntime) return { ok: false, error: 'FULL_DESKTOP_NOT_INITIALIZED' };
   try {
-    fullDesktopEnableOperation += 1;
-    const result = await fullDesktopModeRuntime.disableDesktopMode('renderer-disable');
-    broadcastDesktopWallpaperStatus({ enabled: false });
+    const result = await disableFullDesktopMode('renderer-disable');
     return result;
   } catch (e) {
     return { ok: false, error: e.message || 'FULL_DESKTOP_DISABLE_FAILED' };
@@ -2943,7 +3122,8 @@ ipcMain.handle('mineradio-wallpaper-engine-open-project-details', async (event, 
   }
 });
 
-ipcMain.handle('mineradio-open-update-installer', async (_event, filePath) => {
+ipcMain.handle('mineradio-open-update-installer', async (event, filePath) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
     const target = path.resolve(String(filePath || ''));
     const updateDir = path.resolve(getUpdateDownloadDir());
@@ -2955,6 +3135,36 @@ ipcMain.handle('mineradio-open-update-installer', async (_event, filePath) => {
     return error ? { ok: false, error } : { ok: true };
   } catch (e) {
     return { ok: false, error: e.message || 'OPEN_UPDATE_FAILED' };
+  }
+});
+
+// 进程启动时刻：用来判断磁盘上的程序文件是不是在本进程起来之后又被更新过。
+// 打包树（dist/Mineradio/resources/app）与源码是两棵树，改完源码不 sync，用户
+// 启动 exe 看到的还是旧代码 —— 那种「改了完全没反应」十次有九次是这个原因。
+const appProcessStartedAt = Date.now();
+ipcMain.handle('mineradio-build-freshness', async () => {
+  try {
+    const appRoot = app.getAppPath();
+    const candidates = ['public/index.html', 'public/desktop-lyrics.html', 'desktop/main.js', 'server.js'];
+    let newest = 0;
+    let newestFile = '';
+    for (const rel of candidates) {
+      try {
+        const st = await fs.promises.stat(path.join(appRoot, rel));
+        if (st.mtimeMs > newest) { newest = st.mtimeMs; newestFile = rel; }
+      } catch (e) {}
+    }
+    return {
+      ok: true,
+      appRoot,
+      startedAt: appProcessStartedAt,
+      newest,
+      newestFile,
+      // 留 2s 余量，避免「启动瞬间刚被拷过」的文件误报
+      stale: newest > appProcessStartedAt + 2000,
+    };
+  } catch (e) {
+    return { ok: false, error: e.message || 'BUILD_FRESHNESS_FAILED' };
   }
 });
 
@@ -2982,6 +3192,19 @@ ipcMain.handle('mineradio-desktop-lyrics-set-enabled', async (_event, enabled, p
   }
 });
 
+/* 桌面歌词悬停控制条：只放行三个白名单 action，转发到既有全局热键链路
+   （sendGlobalHotkeyAction → 'mineradio-global-hotkey' → executeHotkeyAction），
+   主窗口渲染层零改动。 */
+const DESKTOP_LYRICS_PLAYBACK_ACTIONS = new Set(['togglePlay', 'prevTrack', 'nextTrack']);
+ipcMain.handle('mineradio-desktop-lyrics-playback-action', async (_event, action) => {
+  const key = String(action || '');
+  if (!DESKTOP_LYRICS_PLAYBACK_ACTIONS.has(key)) {
+    return { ok: false, error: 'DESKTOP_LYRICS_ACTION_UNSUPPORTED' };
+  }
+  sendGlobalHotkeyAction(key);
+  return { ok: true, action: key };
+});
+
 ipcMain.handle('mineradio-desktop-lyrics-update', async (_event, payload) => {
   try {
     const nextState = { ...desktopLyricsState, ...(payload || {}) };
@@ -3005,7 +3228,13 @@ ipcMain.handle('mineradio-desktop-lyrics-set-dragging', async () => {
 
 ipcMain.handle('mineradio-desktop-lyrics-set-pointer-capture', async (_event, active) => {
   try {
-    desktopLyricsPointerCapture = !!active;
+    if (active) {
+      desktopLyricsPointerCapture = true;
+    } else if (!desktopLyricsCursorOverStage() && Date.now() >= desktopLyricsDragUntil) {
+      /* 页面报「鼠标走了」时以主进程的光标判断为准：光标确实还在歌词上就别关，
+       * 否则拖动过程中会瞬间退回穿透，后续 pointermove 全部丢失。 */
+      desktopLyricsPointerCapture = false;
+    }
     applyDesktopLyricsMouseBehavior();
     return { ok: true };
   } catch (e) {
@@ -3030,6 +3259,8 @@ ipcMain.handle('mineradio-desktop-lyrics-set-lock-state', async (_event, locked)
   try {
     desktopLyricsState = { ...desktopLyricsState, clickThrough: !!locked };
     if (desktopLyricsState.clickThrough !== false) desktopLyricsPointerCapture = false;
+    // 解锁后立刻按光标位置重新判断一次，否则要等下一轮轮询（最多 90ms）才恢复可拖
+    syncDesktopLyricsCursorCapture();
     applyDesktopLyricsMouseBehavior();
     broadcastDesktopLyricsLockState();
     return { ok: true, locked: desktopLyricsState.clickThrough !== false };
@@ -3038,47 +3269,64 @@ ipcMain.handle('mineradio-desktop-lyrics-set-lock-state', async (_event, locked)
   }
 });
 
+/* 拖动一步：只改 x / y，尺寸沿用当前 bounds（高度由行数决定，不属于拖动范围） */
+function desktopLyricsDragNextBounds(bounds, dx, dy) {
+  return {
+    ...bounds,
+    x: Math.round(bounds.x + clampNumber(dx, -160, 160, 0)),
+    y: Math.round(bounds.y + clampNumber(dy, -160, 160, 0)),
+  };
+}
+
+/* 真正执行一步拖动，并记录「用户拖到哪里」。
+ * 记的是算出来的 next，**不能回读 getBounds()**：Windows 上 SetWindowPos 异步生效，
+ * 回读常常还是旧坐标，下一次状态推送就会把窗口拽回拖动起点（表现为「拖一下就弹回去」）。 */
+function applyDesktopLyricsDrag(bounds, dx, dy) {
+  const next = desktopLyricsDragNextBounds(bounds, dx, dy);
+  if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return next;
+  // 拖动期间窗口必须一直可接收鼠标：光标稍有偏离热区也不能立刻恢复穿透
+  desktopLyricsDragUntil = Date.now() + 700;
+  desktopLyricsWindow.setBounds(next, false);
+  desktopLyricsUserBounds = next;
+  saveDesktopLyricsAnchor(desktopLyricsAnchorFromBounds(next));
+  return next;
+}
+
 ipcMain.handle('mineradio-desktop-lyrics-move-by', async (_event, dx, dy) => {
   try {
     if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return { ok: false, error: 'NO_DESKTOP_LYRICS_WINDOW' };
     if (desktopLyricsState.clickThrough !== false) return { ok: false, error: 'DESKTOP_LYRICS_LOCKED' };
-    const bounds = desktopLyricsWindow.getBounds();
-    const next = {
-      ...bounds,
-      x: Math.round(bounds.x + clampNumber(dx, -160, 160, 0)),
-      y: Math.round(bounds.y + clampNumber(dy, -160, 160, 0)),
-    };
-    desktopLyricsWindow.setBounds(next, false);
-    desktopLyricsUserBounds = desktopLyricsWindow.getBounds();
+    applyDesktopLyricsDrag(desktopLyricsWindow.getBounds(), dx, dy);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message || 'DESKTOP_LYRICS_MOVE_FAILED' };
   }
 });
 
-ipcMain.handle('mineradio-wallpaper-set-enabled', async (_event, enabled, payload) => {
+ipcMain.handle('mineradio-wallpaper-set-enabled', async (event, enabled, payload) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, enabled: false, error: 'WALLPAPER_UNTRUSTED_SENDER' };
   try {
-    if (enabled) createWallpaperWindow(payload || {});
-    else closeWallpaperWindow();
-    return { ok: true };
+    const result = enabled
+      ? await createWallpaperWindow(payload || {})
+      : await closeWallpaperWindow();
+    const normalized = result && typeof result === 'object' ? result : { ok: false, enabled: false };
+    const status = normalized.status
+      || (fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('wallpaper-set') : { enabled: false });
+    return { ...normalized, enabled: normalized.enabled === true || status.enabled === true, status };
   } catch (e) {
-    return { ok: false, error: e.message || 'WALLPAPER_FAILED' };
+    return { ok: false, enabled: false, error: e.message || 'WALLPAPER_FAILED' };
   }
 });
 
-ipcMain.handle('mineradio-wallpaper-update', async (_event, payload) => {
+ipcMain.handle('mineradio-wallpaper-update', async (event, payload) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'WALLPAPER_UNTRUSTED_SENDER' };
   try {
     wallpaperState = { ...wallpaperState, ...(payload || {}) };
-    if (wallpaperState.enabled) {
-      createWallpaperWindow(wallpaperState);
-      if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
-        positionWallpaperWindow();
-        sendWallpaperState();
-      }
-    } else if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
-      sendWallpaperState();
+    if (fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled()) {
+      applyWallpaperModeOpacity(wallpaperState.opacity);
     }
-    return { ok: true };
+    const status = fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('renderer-update') : { enabled: false };
+    return { ok: true, enabled: status.enabled === true, status };
   } catch (e) {
     return { ok: false, error: e.message || 'WALLPAPER_UPDATE_FAILED' };
   }
@@ -3501,6 +3749,18 @@ function devToolsEnabled() {
   return !app.isPackaged;
 }
 
+// createWindow() 是长异步流程（等本地 server 启动 + 页面加载重试，可达数十秒）。
+// 这段时间里 second-instance / activate 都可能再次触发创建：并发执行会让后来的
+// mainWindow 覆盖前一个引用，留下无法再引用的孤儿窗口并重复注册监听。
+// 用同一个 Promise 去重，让所有入口共享一次创建。
+let mainWindowCreationPromise = null;
+function ensureMainWindowCreated() {
+  if (mainWindowCreationPromise) return mainWindowCreationPromise;
+  mainWindowCreationPromise = createWindow()
+    .finally(() => { mainWindowCreationPromise = null; });
+  return mainWindowCreationPromise;
+}
+
 async function createWindow() {
   htmlFullscreenActive = false;
   windowFullscreenActive = false;
@@ -3561,7 +3821,7 @@ async function createWindow() {
     try {
       const parsed = new URL(url);
       if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
-        shell.openExternal(url);
+        shell.openExternal(url).catch(() => {});
       }
     } catch (e) {}
     return { action: 'deny' };
@@ -3673,6 +3933,15 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    /* 壁纸模式（完整桌面模式）的 Esc 逃生：主进程这一层比页面 keydown 更早，
+       页面拿不到键盘焦点时也能退出。软件锁只锁鼠标/图标，不锁这条。 */
+    if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape')
+      && fullDesktopModeRuntime && typeof fullDesktopModeRuntime.isEnabled === 'function'
+      && fullDesktopModeRuntime.isEnabled()) {
+      event.preventDefault();
+      disableFullDesktopMode('escape-key').catch(() => {});
+      return;
+    }
     if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape') && mainWindow.isFullScreen()) {
       event.preventDefault();
       exitFullscreenToWindow(mainWindow);
@@ -3818,7 +4087,11 @@ ipcMain.handle('mineradio-memory-trim-app', async (event, pids) => {
     const requested = Array.isArray(pids)
       ? pids.map((p) => Math.round(Number(p))).filter((p) => Number.isFinite(p) && p > 0 && own.has(p))
       : [];
-    const result = await appMemory.trimAppWorkingSets(requested.length ? requested : [process.pid]);
+    // 渲染层传的是 { reason } / [null] 这类「没有具体 PID」的信号，语义是
+    // 「整理全部自有进程」。旧实现回退到只 trim 主进程，渲染进程 / GPU /
+    // utility 从不参与，按需内存压缩等于半失效。
+    const targets = requested.length ? requested : Array.from(own);
+    const result = await appMemory.trimAppWorkingSets(targets.length ? targets : [process.pid]);
     memoryAutoState.lastTrimAt = Date.now();
     return result;
   } catch (e) {
@@ -3925,10 +4198,17 @@ ipcMain.handle('mineradio-export-login-cookie', async (event, provider) => {
       } catch (_) {}
     }
     if (!text) return { ok: false, error: 'COOKIE_NOT_FOUND', message: `${meta.label} 当前没有可导出的登录 cookie` };
-    const safeName = String(`${meta.label}_登录cookie.txt`).replace(/[\\/:*?"<>|]+/g, '-');
-    const filePath = path.join(app.getPath('desktop'), safeName);
-    fs.writeFileSync(filePath, text, 'utf8');
-    return { ok: true, filePath, source };
+    // 明文凭据不写到固定文件名：旧实现每次导出都静默覆盖桌面上的同一份，
+    // 既丢历史也让人误以为只有一个副本。加时间戳 + 序号，并用 'wx' 拒绝覆盖。
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeName = String(`${meta.label}_登录cookie_${stamp}.txt`).replace(/[\\/:*?"<>|]+/g, '-');
+    const desktopDir = app.getPath('desktop');
+    let filePath = path.join(desktopDir, safeName);
+    for (let i = 1; fs.existsSync(filePath) && i < 100; i++) {
+      filePath = path.join(desktopDir, safeName.replace(/\.txt$/, `_${i}.txt`));
+    }
+    fs.writeFileSync(filePath, text, { encoding: 'utf8', flag: 'wx' });
+    return { ok: true, filePath, source, warning: '该文件包含明文登录凭据，请妥善保管并及时删除' };
   } catch (e) {
     return { ok: false, error: e.message || 'EXPORT_LOGIN_COOKIE_FAILED' };
   }
@@ -3936,6 +4216,7 @@ ipcMain.handle('mineradio-export-login-cookie', async (event, provider) => {
 
 /* ===== 跨设备登录包（口令加密） ===== */
 ipcMain.handle('mineradio-export-login-pack', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', message: '不受信任的调用来源' };
   try {
     const password = String(payload.password || '');
     const providers = Array.isArray(payload.providers) ? payload.providers : [];
@@ -3961,6 +4242,7 @@ ipcMain.handle('mineradio-export-login-pack', async (event, payload = {}) => {
 });
 
 ipcMain.handle('mineradio-import-login-pack', async (event, payload = {}) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER', message: '不受信任的调用来源' };
   try {
     const password = String(payload.password || '');
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -3985,7 +4267,12 @@ ipcMain.handle('mineradio-import-login-pack', async (event, payload = {}) => {
   }
 });
 
-ipcMain.handle('mineradio-login-pack-qr-start', async (_event, payload = {}) => {
+ipcMain.handle('mineradio-login-pack-qr-start', async (event, payload = {}) => {
+  // 该通道会把五平台 cookie/token 打成 envelope 并开一个局域网服务，
+  // 必须和 export-login-cookie / qr-import 一样只接受受信任的主窗口调用。
+  if (!isTrustedMainWindowIpc(event)) {
+    return { ok: false, error: 'UNTRUSTED_SENDER', message: '不受信任的调用来源' };
+  }
   try {
     const password = String(payload.password || '');
     const providers = Array.isArray(payload.providers) ? payload.providers : [];
@@ -4100,12 +4387,44 @@ if (!gotSingleInstanceLock) {
 
   // Wallpaper Engine / Full Desktop：首次相关 IPC 时再 ensure 构造
   app.on('second-instance', () => {
-    if (startupCompleted && focusMainWindow()) return;
-    app.whenReady().then(() => createWindow()).then(() => focusMainWindow())
+    if (focusMainWindow()) return;
+    // 冷启动期主流程正在创建窗口：等它完成再聚焦，绝不并发再建一个。
+    if (mainWindowCreationPromise) {
+      mainWindowCreationPromise.then(() => focusMainWindow()).catch(() => {});
+      return;
+    }
+    app.whenReady().then(() => ensureMainWindowCreated()).then(() => focusMainWindow())
       .catch((e) => reportWindowCreationFailure('Second instance', e));
   });
 
+  // Web 权限显式策略（安全审查 S3）：
+  // 手势缩放经 MediaPipe Camera → getUserMedia（public/js/modules/10-shell/00-gesture-resize-ui.js），
+  // 除此之外本应用不需要任何 web 权限。不装 handler 时行为由 Electron 默认值决定
+  // （历史默认"全部批准"），渲染进程一旦失陷即可静默开启摄像头/麦克风。
+  // 策略：仅主窗口（本地 server 的 127.0.0.1/localhost origin）放行 'media'，其余一律拒绝。
+  // 登录窗口（netease/qq/kugou/spotify 的 persist: 分区）只加载第三方登录页，不需要 camera。
+  function isTrustedLocalRenderer(webContents) {
+    try {
+      return /^https?:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(String((webContents && webContents.getURL()) || ''));
+    } catch (_) {
+      return false;
+    }
+  }
+  function installWebPermissionPolicy(targetSession) {
+    if (!targetSession || typeof targetSession.setPermissionRequestHandler !== 'function') return;
+    targetSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      callback(permission === 'media' && isTrustedLocalRenderer(webContents));
+    });
+    targetSession.setPermissionCheckHandler((webContents, permission) => (
+      permission === 'media' && isTrustedLocalRenderer(webContents)
+    ));
+  }
+  // 自定义分区（登录窗口等）的 session 创建时同样装上（session-created 一定在 app ready 之后触发）
+  app.on('session-created', (_event, createdSession) => installWebPermissionPolicy(createdSession));
+
   app.whenReady().then(async () => {
+    // Web 权限策略装上默认会话（session 使用须在 app ready 后）
+    installWebPermissionPolicy(session.defaultSession);
     // mineradio-local:// 必须在任何窗口加载前就位（渲染进程可能一开机就播本地库歌曲）
     try {
       await localMusicLibrary.installProtocol(protocol);
@@ -4114,7 +4433,10 @@ if (!gotSingleInstanceLock) {
     }
     const handleDisplayLayoutChanged = () => {
       positionDesktopLyricsWindow();
-      positionWallpaperWindow();
+      // 壁纸模式（完整桌面模式）的窗口几何由 runtime 自己跟随显示器变化重排
+      if (fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled()) {
+        broadcastDesktopWallpaperStatus();
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         ensureMainWindowInsideDisplay(mainWindow);
       }
@@ -4123,7 +4445,7 @@ if (!gotSingleInstanceLock) {
     screen.on('display-metrics-changed', handleDisplayLayoutChanged);
     screen.on('display-added', handleDisplayLayoutChanged);
     screen.on('display-removed', handleDisplayLayoutChanged);
-    await createWindow();
+    await ensureMainWindowCreated();
   }).catch((e) => reportWindowCreationFailure('Main', e));
 
   // 子进程崩溃（GPU / raster / utility / audio）——renderer 的 reason=crashed 常常是它们的连锁反应，
@@ -4156,23 +4478,42 @@ if (!gotSingleInstanceLock) {
 
   app.on('activate', () => {
     if (startupCompleted && focusMainWindow()) return;
-    createWindow().then(() => focusMainWindow()).catch((e) => reportWindowCreationFailure('Activate', e));
+    ensureMainWindowCreated().then(() => focusMainWindow()).catch((e) => reportWindowCreationFailure('Activate', e));
   });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
 
-  app.on('before-quit', () => {
+  function runAppShutdownCleanup() {
+  if (memoryAutoTimer) clearInterval(memoryAutoTimer);
+  // 二维码同步服务监听局域网且持有登录包凭据，退出时必须主动关掉。
+  try { stopLoginPackQrSession(); } catch (_) {}
+  clearWallpaperEngineCaptureGrant();
+  if (wallpaperEngineLibrary && typeof wallpaperEngineLibrary.dispose === 'function') {
+    try { wallpaperEngineLibrary.dispose(); } catch (_) {}
+  }
+  unregisterMineradioGlobalHotkeys();
+  closeOverlayWindows();
+  destroyTray();
+  if (localServer && localServer.close) localServer.close();
+}
+
+app.on('before-quit', (event) => {
     appQuitting = true;
-    if (memoryAutoTimer) clearInterval(memoryAutoTimer);
-    clearWallpaperEngineCaptureGrant();
-    if (wallpaperEngineLibrary && typeof wallpaperEngineLibrary.dispose === 'function') {
-      try { wallpaperEngineLibrary.dispose(); } catch (_) {}
+    /* 壁纸模式下主窗口还挂在桌面上，必须先等 runtime 把窗口摘回顶层再退出，
+     * 否则进程一死桌面就少了图标层的共存窗口。 */
+    if (fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled() && !fullDesktopQuitDisposePending) {
+      event.preventDefault();
+      fullDesktopQuitDisposePending = true;
+      Promise.resolve(fullDesktopModeRuntime.dispose('app-before-quit'))
+        .catch(() => {})
+        .then(() => {
+          runAppShutdownCleanup();
+          app.quit();
+        });
+      return;
     }
-    unregisterMineradioGlobalHotkeys();
-    closeOverlayWindows();
-    destroyTray();
-    if (localServer && localServer.close) localServer.close();
+    runAppShutdownCleanup();
   });
 }

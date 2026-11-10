@@ -496,140 +496,62 @@ function startKugouLoginStatusAutoRefresh() {
   }, 45000);
 }
 
-function normalizeQishuiLoginStatus(info) {
-  var fallback = { provider: 'qishui', loggedIn: false, configured: false, oauthConfigured: false, oauthMissing: [], preview: false, nickname: '汽水音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, stale: false, playbackKeyReady: false, playbackMode: 'recommend-match', searchReady: false, publicCatalog: false };
-  var configured = !!(info && (info.configured || info.loggedIn));
-  var webSession = !!(info && info.webSession);
-  var capabilities = info && info.capabilities || {};
-  var searchReady = !!(configured || capabilities.search || info && info.publicCatalog);
-  return Object.assign({}, fallback, info || {}, {
-    provider: 'qishui',
-    loggedIn: configured,
-    configured: configured,
-    oauthConfigured: !!(info && (info.oauthConfigured || (info.oauth && info.oauth.configured))),
-    oauthMissing: info && Array.isArray(info.oauthMissing) ? info.oauthMissing : [],
-    userId: info && (info.userId || info.openId || info.open_id || info.tokenSource || info.scope || '') || '',
-    nickname: info && info.nickname ? info.nickname : (webSession ? '汽水音乐账号' : (configured ? '汽水开放平台' : fallback.nickname)),
-    avatar: info && info.avatar || '',
-    vipType: Number(info && (info.vipType || info.vip_type) || 0) || 0,
-    vipLevel: info && (info.vipLevel || info.vip_level) || 'none',
-    isVip: !!(info && info.isVip),
-    isSvip: !!(info && info.isSvip),
-    playbackKeyReady: !!(webSession && capabilities.playableUrl),
-    playbackMode: info && info.playbackMode || 'recommend-match',
-    searchReady: searchReady,
-    webSession: webSession,
-    cookieReady: !!(info && info.cookieReady),
-    tokenConfigured: !!(info && info.tokenConfigured),
-    publicCatalog: !!(!configured && searchReady),
-    stale: false
-  });
-}
-async function refreshQishuiLoginStatus() {
-  try {
-    var info = await apiJson('/api/qishui/status?t=' + Date.now());
-    var prevLogged = !!qishuiLoginStatus.loggedIn;
-    qishuiLoginStatus = normalizeQishuiLoginStatus(info);
-    auditProviderVipState('qishui', qishuiLoginStatus);
-    if (!qishuiLoginStatus.loggedIn) {
-      if (prevLogged || qishuiLoginWasLoggedIn) showToast('汽水音乐授权已清除');
-      qishuiPlaylists = [];
-      userPlaylists = userPlaylists.filter(function (pl) { return pl.provider !== 'qishui'; });
-      playlistCatalogRevision += 1;
-      homeDiscoverState.loaded = false;
-    } else if (!userPlaylists.some(function (pl) { return pl && pl.provider === 'qishui'; })) {
-      homeDiscoverState.loaded = false;
-      homeDiscoverState.loggedIn = true;
-      refreshUserPlaylists(true);
-      loadHomeDiscover(true);
-    }
-    qishuiLoginWasLoggedIn = !!qishuiLoginStatus.loggedIn;
-    if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    return qishuiLoginStatus;
-  } catch (e) {
-    console.warn('Qishui login status failed:', e);
-    qishuiLoginStatus = normalizeQishuiLoginStatus(null);
-    renderUserBtn();
-    return qishuiLoginStatus;
+/* ------------------------------------------------------------------
+   延迟波登录态补刷 —— 修「重启后只显示酷狗，汽水要点一下登录才回来」
+   ---------------------------------------------------------------------
+   bootstrapStartupLoginStatus()（10-shell/01-splash-and-boot.js）在主波顶层执行，
+   里面 refreshQishuiLoginStatus / refreshSpotifyLoginStatus 都带 typeof 守卫；
+   这两个函数却定义在第二波（08-account/02-qishui-login.js、03-login-modal-flows.js），
+   守卫当时判 false，于是这两家的登录态一整个启动周期都不会被读取：
+     - qishuiLoginStatus 停在 12a 里的 loggedIn:false；
+     - renderUserBtn() 算出 loggedCount=1，顶栏只画酷狗那一颗头像；
+     - refreshUserPlaylists() 也不会去拉 /api/qishui/user/playlists。
+   等用户打开登录弹窗切到汽水那格，refreshQr() 才顺手刷一次，看起来像「点一下就回来」。
+
+   index-loader 的 injectDeferredCombined() 会把延迟波整份 script 挂进 DOM 之后调用本钩子，
+   此刻那些函数已经真正存在，补刷即可。两家自己的刷新函数内部都会 renderUserBtn()
+   并按需 refreshUserPlaylists(true) / loadHomeDiscover(true)，不必在这里重复拉歌单。
+   ------------------------------------------------------------------ */
+var deferredProviderLoginRefreshDone = false;
+function refreshDeferredProviderLoginStatus() {
+  if (deferredProviderLoginRefreshDone) return false;
+  deferredProviderLoginRefreshDone = true;
+  var jobs = [];
+  if (typeof refreshQishuiLoginStatus === 'function') {
+    jobs.push(Promise.resolve().then(function () { return refreshQishuiLoginStatus(); })
+      .catch(function (e) { console.warn('[StartupLogin] qishui status failed:', e); }));
   }
+  if (typeof refreshSpotifyLoginStatus === 'function') {
+    jobs.push(Promise.resolve().then(function () { return refreshSpotifyLoginStatus(); })
+      .catch(function (e) { console.warn('[StartupLogin] spotify status failed:', e); }));
+  }
+  /* 两家各自会 renderUserBtn()，这里再统一收一次口：保证最后画出来的是
+     「全部平台都到齐」之后的状态，而不是谁先返回谁说了算。 */
+  Promise.all(jobs).then(function () {
+    if (typeof renderUserBtn === 'function') renderUserBtn();
+  });
+  return true;
 }
+window.__onDeferredLoginStatusReady = refreshDeferredProviderLoginStatus;
+
 function startQishuiLoginStatusAutoRefresh() {
   if (qishuiLoginAutoRefreshTimer) clearInterval(qishuiLoginAutoRefreshTimer);
   qishuiLoginAutoRefreshTimer = setInterval(function () {
     if (document.hidden) return;
     if (!qishuiLoginStatus.loggedIn && !qishuiLoginWasLoggedIn) return;
+    // refreshQishuiLoginStatus 定义在 deferred 波（02-qishui-login.js），boot 早期可能尚未注入 → typeof 守卫
+    if (typeof refreshQishuiLoginStatus !== 'function') return;
     refreshQishuiLoginStatus().catch(function (e) { console.warn('Qishui login auto refresh failed:', e); });
   }, 45000);
 }
 
-function normalizeSpotifyLoginStatus(info) {
-  var fallback = { provider: 'spotify', loggedIn: false, configured: false, oauthConfigured: false, oauthMissing: [], preview: false, nickname: 'Spotify', userId: '', accountId: '', avatar: '', product: '', membershipKnown: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, stale: false, reauthRequired: false, playbackKeyReady: false, playbackMode: 'recommend-match', tokenConfigured: false, tokenFileExists: false, credentialsFileExists: false, localConfigMissing: false, searchReady: false };
-  var loggedIn = !!(info && info.loggedIn);
-  var product = String(info && info.product || '').toLowerCase();
-  var isPremium = loggedIn && product === 'premium';
-  var capabilities = info && info.capabilities || {};
-  return Object.assign({}, fallback, info || {}, {
-    provider: 'spotify',
-    loggedIn: loggedIn,
-    configured: !!(info && (info.configured || loggedIn)),
-    oauthConfigured: !!(info && info.oauthConfigured),
-    oauthMissing: info && Array.isArray(info.oauthMissing) ? info.oauthMissing : [],
-    nickname: info && (info.nickname || info.displayName || info.display_name) || fallback.nickname,
-    userId: info && (info.userId || info.id) || '',
-    accountId: info && (info.accountId || info.account_id) || '',
-    avatar: info && info.avatar || '',
-    product: product,
-    membershipKnown: !!(info && (info.membershipKnown || product)),
-    vipType: isPremium ? 1 : 0,
-    vipLevel: isPremium ? 'vip' : 'none',
-    isVip: isPremium,
-    isSvip: false,
-    tokenConfigured: !!(info && info.tokenConfigured),
-    tokenFileExists: !!(info && info.tokenFileExists),
-    credentialsFileExists: !!(info && info.credentialsFileExists),
-    localConfigMissing: !!(info && info.localConfigMissing),
-    playbackKeyReady: loggedIn,
-    playbackMode: 'recommend-match',
-    searchReady: !!(capabilities.search || info && info.searchReady),
-    stale: !!(info && info.stale),
-    reauthRequired: !!(info && info.reauthRequired)
-  });
-}
-async function refreshSpotifyLoginStatus() {
-  try {
-    var info = await apiJson('/api/spotify/status?t=' + Date.now());
-    var prevLogged = !!spotifyLoginStatus.loggedIn;
-    spotifyLoginStatus = normalizeSpotifyLoginStatus(info);
-    auditProviderVipState('spotify', spotifyLoginStatus);
-    if (!spotifyLoginStatus.loggedIn) {
-      if (prevLogged || spotifyLoginWasLoggedIn) showToast(spotifyLoginStatus.stale ? 'Spotify 登录已失效' : 'Spotify 已退出');
-      spotifyPlaylists = [];
-      userPlaylists = userPlaylists.filter(function (pl) { return pl.provider !== 'spotify'; });
-      playlistCatalogRevision += 1;
-      homeDiscoverState.loaded = false;
-    } else if (!userPlaylists.some(function (pl) { return pl && pl.provider === 'spotify'; })) {
-      homeDiscoverState.loaded = false;
-      homeDiscoverState.loggedIn = true;
-      refreshUserPlaylists(true);
-      loadHomeDiscover(true);
-    }
-    spotifyLoginWasLoggedIn = !!spotifyLoginStatus.loggedIn;
-    if (!hasPlatformLogin(activeAccountProvider)) activeAccountProvider = firstLoggedProvider();
-    renderUserBtn();
-    return spotifyLoginStatus;
-  } catch (e) {
-    console.warn('Spotify login status failed:', e);
-    spotifyLoginStatus = normalizeSpotifyLoginStatus(null);
-    renderUserBtn();
-    return spotifyLoginStatus;
-  }
-}
 function startSpotifyLoginStatusAutoRefresh() {
   if (spotifyLoginAutoRefreshTimer) clearInterval(spotifyLoginAutoRefreshTimer);
   spotifyLoginAutoRefreshTimer = setInterval(function () {
     if (document.hidden) return;
     if (!spotifyLoginStatus.loggedIn && !spotifyLoginWasLoggedIn) return;
+    // refreshSpotifyLoginStatus 定义在 deferred 波（03-login-modal-flows.js），boot 早期可能尚未注入 → typeof 守卫
+    if (typeof refreshSpotifyLoginStatus !== 'function') return;
     refreshSpotifyLoginStatus().catch(function (e) { console.warn('Spotify login auto refresh failed:', e); });
   }, 45000);
 }

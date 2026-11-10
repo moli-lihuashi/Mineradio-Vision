@@ -598,7 +598,9 @@ function animate() {
     }
     // 歌词阳光溢光: 独立于律动强度, 看持续能量 + 中高频抬升, 更像副歌/高音段落而不是单个鼓点.
     var sunEnergy = clamp01((smoothEnergy - 0.18) / 0.38);
-    var sunVoice = clamp01((voc - 0.11) / 0.34);
+    // 人声频段 0~1：同一条曲线同时喂「阳光溢光」和 Folia 世界的 audioBands.vocal。
+    audioVocal = clamp01((voc - 0.11) / 0.34);
+    var sunVoice = audioVocal;
     var sunMelody = clamp01((smoothMid - 0.16) / 0.27);
     var sunAir = clamp01((smoothTreb - 0.105) / 0.17);
     var sunRaw = clamp01(sunEnergy * 0.36 + sunVoice * 0.18 + sunMelody * 0.26 + sunAir * 0.20);
@@ -613,6 +615,7 @@ function animate() {
     lyricSunEnergy += (lyricSunTarget - lyricSunEnergy) * (lyricSunTarget > lyricSunEnergy ? 0.075 : 0.030);
   } else {
     smoothBass *= 0.91; smoothMid *= 0.91; smoothTreb *= 0.91; smoothEnergy *= 0.91; beatPulse *= 0.82;
+    audioVocal *= 0.91;
     sonicDecayBands(dt);
     liveCamAvg *= 0.94;
     liveCamPeak = Math.max(0.28, liveCamPeak * 0.98);
@@ -748,7 +751,8 @@ function animate() {
   var shelfStepDt = consumeFrameGate(mainFrameGates.shelf, now, dt, targetMainShelfFps(now), false, 'shelf-manager');
   if (shelfStepDt > 0 && shelfManager) shelfManager.update(shelfStepDt);
   var lyricsParticleStepDt = consumeFrameGate(mainFrameGates.lyricsParticles, now, dt, targetMainLyricsParticleFps(now), false, 'lyrics-particles');
-  if (lyricsParticleStepDt > 0) tickLyricsParticles();
+  // Folia 世界：原生 3D 歌词不推进（模式自己算行与进度），避免白建 mesh
+  if (lyricsParticleStepDt > 0 && !foliaWorldActive()) tickLyricsParticles();
   var homeAudioStepDt = consumeFrameGate(mainFrameGates.homeAudio, now, dt, targetMainHomeAudioFps(now), false, 'home-audio');
   if (homeAudioStepDt > 0) updateHomeAudioVisual(homeAudioStepDt);
 
@@ -787,7 +791,7 @@ function animate() {
   if (skullStepDt > 0) updateSkullParticleLayer(skullStepDt);
   var stageLyricsPerfStart = performance.now();
   var stageLyricsStepDt = consumeFrameGate(mainFrameGates.stageLyrics, now, dt, targetMainStageLyricsFps(now), false, 'stage-lyrics');
-  if (stageLyricsStepDt > 0) {
+  if (stageLyricsStepDt > 0 && !foliaWorldActive()) {
     updateStageLyrics3D(stageLyricsStepDt);
     updateClassicPlayerLyrics();
     updateInterludeWave(stageLyricsStepDt);
@@ -795,7 +799,7 @@ function animate() {
   if (window.__mineradioPerf && typeof window.__mineradioPerf.markSince === 'function') {
     window.__mineradioPerf.markSince('visual.stage-lyrics', stageLyricsPerfStart);
   }
-  if (typeof MineradioSonicTopography !== 'undefined') {
+  if (typeof MineradioSonicTopography !== 'undefined' && !foliaWorldActive()) {
     MineradioSonicTopography.update(dt, {
       scene: scene,
       fx: fx,
@@ -838,16 +842,25 @@ function animate() {
     }
   }
 
-  // 黑洞预设（preset 8）：先在离屏半分辨率 RT 上完成 raymarching，再进主渲染
-  if (typeof blackHoleLensPlane !== 'undefined' && blackHoleLensPlane && blackHoleLensPlane.visible && typeof renderBlackHoleLensRT === 'function') {
-    renderBlackHoleLensRT(camera);
-  }
-  var rendererPerfStart = performance.now();
-  renderer.render(scene, camera);
-  updateLiquidGlassBackdropMirror();
-  if (window.__mineradioPerf && typeof window.__mineradioPerf.markSince === 'function') {
-    window.__mineradioPerf.markSince('renderer.render', rendererPerfStart);
-    window.__mineradioPerf.markSince('frame.total', framePerfStart);
+  // Folia 世界：原生画面整段让位，改跑 Folia 自己的帧。
+  // 注意这里只停「画」——前面音频分析、歌词时钟、桌面歌词同步都照常跑。
+  if (foliaWorldActive()) {
+    foliaWorldTick(now, dt);
+    // Folia 的帧也要喂玻璃镜像：不喂的话 __lgBackdropCanvas 冻在进入前的最后一帧，
+    // liquid glass 卡片里永远折射粒子场景（bug：切 Folia 后玻璃停在旧画面）。
+    updateFoliaLiquidGlassBackdropMirror();
+  } else {
+    // 黑洞预设（preset 8）：先在离屏半分辨率 RT 上完成 raymarching，再进主渲染
+    if (typeof blackHoleLensPlane !== 'undefined' && blackHoleLensPlane && blackHoleLensPlane.visible && typeof renderBlackHoleLensRT === 'function') {
+      renderBlackHoleLensRT(camera);
+    }
+    var rendererPerfStart = performance.now();
+    renderer.render(scene, camera);
+    updateLiquidGlassBackdropMirror();
+    if (window.__mineradioPerf && typeof window.__mineradioPerf.markSince === 'function') {
+      window.__mineradioPerf.markSince('renderer.render', rendererPerfStart);
+      window.__mineradioPerf.markSince('frame.total', framePerfStart);
+    }
   }
 }
 // LiquidGlass 玻璃背景镜像：渲染后同帧同步 blit 主 WebGL canvas 到 2D 镜像，
@@ -871,10 +884,16 @@ function liquidGlassBgVideoEl() {
 }
 function liquidGlassMirrorBlitStride() {
   var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
+  /* 实测（2026-11-11，真实存档，原生世界）：主循环 45fps（22.2ms/帧）。
+   * 原来 high 落到 3 → 镜像每 3 帧才画一次 → 玻璃每卡只有 **15fps**，
+   * 玻璃里透出的那帧背景平均旧 44ms、峰值 66ms，这就是「透出来的图像延迟高」。
+   * 玻璃侧 JS 只提交 GL（_renderFrame 0.07ms），多画一次几乎不花钱：
+   * high/ultra 取 1 让玻璃与主循环同频（实测 15fps → 45fps，主循环不变）。 */
   if (quality === 'eco') return 6;
   if (quality === 'balanced') return 4;
-  if (quality === 'ultra') return 2;
-  return 3;
+  if (quality === 'high') return 1;
+  if (quality === 'ultra') return 1;
+  return 1;
 }
 // 玻璃可见性探测含 getClientRects()（强制同步布局），不能每帧跑：
 // 节流到 5Hz（200ms）。探测只用于「无可见玻璃时早退」，
@@ -969,6 +988,152 @@ function updateLiquidGlassBackdropMirror() {
     _lgMirrorCtx.drawImage(src, 0, 0, W, H);
   } catch (_) {
     _lgMirrorCtx.drawImage(src, 0, 0);
+  }
+  for (var k in mgr._instances) {
+    var e = mgr._instances[k];
+    if (e && e.instance && e.instance._running) {
+      e.instance._globalDirty = true;
+    }
+  }
+}
+
+/* Folia 世界激活时的玻璃背景镜像：把 Folia 的底色 + root 里的画布栈 blit 进同一块镜像。
+ * 必须在 foliaWorldTick 之后同帧调用——Folia 的画布没有合成前的绘制缓冲可异步读，
+ * 同帧 blit 才拿到本帧内容；pause 帧/静态帧由画布侧的 preserveDrawingBuffer 兜底。
+ *
+ * 限制（与原生管线同形，不是行为差异）：镜像只收 canvas——Folia 的 DOM 层（歌词文字、
+ * monet 的 img 底图）进不了镜像，玻璃里折射的是底色 + 主题光晕 + 画布栈；
+ * 玻璃自带 20px+ 磨砂，DOM 细节本来就在模糊里，感知不到。
+ * 主题光晕是保底层：纯 DOM 模式没有画布，WebGL 画布又常因 preserveDrawingBuffer:false
+ * 在跨 rAF 读取时是空的，没有它镜像会退化成一整块纯色，玻璃等于失效。 */
+var _foliaMirrorRectAt = 0;
+var _foliaMirrorRootRect = null;
+var _foliaMirrorCanvasRects = null;
+/* 画布列表单独计时。以前和 rootRect 共用 _foliaMirrorRectAt，而 rootRect 每 1s
+ * 刷新会把时间戳写成「现在」，画布缓存就永远判新鲜 —— 进入 Folia 时画布若还没
+ * 异步建好，空数组被永久缓存，之后出现多少画布都不会 blit 进镜像。 */
+var _foliaMirrorCanvasesAt = 0;
+
+function lgHexToRgba(hex, alpha) {
+  var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex || ''));
+  if (!m) return 'rgba(126,146,255,' + alpha + ')';
+  return 'rgba(' + parseInt(m[1], 16) + ',' + parseInt(m[2], 16) + ',' +
+    parseInt(m[3], 16) + ',' + alpha + ')';
+}
+
+/* 一层随主题缓慢移动的低频光晕：只画两个径向渐变，随 blit stride 节流，不新建 canvas。
+ * 目的是给 shader 一个明暗梯度，让折射/色散/边缘扭曲在 Folia 世界里看得出来。 */
+function drawFoliaMirrorAmbient(ctx, W, H, theme, nowMs) {
+  var accent = (theme && (theme.primary || theme.highlight || theme.secondary)) || '#7e92ff';
+  var t = (nowMs || 0) / 1000;
+  var cx = W * (0.5 + 0.18 * Math.sin(t * 0.11));
+  var cy = H * (0.42 + 0.14 * Math.cos(t * 0.083));
+  var radius = Math.max(W, H) * 0.68;
+  var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  g.addColorStop(0, lgHexToRgba(accent, 0.22));
+  g.addColorStop(0.55, lgHexToRgba(accent, 0.07));
+  g.addColorStop(1, lgHexToRgba(accent, 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  var hx = W * (0.28 + 0.12 * Math.cos(t * 0.067));
+  var hy = H * 0.18;
+  var h = ctx.createRadialGradient(hx, hy, 0, hx, hy, Math.max(W, H) * 0.42);
+  h.addColorStop(0, 'rgba(255,255,255,0.075)');
+  h.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = h;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function updateFoliaLiquidGlassBackdropMirror() {
+  var mgr = window._liquidGlassMgr;
+  if (!mgr || !mgr._instances || !Object.keys(mgr._instances).length) return;
+  if (!liquidGlassHasActiveMirrorTargetsThrottled(mgr)) return;
+  var root = (typeof foliaWorld !== 'undefined' && foliaWorld) ? foliaWorld.root : null;
+  if (!root || !root.isConnected) return;
+  if (!_lgMirrorCanvas) {
+    _lgMirrorCanvas = document.createElement('canvas');
+    _lgMirrorCtx = _lgMirrorCanvas.getContext('2d');
+    window.__lgBackdropCanvas = _lgMirrorCanvas;
+    window.__lgBackdropRect = { left: 0, top: 0, scale: 1 };
+    _foliaMirrorRectAt = 0;
+    _foliaMirrorCanvasesAt = 0;
+  }
+  var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
+  var sampleScale = (quality === 'eco') ? 0.5 : ((quality === 'balanced') ? 0.75 : 1);
+  var nowMs0 = performance.now();
+  /* root 的 rect 缓存 1s（窗口 resize 会改镜像尺寸 → 强制重读）。 */
+  if (!_foliaMirrorRootRect || !_foliaMirrorRectAt || (nowMs0 - _foliaMirrorRectAt) > 1000) {
+    try { _foliaMirrorRootRect = root.getBoundingClientRect(); } catch (_) { _foliaMirrorRootRect = null; }
+  }
+  var rootRect = _foliaMirrorRootRect;
+  if (!rootRect || rootRect.width <= 0 || rootRect.height <= 0) return;
+  var W = Math.max(1, Math.round(rootRect.width * sampleScale));
+  var H = Math.max(1, Math.round(rootRect.height * sampleScale));
+  if (_lgMirrorCanvas.width !== W || _lgMirrorCanvas.height !== H) {
+    _lgMirrorCanvas.width = W;
+    _lgMirrorCanvas.height = H;
+    _foliaMirrorRectAt = 0;
+    _foliaMirrorCanvasesAt = 0;
+  }
+  /* 背景是动态的（音乐律动），blit 与玻璃重采样同频节流；无可见玻璃时已早退。
+   * 暂停时 Folia 画面静止（模式「暂停只画一帧」），blit 再勤也是同一帧——stride 放大 4×，
+   * 静止内容低频刷新即可；latent 那种 0.12× 微动也能被覆盖。 */
+  var stride = liquidGlassMirrorBlitStride();
+  var pausedNow = false;
+  try { pausedNow = !!(typeof audio !== 'undefined' && audio && audio.paused); } catch (_) {}
+  if (pausedNow) stride *= 4;
+  if ((_lgMirrorFrame++ % stride) !== 0) return;
+  var info = window.__lgBackdropRect;
+  if (!info) info = window.__lgBackdropRect = { left: 0, top: 0, scale: 1 };
+  var nowMs = performance.now();
+  if (!_foliaMirrorRectAt || (nowMs - _foliaMirrorRectAt) > 1000) {
+    info.left = rootRect.left;
+    info.top = rootRect.top;
+    info.scale = W / rootRect.width;
+    _foliaMirrorRectAt = nowMs;
+  }
+  /* 底色取 Folia 主题背景（世界自己的暗场底），画布栈按 DOM 顺序（z 序）叠上去。 */
+  var theme = (typeof foliaWorldTheme === 'function') ? foliaWorldTheme() : null;
+  _lgMirrorCtx.fillStyle = (theme && theme.backgroundColor) || '#05070b';
+  _lgMirrorCtx.fillRect(0, 0, W, H);
+  drawFoliaMirrorAmbient(_lgMirrorCtx, W, H, theme, nowMs);
+  var scale = info.scale;
+  /* 画布 rect 缓存：gBCR 是强制同步布局，blit 每 2-4 帧一次 × 每画布一次太频。
+   * 画布挂载后位置基本不变——列表缓存 1s，或画布集合变化（换模式/换背景，断链即失效）时重读。 */
+  var canvases = null;
+  if (_foliaMirrorCanvasRects) {
+    var stale = false;
+    for (var ci = 0; ci < _foliaMirrorCanvasRects.length; ci++) {
+      if (!_foliaMirrorCanvasRects[ci].el.isConnected) { stale = true; break; }
+    }
+    if (!stale) canvases = _foliaMirrorCanvasRects;
+  }
+  /* 独立时间戳 + 1s 兜底重枚举：模组的画布是异步建的，空数组绝不能永久缓存。
+   * 断链（换模式/换背景）已经在上面的 isConnected 检查里立刻失效。 */
+  if (!canvases || (nowMs - _foliaMirrorCanvasesAt) > 1000) {
+    var live = root.querySelectorAll('canvas');
+    canvases = [];
+    for (var i = 0; i < live.length; i++) {
+      var c = live[i];
+      if (!c.width || !c.height) continue;
+      var r = null;
+      try { r = c.getBoundingClientRect(); } catch (_) { continue; }
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      canvases.push({ el: c, rect: r });
+    }
+    _foliaMirrorCanvasRects = canvases;
+    _foliaMirrorCanvasesAt = nowMs;
+  }
+  for (var i2 = 0; i2 < canvases.length; i2++) {
+    var entry = canvases[i2];
+    var rect = entry.rect;
+    try {
+      _lgMirrorCtx.drawImage(
+        entry.el,
+        (rect.left - rootRect.left) * scale, (rect.top - rootRect.top) * scale,
+        rect.width * scale, rect.height * scale
+      );
+    } catch (_) {}
   }
   for (var k in mgr._instances) {
     var e = mgr._instances[k];

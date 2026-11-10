@@ -155,7 +155,15 @@ body.empty-home-active .home-card.lg-hover{animation:none}
 .home-tile-cover:not(.has-cover)::after{content:'';position:absolute;right:12px;top:14px;width:46px;height:48px;border-radius:999px;background:repeating-linear-gradient(0deg,rgba(255,255,255,.72) 0 3px,transparent 3px 9px);opacity:.32}
 .home-tile-title{font-size:12px;font-weight:720;color:rgba(255,255,255,.90);line-height:1.28;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .home-tile-sub{display:none;font-size:10.5px;color:rgba(255,255,255,.42);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 骨架屏只负责「裁切 + 流光」。
+   注意：.home-skeleton 与 .home-card-art 同为 0,1,0 特异性且位于文件更后，
+   它的 position:relative 会压掉封面的 position:absolute —— 封面掉进文档流、
+   跑到卡片左侧并把卡片从 148px 撑到 212px。这就是开屏首帧「封面漂移」的真凶：
+   setHomeArt() 在封面为空且仍在 loading 时加 home-skeleton，封面拿到
+   relative 后立刻被撑开，等真实封面到达再摘掉类，才「过一会儿归位」。
+   下面这条把定位权还给封面（0,2,0 必赢），其余骨架屏宿主保持原样。 */
 .home-skeleton{position:relative;overflow:hidden}
+.home-card-art.home-skeleton{position:absolute}
 .home-skeleton::before{content:'';position:absolute;inset:0;background:linear-gradient(110deg,transparent,rgba(255,255,255,.08),transparent);transform:translateX(-100%);animation:home-shimmer 1.5s ease-in-out infinite}
 @keyframes home-shimmer{100%{transform:translateX(100%)}}
 @media (max-width:1120px){#empty-home{width:calc(100vw - 48px)}.empty-home-shell{grid-template-columns:minmax(300px,.88fr) minmax(440px,1.12fr);gap:12px}.home-hero{padding:24px}.home-hero-inner:not(.home-construction-inner){grid-template-columns:minmax(0,1.16fr) minmax(128px,.52fr);column-gap:14px}.home-title{font-size:clamp(30px,4vw,48px);max-width:340px}.home-sub{font-size:12.5px;line-height:1.5;max-width:314px}.home-visual{height:198px;max-width:236px}.home-mosaic{height:142px;min-height:126px;margin-top:14px}.home-grid{gap:10px}.home-card{min-height:126px;padding:14px;border-radius:20px}.home-card-label{margin-bottom:6px}.home-card-title{font-size:16.5px;max-width:66%}.home-card-sub{margin-top:6px;font-size:10.8px;line-height:1.34;max-width:64%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.home-card-art{right:11px;bottom:11px;width:80px;height:80px;border-radius:18px}.home-card-art:not(.has-cover)::before{inset:14px;box-shadow:inset 0 0 0 11px rgba(5,5,8,.44),0 10px 24px rgba(0,0,0,.24)}.home-card::after{right:88px;bottom:14px;width:30px;height:56px}.home-rail{gap:8px}.home-tile{min-height:128px}.home-tile-cover{height:66px}}

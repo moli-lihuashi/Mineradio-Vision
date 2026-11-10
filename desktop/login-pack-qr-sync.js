@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 
 let activeSession = null;
+let sessionExpiryTimer = null;
 
 function pickLanAddress() {
   const nets = os.networkInterfaces() || {};
@@ -21,6 +22,10 @@ function pickLanAddress() {
 }
 
 function stopLoginPackQrSession() {
+  if (sessionExpiryTimer) {
+    clearTimeout(sessionExpiryTimer);
+    sessionExpiryTimer = null;
+  }
   if (!activeSession) return { ok: true, stopped: true };
   try { activeSession.server.close(); } catch (_) {}
   activeSession = null;
@@ -47,6 +52,7 @@ function startLoginPackQrSession(opts) {
     return n;
   }
   return new Promise((resolve) => {
+    let resolved = false;
     function onListening() {
       let QRCode;
       try { QRCode = require('qrcode'); } catch (_) { QRCode = null; }
@@ -55,6 +61,9 @@ function startLoginPackQrSession(opts) {
       const url = 'http://' + host + ':' + port + '/p/' + token;
       let qrDataUrl = '';
       const done = () => {
+        if (resolved) return;
+        resolved = true;
+        const expiresAt = Date.now() + ttlMs;
         activeSession = {
           server,
           token,
@@ -62,15 +71,26 @@ function startLoginPackQrSession(opts) {
           host,
           port,
           consumed: false,
-          expiresAt: Date.now() + ttlMs,
+          expiresAt,
         };
+        // TTL 必须主动生效：只在「有请求命中」时判过期是不够的 ——
+        // 用户开了二维码不扫、也不点停止时，端口与含凭据的 payloadText
+        // 会一直驻留到进程退出，远超声称的有效期。
+        if (sessionExpiryTimer) clearTimeout(sessionExpiryTimer);
+        sessionExpiryTimer = setTimeout(() => {
+          sessionExpiryTimer = null;
+          console.log('[LoginPackQrSync] session expired (TTL), closing');
+          stopLoginPackQrSession();
+        }, ttlMs);
+        // 不要因为这个定时器阻碍 Electron 正常退出。
+        if (sessionExpiryTimer && typeof sessionExpiryTimer.unref === 'function') sessionExpiryTimer.unref();
         resolve({
           ok: true,
           url,
           host,
           port,
           token,
-          expiresAt: activeSession.expiresAt,
+          expiresAt,
           ttlMs,
           qrDataUrl,
         });
@@ -149,10 +169,38 @@ function startLoginPackQrSession(opts) {
         try { server.listen(0, '0.0.0.0', onListening); } catch (_) {}
         return;
       }
+      if (resolved) return;
+      resolved = true;
+      try { server.close(); } catch (_) {}
+      stopLoginPackQrSession();
       resolve({ ok: false, error: err.message || 'QR_SYNC_SERVER_FAILED', message: '局域网同步服务启动失败' });
     });
     server.listen(0, host, onListening);
   });
+}
+
+/* 二维码导入会让主进程对任意 http(s) URL 发 GET。sender 校验只挡住「谁可以调用」，
+ * 挡不住「调用里带什么地址」。这个功能只用于同一局域网内两台设备互传登录包，
+ * 因此把目标收敛到回环 + RFC1918 私网：公网域名、云元数据 169.254.169.254、
+ * metadata.google.internal、链路本地、0.0.0.0 一律拒绝（不跟随重定向）。
+ * 用白名单而不是黑名单，避免漏掉新的元数据端点。 */
+function isAllowedQrSyncHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1' || host === '::') return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
+  if (mapped) return isAllowedQrSyncHost(mapped[1]);
+  // fe80::/10 链路本地、fc00::/7 唯一本地：不在二维码同步的合法范围
+  if (/^fe[89ab][0-9a-f]:/i.test(host) || /^f[cd][0-9a-f]{2}:/i.test(host)) return false;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false; // 域名与 IPv6 全局地址一律拒绝
+  const parts = m.slice(1).map(Number);
+  if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const a = parts[0], b = parts[1];
+  return a === 127 || a === 10
+    || (a === 192 && b === 168)
+    || (a === 172 && b >= 16 && b <= 31);
 }
 
 function fetchLoginPackEnvelopeFromUrl(targetUrl) {
@@ -164,6 +212,10 @@ function fetchLoginPackEnvelopeFromUrl(targetUrl) {
     let parsed;
     try { parsed = new URL(url); } catch (_) {
       resolve({ ok: false, error: 'INVALID_URL', message: '同步链接无效' });
+      return;
+    }
+    if (!isAllowedQrSyncHost(parsed.hostname)) {
+      resolve({ ok: false, error: 'FORBIDDEN_HOST', message: '同步链接不在允许的局域网地址范围内' });
       return;
     }
     const lib = parsed.protocol === 'https:' ? require('https') : http;
@@ -201,5 +253,6 @@ module.exports = {
   startLoginPackQrSession,
   stopLoginPackQrSession,
   fetchLoginPackEnvelopeFromUrl,
+  isAllowedQrSyncHost,
   pickLanAddress,
 };

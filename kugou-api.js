@@ -41,6 +41,9 @@ const {
   kugouH5GatewayRequest,
   registerKugouCloudDevice,
   setKugouDfidPersistHook,
+  setKugouCookiePersistHook,
+  invalidateKugouDfid,
+  mergeKugouResponseSession,
   signatureAndroidParams,
 } = require('./server/kugou/http');
 
@@ -104,6 +107,9 @@ module.exports = {
   ensureKugouDfid,
   registerKugouCloudDevice,
   setKugouDfidPersistHook,
+  setKugouCookiePersistHook,
+  invalidateKugouDfid,
+  mergeKugouResponseSession,
   signatureAndroidParams,
   KUGOU_LITE_APPID,
   KUGOU_LITE_CLIENTVER,

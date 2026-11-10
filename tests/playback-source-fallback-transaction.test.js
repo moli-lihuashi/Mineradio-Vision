@@ -5,7 +5,9 @@ const vm = require('vm');
 
 const appRoot = path.resolve(__dirname, '..');
 const fallbackPath = path.join(appRoot, 'public', 'js', 'modules', '05-playback', '11-provider-fallback.js');
-const startPath = path.join(appRoot, 'public', 'js', 'modules', '05-playback', '09b-playback-core.js');
+// 酷狗版实际加载的实现是 13-playback-start-audio.js（见 public/js/index-loader.js），
+// 09b-playback-core.js 是未被加载的旧副本：断言必须针对运行时真正生效的文件。
+const startPath = path.join(appRoot, 'public', 'js', 'modules', '05-playback', '13-playback-start-audio.js');
 const stallPath = path.join(appRoot, 'public', 'js', 'modules', '05-playback', '09d-playback-stall-recovery.js');
 const progressPath = path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '04-progress-seek.js');
 const fallbackText = fs.readFileSync(fallbackPath, 'utf8');
@@ -262,7 +264,12 @@ function testStaticRecoveryWiring() {
     startText.indexOf('function nextTrack'),
     startText.indexOf('function prevTrack')
   );
-  assert(/playQueueAt\(currentIdx,\s*\{/.test(nextTrackBlock));
+  // 连点合流后：nextTrack 只「登记目标 + 同步推进 currentIdx」（界面立刻跟手），
+  // 真正的起播交给 drainTrackSwitches 按登记的目标执行。
+  assert(/currentIdx = target;/.test(nextTrackBlock), 'nextTrack must advance currentIdx synchronously');
+  assert(/requestTrackSwitch\(target,/.test(nextTrackBlock), 'nextTrack must pass through the coalescing gate');
+  assert(!/playQueueAt\(/.test(nextTrackBlock), 'nextTrack must not start a playback root on its own any more');
+  assert(/await playQueueAt\(job\.idx, internalPlaybackOpts\(job\.opts\)\)/.test(startText), 'drainTrackSwitches must start playback for the queued target');
   assert(!/sourceFallbackRecovery/.test(nextTrackBlock), 'natural ended next starts a fresh playback root');
 }
 

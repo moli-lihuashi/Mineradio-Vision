@@ -1,6 +1,6 @@
 var fxPanelTab = 'presets';
 function setFxPanelTab(tab) {
-  var allowed = { presets:1, appearance:1, lyrics:1, motion:1, advanced:1 };
+  var allowed = { presets:1, folia:1, appearance:1, lyrics:1, motion:1, advanced:1 };
   fxPanelTab = allowed[tab] ? tab : 'presets';
   var panel = document.getElementById('fx-panel');
   if (panel) panel.setAttribute('data-active-tab', fxPanelTab);
@@ -10,6 +10,15 @@ function setFxPanelTab(tab) {
   document.querySelectorAll('#fx-panel .fx-tab-page').forEach(function(page){
     page.classList.toggle('active', page.getAttribute('data-fx-page') === fxPanelTab);
   });
+  /* Folia 独占一页，里面的折叠区就是这一页的全部内容：切过来就展开，别让用户先点一下才看见东西。
+   * 只开不关 —— 用户自己合上的折叠区不会因为切 tab 又被拉开。 */
+  if (fxPanelTab === 'folia') {
+    var foliaFold = document.getElementById('fx-folia-fold');
+    if (foliaFold && !foliaFold.classList.contains('open')) {
+      foliaFold.classList.add('open');
+      if (typeof refreshFoliaWorldUi === 'function') refreshFoliaWorldUi();
+    }
+  }
   repositionFxFloatingPanels();
   if (fxPanelTab === 'motion') scheduleFxParticleFireRefresh();
 }
@@ -55,6 +64,7 @@ function organizeFxPanel() {
   var host = head && head.parentNode ? head.parentNode : panel;
   var tabMeta = [
     ['presets', '\u9884\u8bbe'],
+    ['folia', 'Folia'],
     ['appearance', '\u5916\u89c2'],
     ['lyrics', '\u6b4c\u8bcd'],
     ['motion', '\u52a8\u6001'],
@@ -97,6 +107,19 @@ function organizeFxPanel() {
     }
     (pages[target] || pages.presets).appendChild(node);
   });
+  /* 「Folia 世界」独占一页：不参与上面的流向分配（一旦在这里返回 folia，后面那些没写规则的折叠区
+   * 会顺着 current 一起漂过去），organize 完再整块搬进 folia 页。
+   * 歌词样式 / 背景 / 参数设置都长在这个折叠区里，所以它们跟着 Folia 一起走。 */
+  var foliaFoldNode = document.getElementById('fx-folia-fold');
+  if (foliaFoldNode && pages.folia) pages.folia.appendChild(foliaFoldNode);
+  /* 「插件市场」整块搬到「高级」页最前面。
+   * 它原本按流向落在「外观」页，而外观页有 2000+px 高、它在离页首 1500px 的位置 ——
+   * 面板又没有明显的锚点，用户按「高级 → 插件市场」找了两轮都没找到。
+   * 插件是扩展能力（玻璃插件 + 歌词动效），归属高级更合理，放第一位则打开就能看见。 */
+  var pluginMarketFold = document.getElementById('fx-plugin-market-fold');
+  if (pluginMarketFold && pages.advanced) {
+    pages.advanced.insertBefore(pluginMarketFold, pages.advanced.firstChild);
+  }
   ['fx-lyric-fold','fx-overlay-fold','fx-stage-fold','fx-advanced'].forEach(function(id){
     var fold = document.getElementById(id);
     if (fold) fold.classList.add('open');
@@ -163,10 +186,6 @@ function ensureLyricPrimaryControls() {
     body.insertBefore(label, grid);
   }
   [
-    't-desktopLyrics',
-    't-desktopLyricsClickThrough',
-    't-desktopLyricsCinema',
-    't-desktopLyricsHighlight',
     't-lyricCameraLock',
     't-lyricGlow',
     't-lyricGlowBeat',
@@ -235,7 +254,7 @@ function relabelFxPanelControls() {
   setFxSliderLabel('fx-lyrictilty', '左右旋转');
   setFxSliderLabel('fx-desktoplyricssize', '桌面歌词大小');
   setFxSliderLabel('fx-desktoplyricsopacity', '桌面歌词透明度');
-  setFxSliderLabel('fx-desktoplyricsy', '桌面歌词高度');
+  setFxSliderLabel('fx-desktoplyricstilt', '桌面歌词倾斜');
   setFxSliderLabel('fx-wallpaperopacity', '壁纸透明度');
   setFxSliderLabel('fx-shelfsize', '歌单架大小');
   setFxSliderLabel('fx-shelfx', '左右位置');

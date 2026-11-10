@@ -12,6 +12,10 @@ var BEAT_FFT_SIZE = 2048;
 var beatFrequencyData = new Uint8Array(BEAT_FFT_SIZE / 2);
 var beatTimeDomainData = new Uint8Array(BEAT_FFT_SIZE);
 var bass = 0, mid = 0, treble = 0, audioEnergy = 0, beatPulse = 0, prevEnergy = 0;
+/* 人声频段（200-3000Hz 归一化均值，0~1）：本项目的 bass/mid/treble 三个 legacy 频段里没有它，
+ * 但 Folia 的 audioBands.vocal 是模式要用的独立频段，所以单独存一份给 Folia 世界读。
+ * 取值与「歌词阳光溢光」的 sunVoice 同一条曲线，见 11-main-loop.js。 */
+var audioVocal = 0;
 var lyricSunEnergy = 0, lyricSunTarget = 0, lyricSunHold = 0, lyricSunAvg = 0, lyricSunPeak = 0.55;
 var smoothBass = 0, smoothMid = 0, smoothTreb = 0, smoothEnergy = 0;
 var bassPeak = 0.12, midPeak = 0.10, treblePeak = 0.08, energyPeak = 0.10;
@@ -121,6 +125,10 @@ var playbackResumeRecovery = {
   freshUrlSongKey: '',
   freshUrlAttemptCount: 0,
   softRetryCount: 0,
+  /* 换链前后各记一次源指纹（09f）：回答「这次重新取链到底有没有换到新源」。
+     null = 本轮还没换过链，false = 换过但源没变（CDN 回了同一枚签名 URL）。 */
+  lastSourceRevision: '',
+  recoveryRevisionChanged: null,
   buffering: false,
   timerIds: []
 };
@@ -161,7 +169,7 @@ var ENABLE_LYRIC_ROW_LAYERS = (function () {
 })();
 /** fail-open 后本会话不再进 track，避免切行又空白 */
 var STAGE_LYRIC_ROW_LAYERS_SESSION_LATCH_OFF = false;
-var userPlaylists = [], qqPlaylists = [], kugouPlaylists = [], qishuiPlaylists = [], spotifyPlaylists = [], myPodcastCollections = [], myPodcastItems = {}, playlistCoverCache = {};
+var userPlaylists = [], neteasePlaylists = [], qqPlaylists = [], kugouPlaylists = [], qishuiPlaylists = [], spotifyPlaylists = [], myPodcastCollections = [], myPodcastItems = {}, playlistCoverCache = {};
 // 内置歌单库（Mineradio 本机歌单，主进程持久化，可混存五个平台歌曲）；加载去重 promise
 var builtInPlaylists = [];
 var builtInPlaylistLoadPromise = null;

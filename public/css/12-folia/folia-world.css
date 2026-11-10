@@ -1,0 +1,2644 @@
+/* Folia 世界 — 舞台层与 FX 面板组件
+ * 舞台：#folia-world-root 与 #canvas-container 互斥；开启时隐藏原生画布。
+ * 面板：折叠区开关 + 样式/背景列表，沿用视觉控制台的青色强调色。
+ */
+
+/* ---------- 舞台层 ---------- */
+#folia-world-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  background: #05070b;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+body.folia-world-active #folia-world-root {
+  opacity: 1;
+  visibility: visible;
+}
+body.folia-world-active #canvas-container {
+  display: none !important;
+}
+/* 原生专属的整屏叠加层（节拍光晕/预设闪光/间奏波形）在 Folia 世界里没有意义，一并停画 */
+body.folia-world-active #beat-glow-overlay,
+body.folia-world-active #preset-transition-overlay,
+body.folia-world-active #interlude-wave-canvas {
+  display: none !important;
+}
+/* 背景壳层：root 的第一个子节点，模式宿主盖在它上面。
+ * 模式画布 backgroundAlpha=0，绘光/凝彩的暗场层按 darkField 压暗它 —— 与 Folia 的层级一致。 */
+.folia-bg-host {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.folia-bg-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* ---------- 背景：通用（common） ---------- */
+.folia-bg-common {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.folia-bg-solid {
+  position: absolute;
+  inset: 0;
+  transition: background-color 1000ms ease;
+}
+.folia-bg-geometric {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  animation: foliaBgFadeIn 600ms ease-in-out both;
+}
+.folia-bg-shape {
+  position: absolute;
+  pointer-events: none;
+}
+/* 位移：非 reverse 为 x -15→15 / y 30→-30，reverse 取反（由 --sx/--sy 决定）。 */
+.folia-bg-drift {
+  width: 100%;
+  height: 100%;
+  animation-name: foliaBgDrift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+.folia-bg-spin {
+  width: 100%;
+  height: 100%;
+  animation-name: foliaBgSpin;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  transform: rotate(var(--rot, 0deg));
+}
+.folia-bg-face {
+  width: 100%;
+  height: 100%;
+  transform: scale(var(--scale, 1));
+  will-change: transform;
+}
+.folia-bg-particle {
+  position: absolute;
+  border-radius: 999px;
+  opacity: var(--op, 0);
+  animation-name: foliaBgRise;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+.folia-bg-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
+}
+/* 暂停 = Folia 的 StaticGeometricScene：动画全停，图形回到初始位置与初始角度。 */
+.folia-bg-common.is-paused .folia-bg-drift,
+.folia-bg-common.is-paused .folia-bg-spin,
+.folia-bg-common.is-paused .folia-bg-particle,
+.folia-bg-common.is-paused .folia-bg-geometric {
+  animation: none;
+}
+@keyframes foliaBgDrift {
+  from { transform: translate(var(--sx, -15px), var(--sy, 30px)); }
+  to { transform: translate(calc(-1 * var(--sx, -15px)), calc(-1 * var(--sy, 30px))); }
+}
+@keyframes foliaBgSpin {
+  from { transform: rotate(var(--rot, 0deg)); }
+  to { transform: rotate(calc(var(--rot, 0deg) + 360deg)); }
+}
+@keyframes foliaBgRise {
+  0% { transform: translateY(0); opacity: 0; }
+  50% { opacity: var(--op, 0); }
+  100% { transform: translateY(-100px); opacity: 0; }
+}
+@keyframes foliaBgFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------- 背景：隐现（latent） ----------
+ * 两层 WebGL 画布：流体在下、像素在上（mix-blend-mode: soft-light + tuning.ditheringOpacity），
+ * overlay 是最后一层纯色压暗。层变换每帧由世界 tick 写（scale / filter / opacity）。 */
+.folia-bg-latent {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transition: background-color 1000ms ease;
+}
+.folia-bg-latent-mesh,
+.folia-bg-latent-dither {
+  position: absolute;
+  inset: 0;
+  transform-origin: center;
+  will-change: transform, opacity, filter;
+}
+.folia-bg-latent-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---------- 背景：莫奈（monet） ----------
+ * 一棵 DOM 两种布局：is-half 走「左侧 72% 图 + 蒙版 + scrim/bloom」，
+ * is-full 把 pane 撑到 100% 并去掉蒙版/scrim/bloom（只留 readability）。
+ * 漂移是 drift 层的 WAAPI 关键帧，图层的 transform 留给「画布不支持 filter 时的 blur 预放大」。 */
+.folia-bg-monet {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transition: background-color 1000ms ease;
+}
+.folia-bg-monet-base {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+/* Tailwind 的 w-[72%] sm:w-[68%] lg:w-[60%]：断点 640 / 1024。 */
+.folia-bg-monet-pane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 72%;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.94) 48%, rgba(0, 0, 0, 0.46) 74%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.94) 48%, rgba(0, 0, 0, 0.46) 74%, rgba(0, 0, 0, 0) 100%);
+}
+@media (min-width: 640px) {
+  .folia-bg-monet-pane { width: 68%; }
+}
+@media (min-width: 1024px) {
+  .folia-bg-monet-pane { width: 60%; }
+}
+.folia-bg-monet-drift {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+.folia-bg-monet-image {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
+  transform-origin: center;
+}
+.folia-bg-monet-scrim,
+.folia-bg-monet-bloom,
+.folia-bg-monet-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* 全幅布局：图和 readability 铺满，其余三层的职责已经由烘焙的位图承担。 */
+.folia-bg-monet.is-full .folia-bg-monet-scrim,
+.folia-bg-monet.is-full .folia-bg-monet-bloom {
+  display: none;
+}
+/* 暂停 = Folia 的 staticMode：漂移直接停（动画由 JS cancel），图停在当前帧。 */
+.folia-bg-monet.is-paused .folia-bg-monet-drift {
+  transform: none;
+}
+
+/* ---------- 背景：漫游（nomand） ----------
+ * 一张 WebGL 画布跑当前选中的 Paper 图片效果（像素画 / 纹理玻璃 / 纸张纹理 / 半调网点 / 镜头畸变），
+ * overlay 是最后一层纯色压暗。五档效果都是静态图（speed=0），画布只在尺寸或参数变化时重画一帧。 */
+.folia-bg-nomand {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transition: background-color 1000ms ease;
+}
+.folia-bg-nomand-shader {
+  position: absolute;
+  inset: 0;
+}
+.folia-bg-nomand-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---------- 背景：嵌入（url） ----------
+ * 用户提供的网页整幅 iframe（sandbox="allow-scripts"），上面永远盖一层渐变遮罩保证歌词可读。
+ * iframe 只在容器有尺寸后挂载（内嵌页脚本按 0×0 初始化会永久白屏），换 url 整元素重建。 */
+.folia-bg-url {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+.folia-bg-url-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+.folia-bg-url-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.35));
+}
+.folia-mode-host {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+/* ---------- 静止（still） ---------- */
+.folia-still {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.folia-still-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 0%, #000 100%);
+  opacity: .65;
+  pointer-events: none;
+}
+.folia-still-lines {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 56rem;
+  padding: 0 3rem 4rem;
+  gap: 2rem;
+  text-align: center;
+}
+.folia-still-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+.folia-still-spacer {
+  height: 5rem;
+}
+.folia-still-text {
+  letter-spacing: .02em;
+  line-height: 1.25;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .35);
+}
+.folia-still-text.is-current {
+  font-size: 2.5rem;
+  opacity: 1;
+}
+.folia-still-text.is-other {
+  font-size: 1.875rem;
+  opacity: .3;
+}
+.folia-still-trans {
+  letter-spacing: .025em;
+  line-height: 1.3;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.folia-still-trans.is-current {
+  font-size: 1.5rem;
+  opacity: .8;
+  margin-top: .75rem;
+}
+.folia-still-trans.is-other {
+  font-size: 1.25rem;
+  opacity: .3;
+  margin-top: .5rem;
+}
+
+/* ---------- 逐词组件（GlowWord）---------- */
+.folia-glow-word {
+  display: inline-block;
+  position: relative;
+  transform-origin: center;
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+.folia-glow-word-halo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  color: transparent;
+  user-select: none;
+  pointer-events: none;
+}
+/* 逐字扫光时每个字是一个 span；单字/整词时就是光环层自己 */
+.folia-glow-word-halo > span {
+  display: inline-block;
+}
+.folia-glow-word-body {
+  position: relative;
+  z-index: 10;
+  display: inline-block;
+}
+.folia-glow-word-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 150%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 1px solid;
+  filter: blur(1px);
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform, opacity;
+}
+
+/* ---------- 流光（classic）---------- */
+.folia-classic {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.folia-classic-stage {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  pointer-events: none;
+  transform-origin: center;
+  will-change: transform;
+}
+.folia-classic-line {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 72rem;
+  align-content: center;
+  min-height: 300px;
+  transform-origin: center;
+  will-change: transform, opacity, filter;
+}
+.folia-classic-waiting {
+  position: absolute;
+  opacity: .5;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 云阶（partita）---------- */
+.folia-partita {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.folia-partita-stage {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  pointer-events: none;
+  transform-origin: center;
+  will-change: transform;
+}
+.folia-partita-line {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  justify-content: center;
+  width: 100%;
+  max-width: 64rem;
+  min-height: 320px;
+  transform-origin: center;
+  will-change: transform, opacity, filter;
+}
+.folia-partita-column {
+  position: relative;
+  display: flex;
+  min-height: 24rem;
+  min-width: 3.8rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 .75rem;
+}
+.folia-partita-column-inner {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+.folia-partita-chunk {
+  display: inline-flex;
+  position: relative;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: .2rem .5rem;
+  white-space: nowrap;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+.folia-partita-guide-v {
+  position: absolute;
+  bottom: -16px;
+  width: 1px;
+  height: 32px;
+  pointer-events: none;
+}
+.folia-partita-guide-h {
+  position: absolute;
+  bottom: -8px;
+  width: calc(100% + 36px);
+  height: 1px;
+  pointer-events: none;
+}
+.folia-partita-waiting {
+  position: absolute;
+  opacity: .5;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 倾诉（tilt）---------- */
+.folia-tilt {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.folia-tilt-stage {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  pointer-events: none;
+}
+/* 两句交叠时新旧行都在同一格里绝对定位，靠透明度交接（对应 Folia 的 popLayout） */
+.folia-tilt-line {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  pointer-events: none;
+}
+@media (min-width: 640px) {
+  .folia-tilt-line { gap: 1rem; }
+}
+.folia-tilt-line.is-entering {
+  animation: folia-tilt-in .3s ease both;
+}
+@keyframes folia-tilt-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.folia-tilt-seg {
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity .55s cubic-bezier(.25, .46, .45, .94), transform .55s cubic-bezier(.25, .46, .45, .94);
+  will-change: opacity, transform;
+}
+.folia-tilt-seg.is-tilt {
+  transform: translateY(24px) scale(.92);
+  transition-duration: .6s;
+}
+.folia-tilt-seg.is-visible {
+  opacity: 1;
+  transform: none;
+}
+/* 逐字亮起层：0.5s 位移 + 逐字递增延迟（只在亮起时带延迟，收起时立刻归零） */
+.folia-tilt-g {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(var(--off2, 0px));
+  transition: opacity .5s cubic-bezier(.25, .46, .45, .94), transform .5s cubic-bezier(.25, .46, .45, .94);
+  transition-delay: 0s;
+}
+.folia-tilt-seg.is-visible .folia-tilt-g {
+  opacity: 1;
+  transform: translateY(var(--off, 0px));
+  transition-delay: var(--d, 0s);
+}
+/* 逐字脉冲层：0.06s 跟手，和上面 0.5s 的亮起互不干扰 */
+.folia-tilt-gi {
+  display: inline-block;
+  transition: transform .06s ease-out;
+  will-change: transform;
+}
+.folia-tilt-waiting {
+  position: absolute;
+  opacity: .5;
+  font-size: 1.5rem;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 回环（claddagh）---------- */
+.folia-claddagh {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  animation: folia-claddagh-in .8s cubic-bezier(.16, 1, .3, 1) both;
+}
+@keyframes folia-claddagh-in {
+  from { opacity: 0; transform: scale(.96); filter: blur(4px); }
+  to { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+.folia-claddagh-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+}
+.folia-claddagh-axis {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 300px;
+  height: 4px;
+  transform-origin: center center;
+  pointer-events: none;
+  z-index: 1;
+  will-change: background, transform, filter;
+}
+.folia-claddagh-line {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* 初始姿态给 scale(0.2) + 透明：第一帧就会被逐帧写入覆盖，避免闪一下大字号 */
+.folia-claddagh-char {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  transform: translate3d(-50%, -50%, 0) scale(.2);
+  transform-origin: center center;
+  white-space: nowrap;
+  will-change: transform, opacity, filter, color, text-shadow;
+}
+.folia-claddagh-waiting {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: .5;
+  font-size: 1.5rem;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 群唱（cappella）----------
+ * 结构对应 Folia：viewport（滚动视口，实际不滚）→ list（列，gap 12px，max-w 896px）
+ * → row（左右对齐）→ counter（气泡+头像，弹簧缩放层）→ frame（尺寸动画层）→ bubble / emo。
+ * 所有尺寸都由 JS 写进 inline style（气泡宽高要逐字动画），这里只放固定外观。 */
+.folia-cappella {
+  position: absolute;
+  inset: 0;
+}
+.folia-cappella-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: visible;
+  /* Folia: px-4 pb-36 pt-12。上边距额外加 40px：本项目的顶栏（搜索框/DIY/VIP）是浮层，
+   * 照抄 48px 会让最上面那条消息压在搜索框下面，旧消息永远读不到。左右与底部照抄。 */
+  padding: 5.5rem 1rem 9rem;
+}
+@media (min-width: 640px) {
+  /* Folia: sm:px-8 sm:pb-40 sm:pt-16 */
+  .folia-cappella-viewport { padding: 6rem 2rem 10rem; }
+}
+@media (min-width: 1024px) {
+  /* Folia: lg:px-14 lg:pt-20 */
+  .folia-cappella-viewport { padding-top: 6.5rem; padding-left: 3.5rem; padding-right: 3.5rem; }
+}
+.folia-cappella-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: .75rem;
+  width: 100%;
+  max-width: 56rem;
+  overflow: visible;
+}
+.folia-cappella-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-end;
+  gap: .75rem;
+  will-change: transform, opacity;
+}
+.folia-cappella-row.is-right { justify-content: flex-end; }
+.folia-cappella-row.is-left { justify-content: flex-start; }
+/* Folia: pt-12，表情行上方留出图片的呼吸空间 */
+.folia-cappella-row.is-emo { padding-top: 3rem; }
+.folia-cappella-row.is-entering {
+  animation: folia-cappella-row-in var(--enter-dur, .32s) ease-out both;
+}
+@keyframes folia-cappella-row-in {
+  from { opacity: 0; transform: translateY(var(--enter-y, 0px)) scale(var(--enter-scale, 1)); }
+  to { opacity: 1; transform: none; }
+}
+.folia-cappella-row.is-exiting { pointer-events: none; }
+.folia-cappella-counter {
+  display: flex;
+  width: 100%;
+  max-width: 78%;
+  align-items: flex-end;
+  gap: .75rem;
+  will-change: transform, opacity, margin-top;
+}
+@media (min-width: 640px) {
+  .folia-cappella-counter { max-width: 68%; }
+}
+/* 右侧发言：气泡在左、头像在右（DOM 顺序仍是「头像 → 气泡」） */
+.folia-cappella-row.is-right .folia-cappella-counter { flex-direction: row-reverse; }
+.folia-cappella-avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, .24);
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, .35), 0 4px 6px -4px rgba(0, 0, 0, .35);
+  animation: folia-cappella-avatar-in .2s ease-out both;
+}
+@keyframes folia-cappella-avatar-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.folia-cappella-frame {
+  position: relative;
+  flex: 0 0 auto;
+  width: fit-content;
+  height: auto;
+}
+.folia-cappella-bubble {
+  position: relative;
+  height: 100%;
+  border-radius: 1.5rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, .28), 0 4px 6px -4px rgba(0, 0, 0, .22);
+  transition: min-height .2s ease-out, box-shadow .2s ease-out, background-color .2s ease-out;
+}
+/* 靠头像那一角收窄（Folia 的 rounded-br-md / rounded-bl-md = 6px） */
+.folia-cappella-row.is-right .folia-cappella-bubble { border-bottom-right-radius: .375rem; }
+.folia-cappella-row.is-left .folia-cappella-bubble { border-bottom-left-radius: .375rem; }
+.folia-cappella-glow-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.folia-cappella-glow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  pointer-events: none;
+  animation-name: folia-cappella-bubble-glow-pan;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+@keyframes folia-cappella-bubble-glow-pan {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.folia-cappella-text {
+  position: relative;
+  z-index: 10;
+}
+.folia-cappella-char {
+  animation-timing-function: ease-out;
+}
+@keyframes folia-cappella-char-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.folia-cappella-emo {
+  width: 100%;
+  height: 100%;
+  animation: folia-cappella-emo-in var(--emo-enter-dur, .32s) ease-out both;
+}
+@keyframes folia-cappella-emo-in {
+  from { opacity: 0; transform: scale(var(--emo-enter-scale, .6)); }
+  to { opacity: 1; transform: scale(1); }
+}
+.folia-cappella-emo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 1rem;
+  animation: folia-cappella-emo-wiggle 1.9s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes folia-cappella-emo-wiggle {
+  0%, 100% { transform: rotate(-1.6deg); }
+  50% { transform: rotate(1.6deg); }
+}
+.folia-cappella-ts {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+/* ---------- 心象（cadenza）----------
+ * 结构对应 Folia：lineLayer（整行包络层，transform-origin 50% 42%）→ overlay（词的 DOM 叠层）
+ * + canvas（只画副歌涟漪与量 ascent）。每个词 = outer（定位/旋转/缩放）+ inner（位移）+ body（正文）
+ * + glow（逐字 text-shadow）。 */
+.folia-cadenza {
+  position: absolute;
+  inset: 0;
+}
+.folia-cadenza-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  transform-origin: 50% 42%;
+  opacity: 0;
+}
+.folia-cadenza-overlay,
+.folia-cadenza-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.folia-cadenza-overlay {
+  user-select: none;
+}
+.folia-cadenza-word {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.folia-cadenza-word-inner {
+  display: inline-block;
+  position: relative;
+  white-space: nowrap;
+  line-height: 1;
+}
+.folia-cadenza-word-body {
+  display: block;
+  position: relative;
+  z-index: 1;
+  white-space: pre;
+  line-height: 1;
+}
+/* glow 层文字透明，只留 text-shadow —— 逐字辉光就写在这里，不碰 body 的排版 */
+.folia-cadenza-word-glow {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  color: transparent;
+  white-space: pre;
+  line-height: 1;
+  pointer-events: none;
+}
+.folia-cadenza-waiting {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: .5;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 底部字幕（译文 / 下一句）---------- */
+.folia-subtitle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+  padding: 0 1rem;
+  text-align: center;
+  pointer-events: none;
+}
+.folia-subtitle-content {
+  position: relative;
+  isolation: isolate;
+  display: inline-block;
+  max-width: 64rem;
+  padding: .125rem .375rem;
+}
+.folia-subtitle-glow {
+  position: absolute;
+  left: -2.5rem;
+  right: -2.5rem;
+  top: -1.5rem;
+  bottom: -1.5rem;
+  z-index: 0;
+  filter: blur(40px);
+  pointer-events: none;
+}
+.folia-subtitle-block {
+  position: relative;
+  z-index: 10;
+  max-width: 56rem;
+  margin: 0 auto;
+}
+.folia-subtitle-block-upcoming {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.folia-subtitle-row {
+  line-height: 1.3;
+  letter-spacing: .01em;
+}
+.folia-subtitle-upcoming {
+  max-width: 42rem;
+  margin: 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+  filter: blur(1px);
+  transition: filter .5s ease;
+}
+
+/* ---------- FX 面板：Folia 世界 ---------- */
+.fx-folia-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0 2px;
+}
+.fx-folia-switch-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, .88);
+  letter-spacing: .3px;
+}
+/* iOS 原生开关：46×27 轨道 + 白圆钮，开启为系统绿，滑钮带弹簧缓动与按压放大。 */
+.fx-folia-switch {
+  position: relative;
+  width: 46px;
+  height: 27px;
+  padding: 0;
+  border-radius: 999px;
+  border: none;
+  background: rgba(120, 120, 128, .32);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .25s ease, box-shadow .25s ease;
+}
+.fx-folia-switch .fx-folia-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .3), 0 1px 1px rgba(0, 0, 0, .16);
+  transition: transform .28s cubic-bezier(.3, 1.35, .4, 1);
+}
+.fx-folia-switch:active .fx-folia-switch-knob {
+  transform: scale(1.08);
+}
+.fx-folia-switch.is-on,
+.fx-folia-switch[aria-pressed="true"] {
+  background: #34c759;
+}
+.fx-folia-switch.is-on .fx-folia-switch-knob,
+.fx-folia-switch[aria-pressed="true"] .fx-folia-switch-knob {
+  transform: translateX(19px);
+}
+.fx-folia-switch.is-on:active .fx-folia-switch-knob,
+.fx-folia-switch[aria-pressed="true"]:active .fx-folia-switch-knob {
+  transform: translateX(19px) scale(1.08);
+}
+.fx-folia-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-hint {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .42);
+  margin-top: 6px;
+}
+.fx-folia-error {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #ffb4a8;
+  margin-top: 6px;
+}
+.fx-folia-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+/* 背景卡片与歌词样式同规格：两列网格铺开（之前没有 grid 规则，按钮按块级流竖着堆成一列）。 */
+.fx-folia-bg-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+/* 参数设置折叠：嵌在 Folia 折叠区里，这里是唯一的真折叠卡（iOS 圆角卡片）。
+ * 底色**不在这里声明**：glass.css 给 .fx-fold 挂了 `background:var(--panel-button-bg)!important`，
+ * 会盖掉任何非 important 值 —— 折叠卡实际用的是那套全局玻璃渐变，与其余折叠卡一致。
+ * 这里只负责圆角 / 发丝描边宽 / overflow hidden（头行不露方角）/ 头行与主体的留白。
+ * 注意 fx-panel.css:320 把所有 .fx-fold 拍成了卡片， fx-panel.css:345 又把 .fx-fold-head 藏了、
+ * .fx-fold-body 强制展开（旧版控制台把折叠区拍平）—— 用两个 id 的选择器只把这一处还原成真折叠。 */
+#fx-panel #fx-folia-tuning-fold,
+#fx-panel #fx-folia-tuning-fold.open {
+  margin-top: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  border-radius: 14px;
+  overflow: hidden;
+}
+#fx-panel #fx-folia-tuning-fold .fx-fold-head {
+  display: flex;
+  padding: 10px 12px;
+}
+#fx-panel #fx-folia-tuning-fold .fx-fold-head:hover {
+  background: rgba(120, 120, 128, .08);
+}
+#fx-panel #fx-folia-tuning-fold .fx-fold-body {
+  display: none;
+  padding: 0 12px 12px;
+}
+#fx-panel #fx-folia-tuning-fold.open .fx-fold-body {
+  display: block;
+}
+/* 说明文字在折叠标题里要能读全（默认 small 是 nowrap + 省略号）。 */
+#fx-panel #fx-folia-tuning-fold .fx-fold-title small {
+  white-space: normal;
+  line-height: 1.4;
+}
+/* iOS 玻璃卡片：半透明填充 + 发丝描边 + 顶部高光；悬停微浮起，按压回缩，
+ * 选中为系统蓝渐变 + 柔光 —— 与 iOS 深色列表/按钮的层次感一致。 */
+.fx-folia-mode-card,
+.fx-folia-bg-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 11px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .03));
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, .08);
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color .2s ease, background .2s ease, box-shadow .2s ease,
+    transform .18s cubic-bezier(.3, 1.3, .4, 1);
+}
+/* 背景卡片只有名字，不需要「名字 + 描述」高度，垂直居中收一档（放在组合规则后，避免被盖掉）。 */
+.fx-folia-mode-card { min-height: 54px; }
+.fx-folia-bg-card {
+  min-height: 46px;
+  justify-content: center;
+}
+.fx-folia-mode-card:hover,
+.fx-folia-bg-card:hover {
+  border-color: rgba(255, 255, 255, .2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .05));
+  transform: translateY(-1px);
+}
+.fx-folia-mode-card:active,
+.fx-folia-bg-card:active {
+  transform: scale(.96);
+}
+.fx-folia-mode-card.active,
+.fx-folia-bg-card.active {
+  border-color: rgba(10, 132, 255, .65);
+  background: linear-gradient(180deg, rgba(10, 132, 255, .22), rgba(10, 132, 255, .13));
+  box-shadow: 0 4px 16px rgba(10, 132, 255, .18), inset 0 0.5px 0 rgba(255, 255, 255, .14);
+}
+.fx-folia-mode-card:focus-visible,
+.fx-folia-bg-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-mode-card.active:focus-visible,
+.fx-folia-bg-card.active:focus-visible {
+  box-shadow: 0 4px 16px rgba(10, 132, 255, .18), 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-mode-name,
+.fx-folia-bg-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, .92);
+  letter-spacing: .3px;
+}
+.fx-folia-mode-desc {
+  font-size: 10px;
+  color: rgba(255, 255, 255, .44);
+  line-height: 1.35;
+}
+.preset-grid.folia-locked {
+  opacity: .32;
+  filter: grayscale(1);
+  pointer-events: none;
+}
+
+/* ---------- 调参面板（绘光 lumiere） ---------- */
+.fx-folia-tuning {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* 塞进折叠区后由折叠体负责留白，自己不再额外顶一段。 */
+#fx-panel #fx-folia-tuning-fold .fx-folia-tuning {
+  margin-top: 0;
+  gap: 10px;
+}
+/* 标题与说明已搬到折叠标题行（#fx-folia-tuning-title / -sub），面板里不再有标题块。 */
+/* 调参分区卡：与背景面板的 .fx-folia-tuning-group 合并为同一规格 —— 圆角 12、
+ * 内边距 10/12、行距 10、渐变底 + 顶部高光；题注统一走 10px 追踪小字。
+ * 之前两套（14/pad11/gap9/题注 12px·.78 vs 12/pad10/gap10/题注 10px·.48）会让
+ * 控件宽度差 4px、题注重量也对不上，同一块面板里像两家做的。 */
+.fx-folia-tuning-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .04));
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, .07);
+}
+.fx-folia-tuning-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  color: rgba(255, 255, 255, .5);
+}
+.fx-folia-tuning-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fx-folia-tuning-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.fx-folia-tuning-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+}
+.fx-folia-tuning-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, .6);
+  font-variant-numeric: tabular-nums;
+}
+/* iOS 滑块：4px 圆角轨道 + 16px 白钮（带原生投影）；悬停/拖拽时钮体弹性放大。 */
+/* 与主面板同款滑块（prismal-chrome 版）：4px 圆轨 + 蓝色进度填充（--folia-fill 由
+ * foliaBuildTuningSlider 逐行同步）+ 28×18 玻璃滑钮。尺寸/阴影逐项对齐
+ * #fx-panel .fx-slider，两处看上去是同一个控件。 */
+.fx-folia-tuning-range {
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.fx-folia-tuning-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(90, 180, 255, .88), rgba(90, 180, 255, .55)) 0 / var(--folia-fill, 0%) 100% no-repeat,
+    rgba(255, 255, 255, .12);
+}
+.fx-folia-tuning-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 28px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .36);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .55),
+    inset 0 -1px 0 rgba(0, 0, 0, .16),
+    0 0 0 1px rgba(80, 210, 255, .18),
+    0 0 12px rgba(255, 90, 170, .16),
+    0 4px 14px rgba(0, 0, 0, .28);
+  backdrop-filter: blur(10px) saturate(1.5) brightness(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.5) brightness(1.2);
+  cursor: grab;
+  /* 只按 scale 缩放，不改宽高 —— 否则蓝色填充会跳位。 */
+  transition: transform .32s cubic-bezier(.34, 1.4, .64, 1), box-shadow .24s ease;
+}
+.fx-folia-tuning-range:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  transform: scale(1.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .62),
+    inset 0 -1px 0 rgba(0, 0, 0, .14),
+    0 0 0 1px rgba(80, 210, 255, .28),
+    0 0 18px rgba(255, 90, 170, .28),
+    0 8px 22px rgba(0, 0, 0, .34);
+}
+.fx-folia-tuning-range:focus-visible {
+  outline: none;
+}
+.fx-folia-tuning-range:focus-visible::-webkit-slider-runnable-track {
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .28);
+}
+.fx-folia-tuning-range:disabled::-webkit-slider-thumb {
+  cursor: not-allowed;
+}
+.fx-folia-tuning-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  border: 0;
+}
+.fx-folia-tuning-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(90, 180, 255, .78);
+}
+.fx-folia-tuning-range::-moz-range-thumb {
+  width: 28px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .16);
+  border: 1px solid rgba(255, 255, 255, .36);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .5),
+    0 0 0 1px rgba(80, 210, 255, .18),
+    0 0 12px rgba(255, 90, 170, .16),
+    0 4px 14px rgba(0, 0, 0, .28);
+  cursor: grab;
+  transition: transform .32s cubic-bezier(.34, 1.4, .64, 1), box-shadow .24s ease;
+}
+.fx-folia-tuning-range:active::-moz-range-thumb {
+  cursor: grabbing;
+  transform: scale(1.18);
+}
+/* iOS 填充 chips：灰填充、无描边；选中为实心系统蓝 + 柔光，按压回缩。
+ * 高度统一 26px（inline-flex + min-height）：与圆形操作钮 / 重置钮 / 取色块 / 分段粒
+ * 同一档，之前 23.2 的药丸和 26 的钮摆在一起会看出半档差。 */
+.fx-folia-tuning-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fx-folia-tuning-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 12px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: rgba(235, 235, 245, .62);
+  border-radius: 999px;
+  border: none;
+  background: rgba(120, 120, 128, .18);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease,
+    transform .12s ease;
+}
+.fx-folia-tuning-pill:hover {
+  color: #fff;
+  background: rgba(120, 120, 128, .3);
+}
+.fx-folia-tuning-pill:active {
+  transform: scale(.96);
+}
+.fx-folia-tuning-pill.active {
+  color: #fff;
+  background: #0a84ff;
+  box-shadow: 0 2px 10px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-pill.active:focus-visible {
+  box-shadow: 0 2px 10px rgba(10, 132, 255, .35), 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+/* 布尔开关对（开启/关闭、启用/关闭、显示/隐藏…）：分段容器样式 ——
+ * 一整条圆角卡（发丝描边 + 灰填充），两粒各占一半；选中的一粒亮边玻璃 + 加粗。
+ * 与普通多选 chips（背景来源 / 布局模式 / 效果）区分开：开关是「二选一的状态」，
+ * 长得像开关而不是一排选项。
+ * 尺寸：容器 34 = 内边距 4×2 + 粒 26（与药丸同高），圆角 12 与卡片同档，
+ * 粒 8 = 12 − 4，同心角不错位。 */
+.fx-folia-tuning-pills.is-toggle {
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: rgba(120, 120, 128, .12);
+}
+.fx-folia-tuning-pills.is-toggle .fx-folia-tuning-pill {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 10px;
+  text-align: center;
+  border-radius: 8px;
+  background: transparent;
+  /* 常态也留 1px 透明边，选中态加边框时行高不跳。 */
+  border: 1px solid transparent;
+}
+.fx-folia-tuning-pills.is-toggle .fx-folia-tuning-pill:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, .06);
+}
+.fx-folia-tuning-pills.is-toggle .fx-folia-tuning-pill.active {
+  color: #fff;
+  font-weight: 600;
+  background: rgba(255, 255, 255, .12);
+  border-color: rgba(255, 255, 255, .42);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, .25), 0 1px 4px rgba(0, 0, 0, .2);
+}
+.fx-folia-tuning-pills.is-toggle .fx-folia-tuning-pill:active {
+  transform: scale(.96);
+}
+.fx-folia-tuning-hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .45);
+}
+/* Folium 模组参数的说明来自模组自己的 schema，通常是一整段（还带中英双语）。
+ * 行内只留第一句、两行封顶，全文挂在行元素的 title 上 —— 整段铺开会把面板撑成文档。 */
+.fx-folia-mod-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.fx-folia-tuning-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+.fx-folia-tuning-reset {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 14px;
+  font-size: 11px;
+  color: rgba(235, 235, 245, .85);
+  border-radius: 999px;
+  border: none;
+  background: rgba(120, 120, 128, .18);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .18s ease, color .18s ease, transform .12s ease;
+}
+.fx-folia-tuning-reset:hover {
+  color: #fff;
+  background: rgba(120, 120, 128, .3);
+}
+.fx-folia-tuning-reset:active {
+  transform: scale(.96);
+}
+/* 开关行（BackgroundToggleRow）：label+描述在左、圆形滑钮在右。 */
+.fx-folia-tuning-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.fx-folia-tuning-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fx-folia-tuning-switch-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+}
+.fx-folia-tuning-switch-desc {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .45);
+  max-width: 300px;
+}
+/* 调参开关与主开关同一规格：iOS 46×27 绿开关，弹簧滑钮。 */
+.fx-folia-tuning-switch {
+  flex-shrink: 0;
+  width: 46px;
+  height: 27px;
+  padding: 2px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(120, 120, 128, .32);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .25s ease, box-shadow .25s ease;
+}
+.fx-folia-tuning-switch.is-on {
+  background: #34c759;
+}
+.fx-folia-tuning-switch-knob {
+  display: block;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .3), 0 1px 1px rgba(0, 0, 0, .16);
+  transition: transform .28s cubic-bezier(.3, 1.35, .4, 1);
+}
+.fx-folia-tuning-switch.is-on .fx-folia-tuning-switch-knob {
+  transform: translateX(19px);
+}
+.fx-folia-tuning-switch:active .fx-folia-tuning-switch-knob {
+  transform: scale(1.08);
+}
+.fx-folia-tuning-switch.is-on:active .fx-folia-tuning-switch-knob {
+  transform: translateX(19px) scale(1.08);
+}
+.fx-folia-tuning-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-switch:disabled,
+.fx-folia-switch:disabled {
+  opacity: .45;
+  cursor: default;
+}
+/* 颜色行（莫奈的自定义水洗色）：label 在左，十六进制码 + 原生色块在右。 */
+.fx-folia-tuning-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.fx-folia-tuning-color-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+}
+.fx-folia-tuning-color-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.fx-folia-tuning-color-hex {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: .06em;
+  color: rgba(255, 255, 255, .6);
+}
+.fx-folia-tuning-color-input {
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border: 0.5px solid rgba(255, 255, 255, .28);
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  transition: box-shadow .18s ease, transform .12s ease;
+}
+.fx-folia-tuning-color-input:hover {
+  transform: scale(1.05);
+}
+.fx-folia-tuning-color-input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.fx-folia-tuning-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 999px;
+}
+/* 嵌入背景的 URL 列表：iOS 单元格 —— 灰填充圆角行，选中为系统蓝浅底 + 描边 + 柔光。 */
+.fx-folia-tuning-url-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fx-folia-tuning-url-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: rgba(120, 120, 128, .12);
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.fx-folia-tuning-url-item:hover {
+  background: rgba(120, 120, 128, .18);
+}
+.fx-folia-tuning-url-item.is-selected {
+  border-color: rgba(10, 132, 255, .55);
+  background: rgba(10, 132, 255, .14);
+  box-shadow: 0 2px 12px rgba(10, 132, 255, .14);
+}
+.fx-folia-tuning-url-body {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.fx-folia-tuning-url-note {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-folia-tuning-url-addr {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, .45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-folia-tuning-url-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* iOS 圆形小按钮：灰填充无描边，按压回缩；危险操作悬停转红。 */
+.fx-folia-tuning-url-act {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(120, 120, 128, .18);
+  color: rgba(235, 235, 245, .68);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .16s ease, color .16s ease, transform .12s ease;
+}
+.fx-folia-tuning-url-act:hover {
+  background: rgba(120, 120, 128, .3);
+  color: #fff;
+}
+.fx-folia-tuning-url-act:active {
+  transform: scale(.96);
+}
+.fx-folia-tuning-url-act.is-danger:hover {
+  background: rgba(255, 69, 58, .22);
+  color: #ff6961;
+}
+.fx-folia-tuning-url-act.is-primary {
+  background: rgba(10, 132, 255, .18);
+  color: #0a84ff;
+}
+.fx-folia-tuning-url-act.is-primary:hover {
+  background: rgba(10, 132, 255, .3);
+  color: #3b9dff;
+}
+.fx-folia-tuning-url-act:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-url-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: rgba(120, 120, 128, .12);
+}
+/* iOS 文本框：灰填充无描边，聚焦时蓝色光晕。高度与「添加」整行同为 32，
+ * 和药丸族/分段段一致落在 4px 栅格上（8+8+14.4+border）。 */
+.fx-folia-tuning-url-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(120, 120, 128, .18);
+  color: rgba(255, 255, 255, .92);
+  font-size: 12px;
+  outline: none;
+  transition: background .18s ease, box-shadow .18s ease;
+}
+.fx-folia-tuning-url-input:focus {
+  background: rgba(120, 120, 128, .24);
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+}
+.fx-folia-tuning-url-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* 「添加」整行：iOS 浅色按钮 —— 蓝字浅蓝底。高度 32 与输入框同档。 */
+.fx-folia-tuning-url-add {
+  width: 100%;
+  height: 32px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(10, 132, 255, .15);
+  color: #0a84ff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .16s ease, transform .12s ease;
+}
+.fx-folia-tuning-url-add:hover {
+  background: rgba(10, 132, 255, .25);
+}
+.fx-folia-tuning-url-add:active {
+  transform: scale(.96);
+}
+.fx-folia-tuning-url-empty {
+  padding: 6px 0;
+  text-align: center;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, .45);
+}
+/* 子框分组（LatentBackgroundSettingsCard 的 rounded-2xl border p-3）。
+ * 与模式面板的 .fx-folia-tuning-section 合并为同一规格（圆角 12 / 内边距 10-12 /
+ * 行距 10 / 渐变底 + 顶部高光 / 题注 10px 追踪）：同一块面板里，背景那半和模式那半
+ * 是一套卡片，不该一个带底一个不带。 */
+.fx-folia-tuning-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .04));
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, .07);
+}
+.fx-folia-tuning-group-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  color: rgba(255, 255, 255, .5);
+}
+/* disabledWhen 联动：与 Folia 的 opacity-45 同值。 */
+.fx-folia-tuning-row.is-disabled {
+  opacity: .45;
+}
+.fx-folia-tuning-row.is-disabled .fx-folia-tuning-range {
+  cursor: default;
+}
+/* 可展开的效果组（镜台 DioramaEffectSettings / 点云几何 / 背景粒子）：
+ * 标题按钮在左、开关在右；展开后左侧一条竖线，与 Folia 的 ml-3 border-l pl-3 同构。
+ * 折叠状态存在 0l1 的模块级表里，不依赖 DOM —— 面板重建（改任一项都会重建）后照样保持。 */
+.fx-folia-tuning-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 折叠组头行：iOS 单元格 —— 灰填充圆角，悬停变亮，按压回缩。
+ * 内边距与外壳折叠标题行对齐（10/12），两个折叠头看起来才是同一种行。 */
+.fx-folia-tuning-fold-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(120, 120, 128, .12);
+  transition: background .18s ease, transform .14s ease;
+}
+.fx-folia-tuning-fold-head:hover {
+  background: rgba(120, 120, 128, .18);
+}
+.fx-folia-tuning-fold-head:active {
+  transform: scale(.96);
+}
+.fx-folia-tuning-fold-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.fx-folia-tuning-fold-chevron {
+  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 1;
+  color: rgba(255, 255, 255, .45);
+  transition: transform .24s cubic-bezier(.3, 1.35, .4, 1);
+}
+/* 一律用直接子代：折叠组只认自己的头/体，别被上层面板的 .open 顺下去点亮。 */
+.fx-folia-tuning-fold.open > .fx-folia-tuning-fold-head > .fx-folia-tuning-fold-btn > .fx-folia-tuning-fold-chevron {
+  transform: rotate(90deg);
+}
+.fx-folia-tuning-fold-title {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+}
+.fx-folia-tuning-fold-body {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, .14);
+}
+.fx-folia-tuning-fold.open > .fx-folia-tuning-fold-body {
+  display: flex;
+}
+/* 展开动效只挂在 .fx-folia-fold-anim 上 —— 它由点击处理器临时挂上；
+ * 面板重建恢复的 open 状态不带它，避免每次调参重建都闪一遍入场。 */
+@keyframes foliaFoldBodyIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fx-folia-tuning-fold.open > .fx-folia-tuning-fold-body.fx-folia-fold-anim {
+  animation: foliaFoldBodyIn .24s cubic-bezier(.25, 1, .35, 1);
+}
+/* 组内小标题（「强度」）与一行小开关（当前字出窍 / 点云四个子项）。 */
+.fx-folia-tuning-subtitle {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  color: rgba(255, 255, 255, .5);
+}
+.fx-folia-tuning-mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fx-folia-tuning-mini-row.is-dim .fx-folia-tuning-mini-label {
+  opacity: .52;
+}
+.fx-folia-tuning-mini-label {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .84);
+}
+.fx-folia-tuning-fold-body .fx-folia-tuning-row,
+.fx-folia-tuning-fold-body .fx-folia-tuning-switch-row {
+  gap: 10px;
+}
+/* 双面板：背景面板（占折叠标题行）与模式面板之间的分隔线。 */
+.fx-folia-tuning-divider {
+  height: 1px;
+  margin: 12px 0;
+  background: rgba(255, 255, 255, .1);
+}
+.fx-folia-tuning-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+.fx-folia-tuning-intro-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, .85);
+}
+.fx-folia-tuning-intro-sub {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .45);
+}
+
+/* iOS 动效降级：系统开「减弱动态效果」时，面板所有过渡/动画全部关掉，状态切换即时完成。 */
+@media (prefers-reduced-motion: reduce) {
+  .fx-folia-switch,
+  .fx-folia-switch .fx-folia-switch-knob,
+  .fx-folia-tuning-switch,
+  .fx-folia-tuning-switch-knob,
+  .fx-folia-mode-card,
+  .fx-folia-bg-card,
+  .fx-folia-tuning-pill,
+  .fx-folia-tuning-reset,
+  .fx-folia-tuning-range::-webkit-slider-thumb,
+  .fx-folia-tuning-range::-moz-range-thumb,
+  .fx-folia-tuning-color-input,
+  .fx-folia-tuning-url-item,
+  .fx-folia-tuning-url-act,
+  .fx-folia-tuning-url-add,
+  .fx-folia-tuning-url-input,
+  .fx-folia-tuning-fold-head,
+  .fx-folia-tuning-fold-chevron,
+  .fx-folia-asset-field {
+    transition: none !important;
+  }
+  .fx-folia-tuning-fold.open > .fx-folia-tuning-fold-body.fx-folia-fold-anim {
+    animation: none !important;
+  }
+}
+
+/* ---------- 浮名（fume） ---------- */
+.folia-fume {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+/* 舞台外层：第一段文字开印时从 0.985 归一到 1（Folia 的 motion.div，0.45s easeOut）。 */
+.folia-fume-stage {
+  position: absolute;
+  inset: 0;
+  transform: scale(0.985);
+  transform-origin: center center;
+  transition: transform 450ms ease-out;
+}
+.folia-fume-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+}
+/* 版式构建中的加载卡（Folia 的 Hourglass + 骨架条）。 */
+.folia-fume-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.folia-fume-loading[style*="display: none"] {
+  display: none !important;
+}
+.folia-fume-loading-card {
+  display: flex;
+  min-width: 10rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, .12);
+  padding: 1.25rem 1.5rem;
+  background: rgba(5, 7, 11, .82);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .52);
+}
+.folia-fume-loading-bars {
+  display: flex;
+  width: 7rem;
+  flex-direction: column;
+  gap: .625rem;
+}
+.folia-fume-loading-bar {
+  height: .5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .22);
+  animation: folia-fume-pulse 1.6s ease-in-out infinite;
+}
+.folia-fume-loading-bar:nth-child(2) {
+  animation-delay: .18s;
+  background: rgba(255, 255, 255, .16);
+}
+.folia-fume-loading-bar:nth-child(3) {
+  animation-delay: .36s;
+  background: rgba(255, 255, 255, .11);
+}
+@keyframes folia-fume-pulse {
+  0%, 100% { opacity: .45; }
+  50% { opacity: 1; }
+}
+
+/* ---------- 莫奈（monet） ----------
+ * 海报版式：左列（歌手 → 竖线 → 曲名 → 专辑 → 歌词轨 → 描述胶囊）、
+ * 右列封面立牌（square 画到 135.135% 并左移 35.135%）、左下音频条、全屏漂浮装饰。
+ * 数值一律对齐 Folia 的 Tailwind 类（px-5 = 1.25rem、h-14 = 3.5rem、rounded-[2rem] = 2rem）。
+ */
+.folia-monet {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.folia-monet.is-text-hidden .folia-monet-text,
+.folia-monet.is-text-hidden .folia-monet-portrait-col,
+.folia-monet.is-text-hidden .folia-monet-audio,
+.folia-monet.is-text-hidden .folia-monet-decor {
+  visibility: hidden;
+}
+
+/* 背景：封面 wash。tier A 是 canvas 烘出的 data URL；tier B 是 CSS 图层（画布被污染时）。 */
+.folia-monet-bg-tint {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.folia-monet-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  transition: opacity 600ms ease;
+}
+.folia-monet-bg.is-css-fallback {
+  filter: blur(6px) saturate(1.05);
+}
+.folia-monet-bg.is-drifting {
+  animation: folia-monet-drift 46s ease-in-out infinite;
+}
+@keyframes folia-monet-drift {
+  0%, 100% { transform: scale(1.06) translate3d(-1.2%, -1%, 0); }
+  50% { transform: scale(1.1) translate3d(1.2%, 1%, 0); }
+}
+.folia-monet-bg-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+.folia-monet.is-bg-fallback .folia-monet-bg-veil {
+  opacity: 1;
+}
+
+/* 漂浮装饰 */
+.folia-monet-decor {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+.folia-monet-decor-item {
+  position: absolute;
+  will-change: transform, opacity;
+}
+@keyframes folia-monet-float-a {
+  0% { transform: translate(15px, -40px) rotate(calc(var(--monet-rot) * 1deg)); opacity: calc(var(--monet-op) * 0.6); }
+  25% { transform: translate(-25px, 60px) rotate(calc(var(--monet-rot) * 1deg - 120deg)); opacity: calc(var(--monet-op) * 1.2); }
+  50% { transform: translate(10px, -20px) rotate(calc(var(--monet-rot) * 1deg - 60deg)); opacity: var(--monet-op); }
+  75% { transform: translate(-20px, 40px) rotate(calc(var(--monet-rot) * 1deg - 180deg)); opacity: calc(var(--monet-op) * 1.3); }
+  100% { transform: translate(15px, -40px) rotate(calc(var(--monet-rot) * 1deg)); opacity: calc(var(--monet-op) * 0.7); }
+}
+@keyframes folia-monet-float-b {
+  0% { transform: translate(-15px, 40px) rotate(calc(var(--monet-rot) * 1deg)); opacity: calc(var(--monet-op) * 0.6); }
+  25% { transform: translate(25px, -60px) rotate(calc(var(--monet-rot) * 1deg + 120deg)); opacity: calc(var(--monet-op) * 1.2); }
+  50% { transform: translate(-10px, 20px) rotate(calc(var(--monet-rot) * 1deg + 60deg)); opacity: var(--monet-op); }
+  75% { transform: translate(20px, -40px) rotate(calc(var(--monet-rot) * 1deg + 180deg)); opacity: calc(var(--monet-op) * 1.3); }
+  100% { transform: translate(-15px, 40px) rotate(calc(var(--monet-rot) * 1deg)); opacity: calc(var(--monet-op) * 0.7); }
+}
+
+/* 两列容器 */
+.folia-monet-shell {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.folia-monet-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+.folia-monet-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  padding: 1.25rem;
+}
+@media (min-width: 640px) {
+  .folia-monet-text { padding: 1.5rem 2rem; }
+}
+@media (min-width: 1024px) {
+  .folia-monet-text { padding: 2rem 3.5rem; }
+}
+@media (min-width: 1536px) {
+  .folia-monet-text { padding: 2rem 5rem; }
+}
+
+/* 海报头部 */
+.folia-monet-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+.folia-monet-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+.folia-monet-bar {
+  height: 3.5rem;
+  width: 1px;
+  border-radius: 999px;
+  transform-origin: top center;
+}
+.folia-monet-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+}
+.folia-monet-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.06;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  padding-block: 0.25em;
+  margin-top: -0.25em;
+  margin-bottom: -0.12em;
+}
+.folia-monet-album {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.folia-monet-rail-wrap {
+  position: relative;
+  min-width: 0;
+}
+.folia-monet-rail {
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 11%, black 88%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 11%, black 88%, transparent 100%);
+}
+.folia-monet-desc-wrap {
+  margin-top: auto;
+  padding-top: 1rem;
+}
+.folia-monet-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 999px;
+  border-width: 1px;
+  border-style: solid;
+  padding: 0.5rem 1rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.folia-monet-capsule-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 999px;
+}
+.folia-monet-capsule-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+/* 歌词轨：每行都是绝对定位的固定轨道，位置由 transform 弹簧驱动。 */
+.folia-monet-line {
+  position: absolute;
+  top: 0;
+  min-width: 0;
+  transform-origin: left top;
+  will-change: transform, opacity;
+  transition: opacity 280ms cubic-bezier(0.32, 0.72, 0, 1), filter 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.folia-monet-line.is-exiting {
+  transition: opacity 200ms cubic-bezier(0.32, 0.72, 0, 1), filter 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.folia-monet-line-text {
+  min-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+.folia-monet-tokens {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.folia-monet-word {
+  position: relative;
+  display: inline-block;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.folia-monet-word-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+  text-shadow: none;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+.folia-monet-word-fill {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.folia-monet-track {
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+  letter-spacing: 0;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  animation: folia-monet-track-in 280ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes folia-monet-track-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 封面立牌 */
+.folia-monet-portrait-col {
+  display: none;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  padding-left: 0.75rem;
+  padding-right: 1.25rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+@media (min-width: 640px) {
+  .folia-monet-portrait-col { padding-right: 2rem; }
+}
+@media (min-width: 768px) {
+  .folia-monet-portrait-col { display: flex; }
+}
+@media (min-width: 1024px) {
+  .folia-monet-portrait-col { justify-content: flex-end; padding-right: 2.5rem; }
+}
+@media (min-width: 1280px) {
+  .folia-monet-portrait-col { padding-right: 3rem; }
+}
+.folia-monet-portrait-box {
+  position: relative;
+  width: 100%;
+}
+.folia-monet-portrait-float {
+  position: relative;
+  will-change: transform;
+  transform: translateZ(0);
+}
+.folia-monet-portrait-float.is-chaotic {
+  animation: folia-monet-portrait-chaos 9s ease-in-out 0.2s infinite;
+}
+@keyframes folia-monet-portrait-chaos {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(-9px, -18px) rotate(1.2deg); }
+  50% { transform: translate(0, 0) rotate(0deg); }
+  75% { transform: translate(9px, 18px) rotate(-1.2deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+.folia-monet-hanger {
+  position: absolute;
+  top: -0.75rem;
+  right: 2rem;
+  z-index: 20;
+  height: 3.5rem;
+  width: 0.75rem;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+  transition: transform 200ms ease, border-color 200ms ease;
+}
+.folia-monet-frame {
+  position: relative;
+  width: 100%;
+  background-position: center;
+}
+.folia-monet-frame.is-square {
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 2rem;
+}
+.folia-monet-frame.is-portrait {
+  aspect-ratio: 0.74;
+  padding: 0.375rem;
+  border-radius: 2.15rem;
+  border-width: 1px;
+  border-style: solid;
+  box-sizing: border-box;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.folia-monet-frame-inner {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.folia-monet-frame.is-square .folia-monet-frame-inner {
+  border-radius: 2rem;
+}
+.folia-monet-frame.is-portrait .folia-monet-frame-inner {
+  border-radius: 1.85rem;
+}
+.folia-monet-portrait-layers {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.folia-monet-portrait-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 900ms ease-in-out;
+}
+
+/* 底部音频条 */
+.folia-monet-audio {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  height: 2.5rem;
+  width: min(450px, 55vw);
+  overflow: hidden;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+@media (min-width: 640px) {
+  .folia-monet-audio { padding-left: 2rem; padding-right: 2rem; }
+}
+@media (min-width: 1024px) {
+  .folia-monet-audio { padding-left: 3.5rem; padding-right: 3.5rem; }
+}
+.folia-monet-audio-canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+/* 入场：Folia 用 introKey 重挂载每个块，这里用 .is-intro 后代动画重播（同一组时长/延迟/曲线）。 */
+.folia-monet.is-intro .folia-monet-artist {
+  animation: folia-monet-artist-in 1.2s cubic-bezier(0.25, 1, 0.5, 1) 0.15s both;
+}
+.folia-monet.is-intro .folia-monet-bar {
+  animation: folia-monet-bar-in 1.5s cubic-bezier(0.25, 1, 0.5, 1) 0.5s both;
+}
+.folia-monet.is-intro .folia-monet-title-wrap {
+  animation: folia-monet-slide-in-left 1.3s cubic-bezier(0.25, 1, 0.5, 1) 0.3s both;
+}
+.folia-monet.is-intro .folia-monet-rail-wrap {
+  animation: folia-monet-rise-in 1.2s cubic-bezier(0.25, 1, 0.5, 1) 0.65s both;
+}
+.folia-monet.is-intro .folia-monet-desc-wrap {
+  animation: folia-monet-desc-in 1s cubic-bezier(0.25, 1, 0.5, 1) 0.95s both;
+}
+.folia-monet.is-intro .folia-monet-decor {
+  animation: folia-monet-fade-in 2.2s ease-out both;
+}
+.folia-monet.is-intro .folia-monet-portrait-col {
+  animation: folia-monet-portrait-in 1.6s cubic-bezier(0.25, 1, 0.5, 1) 0.25s both;
+}
+.folia-monet.is-intro .folia-monet-audio {
+  animation: folia-monet-rise-in 1.2s cubic-bezier(0.25, 1, 0.5, 1) 0.8s both;
+}
+@keyframes folia-monet-artist-in {
+  from { opacity: 0; transform: translate(-30px, -10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes folia-monet-bar-in {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+@keyframes folia-monet-slide-in-left {
+  from { opacity: 0; transform: translateX(-40px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes folia-monet-rise-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes folia-monet-desc-in {
+  from { opacity: 0; transform: scale(0.9) translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes folia-monet-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes folia-monet-portrait-in {
+  from { opacity: 0; transform: translateX(50px) scale(0.95) rotate(1deg); }
+  to { opacity: 1; transform: none; }
+}
+
+/* =====================================================================
+ * 时计（pendolo）—— 左侧钟表机芯 + 弧形歌词轮
+ * 几何全部由 JS 内联（left/top/rotate/scale/opacity），这里只定结构与不可省的排版属性。
+ * ===================================================================== */
+.folia-pendolo {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.folia-pendolo-clockwork {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.folia-pendolo-clockwork-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 摆轮中心的装饰图标：独立一层，不随齿轮旋转 */
+.folia-pendolo-balance {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.folia-pendolo-balance svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+}
+
+/* 歌词轮：整层按擒纵弹簧旋转，transform-origin 由 JS 设到轮心 */
+.folia-pendolo-rail {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: auto;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+.folia-pendolo-line {
+  position: absolute;
+  transform-origin: left center;
+  pointer-events: auto;
+  cursor: default;
+  contain: layout style;
+}
+
+.folia-pendolo-line-rot {
+  display: inline-block;
+  transform-origin: left center;
+  transform: translateZ(0);
+}
+
+.folia-pendolo-line-tilt {
+  position: relative;
+  display: inline-block;
+  transform-origin: left center;
+  isolation: isolate;
+}
+
+.folia-pendolo-line-halo {
+  position: relative;
+  transform-origin: left center;
+}
+
+/* 副歌光晕垫在文字后面 */
+.folia-pendolo-halo {
+  position: absolute;
+  z-index: -1;
+  inset: -0.7em -1.1em;
+  border-radius: 1rem;
+  pointer-events: none;
+  display: none;
+}
+
+.folia-pendolo-line-shift {
+  position: relative;
+  transform: translateY(-50%);
+}
+
+/* 手动滚动时出现在副歌行左侧的小圆点 */
+.folia-pendolo-chorus-marker {
+  position: absolute;
+  width: 0.42em;
+  height: 0.42em;
+  left: -0.95em;
+  top: 0.52em;
+  border-radius: 50%;
+  background-color: currentColor;
+  display: none;
+}
+
+.folia-pendolo-plain {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  letter-spacing: 0.01em;
+  transition: color 200ms ease, opacity 200ms ease;
+}
+
+.folia-pendolo-track {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  letter-spacing: 0.01em;
+  transition: opacity 200ms ease;
+}
+
+/* 扫字：同一行叠两层文本，上层按 mask 露出填充色 */
+.folia-pendolo-sweep {
+  display: block;
+}
+
+.folia-pendolo-sweep-row {
+  position: relative;
+  display: block;
+  white-space: pre;
+  overflow: visible;
+}
+
+.folia-pendolo-sweep-base {
+  display: block;
+  white-space: pre;
+}
+
+.folia-pendolo-sweep-cover {
+  position: absolute;
+  inset: 0;
+  display: block;
+  white-space: pre;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.folia-pendolo-sweep-glow {
+  position: absolute;
+  display: block;
+  white-space: pre;
+  overflow: visible;
+}
+
+.folia-pendolo-sweep-fill {
+  position: absolute;
+  inset: 0;
+  display: block;
+  white-space: pre;
+  overflow: visible;
+  box-sizing: border-box;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+/* ---------- 镜台（diorama） ----------
+ * 3D 走廊：renderer.domElement 由 JS setSize 铺满 host；
+ * 等待播放占位贴在走廊消失点一侧，与 3D 文字同一视觉重心。
+ */
+.folia-diorama-waiting {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 70vh;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 2rem;
+  opacity: .5;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 商籁（sonnet） ----------
+ * pixi 画布由 JS 铺满 host；等待播放占位与镜台同一视觉重心（上半屏）。
+ */
+.folia-sonnet-waiting {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 70vh;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 2rem;
+  opacity: .5;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+/* ---------- 自定义图上传行（莫奈背景 / 漫游 / 莫奈肖像共用） ----------
+ * 头行只留标签（与药丸组同款），控件本体是一整条「文件字段」：
+ * 缩略图 + 文件名 + 两粒药丸收进同一个圆角框 —— 之前缩略图挂头行、药丸散在
+ * 下一行左边、右半条全空，看上去不像一个控件。
+ * 按钮直接复用 .fx-folia-tuning-pill，尺寸/圆角/悬停与「封面 / 自定义图片」完全一致。
+ * 文件选择框必须留在 DOM 里（display:none 的 input 在部分内核上 .click() 不触发选择），
+ * 所以用视觉隐藏 —— 冒烟的「塞 File 进 input 再派发 change」也要靠它。
+ */
+.fx-folia-asset {
+  gap: 6px;
+}
+.fx-folia-asset-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border-radius: 10px;
+  border: 0.5px solid rgba(255, 255, 255, .1);
+  background: rgba(120, 120, 128, .12);
+  transition: background .18s ease, border-color .18s ease;
+}
+.fx-folia-asset-field:hover {
+  background: rgba(120, 120, 128, .18);
+  border-color: rgba(255, 255, 255, .14);
+}
+/* 缩略图 24px：比字段里的药丸（26）收一档，是预览图不是控件；圆角 6 与字段的 10 同心退阶。 */
+.fx-folia-asset-thumb {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, .08);
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, .22);
+}
+/* 无图占位：虚线框 + 居中的「+」，提示「点上传添加」，比空白或灰块更像可交互的控件。 */
+.fx-folia-asset-thumb.is-empty {
+  background: transparent;
+  box-shadow: none;
+  border: 1px dashed rgba(255, 255, 255, .22);
+  position: relative;
+}
+.fx-folia-asset-thumb.is-empty::before {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(255, 255, 255, .30);
+}
+/* 文件名占满中段（flex:1 把药丸推到右端），等宽小字 + 截断；占位「未选择」再压暗一档。 */
+.fx-folia-asset-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, .6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-folia-asset-name.is-empty {
+  color: rgba(255, 255, 255, .38);
+}
+.fx-folia-asset-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* 主动作（上传）：iOS 浅色按钮 —— 蓝字浅蓝底；与实心蓝选中态区分开，不抢「已选」的视觉重量。 */
+.fx-folia-tuning-pill.is-primary {
+  color: #0a84ff;
+  background: rgba(10, 132, 255, .16);
+}
+.fx-folia-tuning-pill.is-primary:hover {
+  color: #3b9dff;
+  background: rgba(10, 132, 255, .26);
+}
+/* 禁用态：降透明度 + 还原灰填充，悬停不再亮起（与基础 chips 同族，全面板通用）。 */
+.fx-folia-tuning-pill:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.fx-folia-tuning-pill:disabled:hover {
+  color: rgba(235, 235, 245, .62);
+  background: rgba(120, 120, 128, .18);
+}

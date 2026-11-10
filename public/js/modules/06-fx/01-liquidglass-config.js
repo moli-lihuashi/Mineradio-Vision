@@ -1,43 +1,86 @@
 'use strict';
 
-function getLiquidGlassConfigFromFx() {
+/* 几个玻璃根各自 requestIdleCallback 预热，会挤在同一个空闲窗口里同时建 WebGL 上下文、
+ * 同时编译整套着色器 —— 实测「点击进入」后 0~4.5s 的掉帧主要来自这里
+ * （同一秒内 getContext 162ms / getProgramParameter 120ms / getShaderParameter 79ms）。
+ * 只做错峰、不做串行：仍允许重叠，避免把总时长拉长。槽位按「用户先看到谁」排。 */
+var LG_WARM_SLOT_MS = 180;
+function staggerGlassWarmup(slot, fn) {
+  var delay = Math.max(0, slot | 0) * LG_WARM_SLOT_MS;
+  if (delay <= 0) { fn(); return; }
+  setTimeout(fn, delay);
+}
+
+/* 方案 A：进入主界面时先让 .home-card 自带的 CSS 玻璃（backdrop-filter）顶着，
+ * 等主界面稳定 HOME_GLASS_ARM_DELAY_MS 之后再换液态玻璃。
+ * 为什么现在才切：LiquidGlass.init() 要建 WebGL 上下文 + 编译整套着色器 + 逐元素抓快照，
+ * 实测墙钟 1.2s 起（慢机器更久），而它原来正好落在「splash 淡出 → 主界面首帧」这段窗口里，
+ * 表现就是「点进播放器卡几秒」。首页卡片本身有完整 CSS 玻璃（home.css .home-card 的
+ * linear-gradient + backdrop-filter:blur(24px)），晚切换零视觉空档。 */
+var HOME_GLASS_ARM_DELAY_MS = 1500;
+
+/* 库的 WebGL shader 支持这些参数（见 vendor/liquidglass/index.js 的 DEFAULTS 与 uniform 上传）。
+ * 以前上层只暴露 7 项，specular / fresnel / tintStrength / distortion / bevelMode 这些分支
+ * 虽然编译进了 shader，却因为永远拿不到非零值而形同虚设。
+ * 面板控件、fx 存档归一化、滑块绑定三处都用这张表的 key，新增参数只改这里。 */
+var LIQUID_GLASS_FX_MAP = {
+  liquidGlassBlur: 'blurAmount',
+  liquidGlassRefraction: 'refraction',
+  liquidGlassAberration: 'chromAberration',
+  liquidGlassHighlight: 'edgeHighlight',
+  liquidGlassBrightness: 'brightness',
+  liquidGlassBevel: 'zRadius',
+  liquidGlassSaturation: 'saturation',
+  liquidGlassSpecular: 'specular',
+  liquidGlassFresnel: 'fresnel',
+  liquidGlassShadow: 'shadowOpacity',
+  liquidGlassShadowSpread: 'shadowSpread',
+  liquidGlassTint: 'tintStrength',
+  liquidGlassDistortion: 'distortion',
+  liquidGlassBevelMode: 'bevelMode'
+};
+
+var LIQUID_GLASS_DEFAULTS = {
+  blurAmount: 0.70,
+  refraction: 0.18,
+  chromAberration: 0.0,
+  edgeHighlight: 0.12,
+  specular: 0.05,
+  fresnel: 1.0,
+  cornerRadius: 18,
+  zRadius: 10,
+  shadowOpacity: 0.42,
+  shadowSpread: 22,
+  shadowOffsetY: 4,
+  saturation: 0.34,
+  brightness: 0.04,
+  tintStrength: 0.0,
+  distortion: 0,
+  bevelMode: 0,
+  opacity: 1
+};
+
+/* 统一入口：preset 打底 → fx 里用户调过的逐项覆盖。
+ * 五个宿主原来各抄一遍 7 行 if，加参数必漏，现全部收敛到这里。
+ * 值必须是有限数：存档里被写坏的 NaN / 字符串不能污染 shader uniform。 */
+function liquidGlassFxConfig(base) {
+  var out = Object.assign({}, base || {});
   var fx = window.fx || {};
-  var defaults = {
-    blurAmount: 0.70,
-    refraction: 0.18,
-    chromAberration: 0.0,
-    edgeHighlight: 0.12,
-    specular: 0.05,
-    fresnel: 1.0,
-    cornerRadius: 18,
-    zRadius: 10,
-    shadowOpacity: 0.42,
-    shadowSpread: 22,
-    shadowOffsetY: 4,
-    saturation: 0.34,
-    brightness: 0.04,
-    tintStrength: 0.0,
-    bevelMode: 0
-  };
-  return {
-    blurAmount: fx.liquidGlassBlur != null ? Number(fx.liquidGlassBlur) : defaults.blurAmount,
-    refraction: fx.liquidGlassRefraction != null ? Number(fx.liquidGlassRefraction) : defaults.refraction,
-    chromAberration: fx.liquidGlassAberration != null ? Number(fx.liquidGlassAberration) : defaults.chromAberration,
-    edgeHighlight: fx.liquidGlassHighlight != null ? Number(fx.liquidGlassHighlight) : defaults.edgeHighlight,
-    specular: defaults.specular,
-    fresnel: defaults.fresnel,
-    cornerRadius: defaults.cornerRadius,
-    zRadius: fx.liquidGlassBevel != null ? Number(fx.liquidGlassBevel) : defaults.zRadius,
-    shadowOpacity: defaults.shadowOpacity,
-    shadowSpread: defaults.shadowSpread,
-    shadowOffsetY: defaults.shadowOffsetY,
-    saturation: fx.liquidGlassSaturation != null ? Number(fx.liquidGlassSaturation) : defaults.saturation,
-    brightness: fx.liquidGlassBrightness != null ? Number(fx.liquidGlassBrightness) : defaults.brightness,
-    tintStrength: defaults.tintStrength,
-    bevelMode: defaults.bevelMode
-  };
+  Object.keys(LIQUID_GLASS_FX_MAP).forEach(function (key) {
+    var value = fx[key];
+    if (value == null || value === '' || !isFinite(Number(value))) return;
+    out[LIQUID_GLASS_FX_MAP[key]] = Number(value);
+  });
+  return out;
+}
+
+function getLiquidGlassConfigFromFx() {
+  return liquidGlassFxConfig(LIQUID_GLASS_DEFAULTS);
 }
 window.getLiquidGlassConfigFromFx = getLiquidGlassConfigFromFx;
+window.liquidGlassFxConfig = liquidGlassFxConfig;
+window.LIQUID_GLASS_FX_MAP = LIQUID_GLASS_FX_MAP;
+window.LIQUID_GLASS_DEFAULTS = LIQUID_GLASS_DEFAULTS;
 
 function getLiquidGlassProfile() {
   return window.__mineradioLiquidGlassProfile || null;
@@ -172,10 +215,18 @@ function syncLiquidGlassCornerRadius(host, cfg) {
     var radius = parseFloat(window.getComputedStyle(host).borderRadius);
     if (isFinite(radius) && radius > 0) out.cornerRadius = radius;
   } catch (_) {}
-  // tisc：双界面折射（biconvex）
-  out.bevelMode = 0;
+  // bevelMode 由 fx.liquidGlassBevelMode 决定，不再强制 0：
+  // shader 的 biconvex 双界面折射分支本来就在，以前被这里无条件关掉。
   return out;
 }
+
+/* init 的 defaults 也要带全参数：data-config 是在 Promise resolve 之后才写上的，
+ * 首帧之前 shader 只看得到 defaults。以前这里写死 bevelMode:0 / distortion:0，
+ * 高级参数即使后来进了 data-config，也出现过「首帧不对、要等一次 markChanged」的窗口。 */
+function liquidGlassInitDefaults(cfg) {
+  return Object.assign({}, LIQUID_GLASS_DEFAULTS, cfg || {});
+}
+window.liquidGlassInitDefaults = liquidGlassInitDefaults;
 
 function refreshControlsWebglPreferFlag() {
   try {
@@ -197,8 +248,12 @@ function bootstrapLiquidGlass() {
   window._liquidGlassMgr = mgr;
 
   // 预热: fx-panel（backdrop shell，避免 glass===root 被跳过）
+  // 纯 CSS 液态玻璃模式（#fx-panel.fx-css-glass）：不给这个面板建 WebGL 上下文，
+  // 省掉一次 shader 编译 + 一轮 html-to-image 抓屏，也避免 canvas 和 CSS 玻璃叠在一起。
+  // 开关只是 HTML 上的一个 class，删掉它就完整回到 WebGL 路径；搜索框 / 底栏 / 首页卡片不受影响。
   var fxPanel = document.getElementById('fx-panel');
-  if (fxPanel) {
+  var fxPanelCssGlass = !!(fxPanel && fxPanel.classList.contains('fx-css-glass'));
+  if (fxPanel && !fxPanelCssGlass) {
     var fxState = 'idle';
     var fxInstance = null;
     var fxCfg = null;
@@ -207,15 +262,7 @@ function bootstrapLiquidGlass() {
     function buildFxCfg() {
       var fxPreset = window.LiquidGlassPresets && window.LiquidGlassPresets.fxPanel
         ? window.LiquidGlassPresets.fxPanel : {};
-      var cfg = Object.assign({}, fxPreset);
-      var fx = window.fx || {};
-      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
-      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
-      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
-      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
-      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
-      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
-      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
+      var cfg = liquidGlassFxConfig(fxPreset);
       cfg = applyLiquidGlassProfile(cfg, 'fxPanel');
       return syncLiquidGlassCornerRadius(fxPanel, cfg);
     }
@@ -239,13 +286,7 @@ function bootstrapLiquidGlass() {
       LiquidGlass.init({
         root: fxPanel,
         glassElements: [fxShell],
-        defaults: {
-          cornerRadius: fxCfg.cornerRadius || 18,
-          zRadius: fxCfg.zRadius || 10,
-          bevelMode: 0,
-          opacity: 1,
-          distortion: 0
-        }
+        defaults: liquidGlassInitDefaults(fxCfg)
       }).then(function (instance) {
         fxInstance = instance;
         fxShell.dataset.config = JSON.stringify(fxCfg);
@@ -324,19 +365,12 @@ function bootstrapLiquidGlass() {
     });
     fxObserver.observe(fxPanel, { attributes: true, attributeFilter: ['class'] });
 
-    function scheduleWarmup() {
-      if (fxState !== 'idle') return;
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(warmupFxGlass, { timeout: 2500 });
-      } else {
-        setTimeout(warmupFxGlass, 1500);
-      }
-    }
-
     if (fxPanel.classList.contains('show') || fxPanel.classList.contains('peek')) {
       warmupFxGlass();
     } else {
-      scheduleWarmup();
+      // 面板关着就别在开机时预热：它整个「点击进入」过程都不可见（right:-460px, opacity:0），
+      // 白占一个 WebGL 上下文 + 一整套着色器编译 + 一轮 html-to-image，实测是全流程里最贵的一项之一。
+      // activateFxGlass() 在 fxState==='idle' 时会按需预热（带 lg-loading 过渡），首次打开再付这笔钱。
     }
   }
 
@@ -351,15 +385,7 @@ function bootstrapLiquidGlass() {
     function buildSearchCfg() {
       var preset = window.LiquidGlassPresets && window.LiquidGlassPresets.searchBox
         ? window.LiquidGlassPresets.searchBox : {};
-      var cfg = Object.assign({}, preset);
-      var fx = window.fx || {};
-      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
-      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
-      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
-      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
-      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
-      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
-      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
+      var cfg = liquidGlassFxConfig(preset);
       cfg = applyLiquidGlassProfile(cfg, 'searchBox');
       return syncLiquidGlassCornerRadius(searchBox, cfg);
     }
@@ -371,13 +397,7 @@ function bootstrapLiquidGlass() {
       LiquidGlass.init({
         root: searchBox,
         glassElements: [sbShell],
-        defaults: {
-          cornerRadius: sbCfg.cornerRadius || 22,
-          zRadius: sbCfg.zRadius || 10,
-          bevelMode: 0,
-          opacity: 1,
-          distortion: 0
-        }
+        defaults: liquidGlassInitDefaults(sbCfg)
       }).then(function (instance) {
         sbInstance = instance;
         sbShell.dataset.config = JSON.stringify(sbCfg);
@@ -427,9 +447,9 @@ function bootstrapLiquidGlass() {
     };
 
     if ('requestIdleCallback' in window) {
-      requestIdleCallback(warmupSearchGlass, { timeout: 3000 });
+      requestIdleCallback(function () { staggerGlassWarmup(3, warmupSearchGlass); }, { timeout: 3000 });
     } else {
-      setTimeout(warmupSearchGlass, 2000);
+      setTimeout(function () { staggerGlassWarmup(3, warmupSearchGlass); }, 2000);
     }
   }
 
@@ -451,19 +471,47 @@ function bootstrapLiquidGlass() {
     var homeInstance = null;
     var homeCfg = null;
 
+    // === 方案 A 的闸门：arm 之前一律不 init、不 lg-active，首页保持 CSS 玻璃 ===
+    var homeGlassArmed = false;   // 过了延迟窗口，允许切液态玻璃
+    var homeArmTimer = 0;
+
+    function isHomeVisible() {
+      return document.body.classList.contains('empty-home-active')
+        || document.body.classList.contains('show-home')
+        || document.body.classList.contains('home-ready');
+    }
+
+    function clearHomeArmTimer() {
+      if (homeArmTimer) { clearTimeout(homeArmTimer); homeArmTimer = 0; }
+    }
+
+    function armHomeGlass() {
+      clearHomeArmTimer();
+      if (homeGlassArmed) return;
+      if (document.body.classList.contains('splash-active')) return;   // 又回 splash 了，等下次进入
+      if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) return;
+      if (!isHomeVisible()) return;
+      homeGlassArmed = true;
+      if (homeState === 'idle') warmupHomeGlass();
+      else activateHomeGlass();
+    }
+
+    function scheduleHomeArm() {
+      if (homeGlassArmed || homeArmTimer) return;   // 幂等：MutationObserver 每帧都会来，别叠定时器
+      if (document.body.classList.contains('splash-active')) return;
+      if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) return;
+      homeArmTimer = setTimeout(armHomeGlass, HOME_GLASS_ARM_DELAY_MS);
+    }
+
+    function disarmHomeGlass() {
+      homeGlassArmed = false;
+      clearHomeArmTimer();
+    }
+
     function buildHomeCfg() {
       var preset = window.LiquidGlassPresets && window.LiquidGlassPresets.homeCard
         ? window.LiquidGlassPresets.homeCard : {};
-      var cfg = Object.assign({}, preset);
-      var fx = window.fx || {};
-      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
-      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
-      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
-      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
-      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
-      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
-      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
-      return applyLiquidGlassProfile(cfg, 'home');
+      return applyLiquidGlassProfile(liquidGlassFxConfig(preset), 'home');
     }
 
     window.applyHomeLiquidGlassCardConfig = function () {
@@ -483,6 +531,10 @@ function bootstrapLiquidGlass() {
 
     function warmupHomeGlass() {
       if (homeState !== 'idle') return;
+      // 方案 A：splash 期间 / arm 之前一律不 init。原来 IntersectionObserver 在 splash 刚
+      // 「可见」时就触发预热，init 正好压在进入过渡上，这是「点进播放器卡几秒」的直接来源。
+      if (!homeGlassArmed) return;
+      if (document.body.classList.contains('splash-active')) return;
       homeCards = collectHomeGlassElements(homeGrid);
       if (!homeCards.length) return;
       homeState = 'warming';
@@ -490,12 +542,7 @@ function bootstrapLiquidGlass() {
       LiquidGlass.init({
         root: homeGrid,
         glassElements: homeCards.slice(),
-        defaults: {
-          cornerRadius: homeCfg.cornerRadius || 18,
-          zRadius: homeCfg.zRadius || 10,
-          opacity: 1,
-          distortion: 0
-        }
+        defaults: liquidGlassInitDefaults(homeCfg)
       }).then(function (instance) {
         homeInstance = instance;
         homeCards.forEach(function (el) {
@@ -523,6 +570,8 @@ function bootstrapLiquidGlass() {
         }
         return;
       }
+      // 方案 A 闸门：还没到切换时机就继续用 CSS 玻璃，只排一个延时
+      if (!homeGlassArmed) { scheduleHomeArm(); return; }
       if (homeState === 'active' && homeInstance) {
         ensureLiquidGlassRunning(homeInstance);
         return;
@@ -578,11 +627,13 @@ function bootstrapLiquidGlass() {
 
     var homeObserver = new MutationObserver(function () {
       if (document.body.classList.contains('splash-active')) {
+        disarmHomeGlass();
         deactivateHomeGlass();
         return;
       }
       // lg-degraded：保留实例与 lg-active，靠 CSS 藏 canvas；恢复时 restart rAF
       if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) {
+        clearHomeArmTimer();
         if (homeInstance) {
           homeInstance._running = false;
           if (homeInstance._rafId) {
@@ -592,11 +643,10 @@ function bootstrapLiquidGlass() {
         }
         return;
       }
-      var homeVisible = document.body.classList.contains('empty-home-active')
-        || document.body.classList.contains('show-home')
-        || document.body.classList.contains('home-ready');
-      if (homeVisible) activateHomeGlass();
-      else deactivateHomeGlass();
+      // activateHomeGlass() 内部带方案 A 闸门：arm 之前它只会排一个 1.5s 延时后返回，
+      // 首页卡片继续吃 .home-card 自己的 CSS 玻璃。
+      if (isHomeVisible()) activateHomeGlass();
+      else { clearHomeArmTimer(); deactivateHomeGlass(); }
     });
     homeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
@@ -609,15 +659,15 @@ function bootstrapLiquidGlass() {
         var visible = entries.some(function(e){ return e.isIntersecting && e.intersectionRatio > 0.05; });
         if (visible) {
           homeIo.disconnect();
-          if ('requestIdleCallback' in window) requestIdleCallback(warmupHomeGlass, { timeout: 1800 });
-          else setTimeout(warmupHomeGlass, 400);
+          if ('requestIdleCallback' in window) requestIdleCallback(function () { staggerGlassWarmup(0, warmupHomeGlass); }, { timeout: 1800 });
+          else setTimeout(function () { staggerGlassWarmup(0, warmupHomeGlass); }, 400);
         }
       }, { threshold: [0, 0.05, 0.2] });
       homeIo.observe(homeGrid);
     } else if ('requestIdleCallback' in window) {
-      requestIdleCallback(warmupHomeGlass, { timeout: 3500 });
+      requestIdleCallback(function () { staggerGlassWarmup(0, warmupHomeGlass); }, { timeout: 3500 });
     } else {
-      setTimeout(warmupHomeGlass, 2200);
+      setTimeout(function () { staggerGlassWarmup(0, warmupHomeGlass); }, 2200);
     }
   }
 
@@ -638,16 +688,7 @@ function bootstrapLiquidGlass() {
     function buildLtCfg() {
       var preset = window.LiquidGlassPresets && window.LiquidGlassPresets.listeningToday
         ? window.LiquidGlassPresets.listeningToday : {};
-      var cfg = Object.assign({}, preset);
-      var fx = window.fx || {};
-      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
-      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
-      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
-      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
-      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
-      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
-      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
-      return applyLiquidGlassProfile(cfg, 'home');
+      return applyLiquidGlassProfile(liquidGlassFxConfig(preset), 'home');
     }
 
     function warmupLtGlass() {
@@ -659,12 +700,7 @@ function bootstrapLiquidGlass() {
       LiquidGlass.init({
         root: ltRail,
         glassElements: ltCards.slice(),
-        defaults: {
-          cornerRadius: ltCfg.cornerRadius || 18,
-          zRadius: ltCfg.zRadius || 10,
-          opacity: 1,
-          distortion: 0
-        }
+        defaults: liquidGlassInitDefaults(ltCfg)
       }).then(function (instance) {
         ltInstance = instance;
         ltCards.forEach(function (el) {
@@ -793,15 +829,15 @@ function bootstrapLiquidGlass() {
         var visible = entries.some(function(e){ return e.isIntersecting && e.intersectionRatio > 0.05; });
         if (visible) {
           ltIo.disconnect();
-          if ('requestIdleCallback' in window) requestIdleCallback(warmupLtGlass, { timeout: 2200 });
-          else setTimeout(warmupLtGlass, 500);
+          if ('requestIdleCallback' in window) requestIdleCallback(function () { staggerGlassWarmup(2, warmupLtGlass); }, { timeout: 2200 });
+          else setTimeout(function () { staggerGlassWarmup(2, warmupLtGlass); }, 500);
         }
       }, { threshold: [0, 0.05, 0.2] });
       ltIo.observe(ltRail);
     } else if ('requestIdleCallback' in window) {
-      requestIdleCallback(warmupLtGlass, { timeout: 4200 });
+      requestIdleCallback(function () { staggerGlassWarmup(2, warmupLtGlass); }, { timeout: 4200 });
     } else {
-      setTimeout(warmupLtGlass, 2600);
+      setTimeout(function () { staggerGlassWarmup(2, warmupLtGlass); }, 2600);
     }
   }
 
@@ -816,15 +852,7 @@ function bootstrapLiquidGlass() {
     function buildBottomCfg() {
       var preset = window.LiquidGlassPresets && window.LiquidGlassPresets.bottomBar
         ? window.LiquidGlassPresets.bottomBar : {};
-      var cfg = Object.assign({}, preset);
-      var fx = window.fx || {};
-      if (fx.liquidGlassBlur != null) cfg.blurAmount = Number(fx.liquidGlassBlur);
-      if (fx.liquidGlassRefraction != null) cfg.refraction = Number(fx.liquidGlassRefraction);
-      if (fx.liquidGlassAberration != null) cfg.chromAberration = Number(fx.liquidGlassAberration);
-      if (fx.liquidGlassHighlight != null) cfg.edgeHighlight = Number(fx.liquidGlassHighlight);
-      if (fx.liquidGlassSaturation != null) cfg.saturation = Number(fx.liquidGlassSaturation);
-      if (fx.liquidGlassBrightness != null) cfg.brightness = Number(fx.liquidGlassBrightness);
-      if (fx.liquidGlassBevel != null) cfg.zRadius = Number(fx.liquidGlassBevel);
+      var cfg = liquidGlassFxConfig(preset);
       cfg = applyLiquidGlassProfile(cfg, 'bottomBar');
       return syncLiquidGlassCornerRadius(bottomBar, cfg);
     }
@@ -836,13 +864,7 @@ function bootstrapLiquidGlass() {
       LiquidGlass.init({
         root: bottomBar,
         glassElements: [bbShell],
-        defaults: {
-          cornerRadius: bbCfg.cornerRadius || 50,
-          zRadius: bbCfg.zRadius || 16,
-          bevelMode: 0,
-          opacity: 1,
-          distortion: 0
-        }
+        defaults: liquidGlassInitDefaults(bbCfg)
       }).then(function (instance) {
         bbInstance = instance;
         bbShell.dataset.config = JSON.stringify(bbCfg);
@@ -919,12 +941,41 @@ function bootstrapLiquidGlass() {
     bbObserver.observe(bottomBar, { attributes: true, attributeFilter: ['class'] });
 
     if ('requestIdleCallback' in window) {
-      requestIdleCallback(warmupBottomGlass, { timeout: 4000 });
+      requestIdleCallback(function () { staggerGlassWarmup(1, warmupBottomGlass); }, { timeout: 4000 });
     } else {
-      setTimeout(warmupBottomGlass, 2500);
+      setTimeout(function () { staggerGlassWarmup(1, warmupBottomGlass); }, 2500);
     }
   }
+
+  // 首页大卡 .home-hero 故意不接 LiquidGlass（2026-11-10 撤回）。
+  // 它自己有一套完整 CSS 玻璃：glass.css:38-44 / playlist.css:293 的渐变背景 +
+  // blur(38px) saturate(1.42) brightness(1.08) + ::before 高光层。挂 WebGL 宿主必须
+  // 用 !important 把这些全清成 transparent/none，视觉反而倒退；而且拖任意液态玻璃
+  // 滑块时整块首页跟着变，用户会以为面板串了控件。
+  // 历史遗留的 LiquidGlassPresets.homeHero（glassSelector 指向不存在的 .hero-card）
+  // 已一并删除。真要支持请做成显式、默认关闭的开关，别默认接管。
 }
+
+/* 五个 WebGL 宿主 + 首页 CSS 玻璃的统一刷新入口。
+ * 以前面板滑块只调 applyHomeLiquidGlassConfig + applyFxLiquidGlassConfig，
+ * 搜索框 / 底栏 / 首页卡片的 WebGL 玻璃拖了滑块根本不会更新（data-config 没换）。
+ * 插件 API 里那两串手写调用也一并收敛到这里。
+ * 注意列表里没有 .home-hero：它是独立 CSS 玻璃，不该跟随液态玻璃参数。 */
+function applyAllLiquidGlassConfig() {
+  [
+    'applyHomeLiquidGlassConfig',
+    'applyFxLiquidGlassConfig',
+    'applySearchLiquidGlassConfig',
+    'applyBottomLiquidGlassConfig',
+    'applyHomeLiquidGlassCardConfig',
+    /* Folia 世界由 06-liquidglass-folia-css.js 接管成 CSS 玻璃；非 Folia 时它是 no-op。 */
+    'applyFoliaCssGlass'
+  ].forEach(function (name) {
+    if (typeof window[name] !== 'function') return;
+    try { window[name](); } catch (e) { console.warn('[LiquidGlass] ' + name, e); }
+  });
+}
+window.applyAllLiquidGlassConfig = applyAllLiquidGlassConfig;
 
 if (document.readyState === 'complete' || document.readyState === 'interactive') {
   setTimeout(function(){ applyHomeLiquidGlassConfig(); bootstrapLiquidGlass(); }, 1500);

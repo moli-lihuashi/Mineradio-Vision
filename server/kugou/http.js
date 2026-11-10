@@ -78,9 +78,113 @@ const kugouProfileCache = createKugouTtlCache(24, 5 * 60 * 1000);
 
 const kugouVipCache = createKugouTtlCache(24, 5 * 60 * 1000);
 
+/* 前台接口（歌单/收藏/取址）的上游超时：一次抖动最多让用户等 6s。
+   超过这个值基本等于用户已经离开面板，继续挂着只会让界面看起来「卡死」。 */
+const KUGOU_UI_TIMEOUT_MS = 6000;
+
 async function requestJson(targetUrl, opts, body) {
-  const text = await requestText(targetUrl, opts, body);
+  const requestOpts = Object.assign({ timeoutMs: KUGOU_UI_TIMEOUT_MS }, opts || {});
+  const text = await requestText(targetUrl, requestOpts, body);
   return JSON.parse(text);
+}
+
+/* ===================== 会话自愈（参照 Folia kugouApiBridge 的两个机制） =====================
+ * 上游 2026-11 实测：酷狗会轮换 token、并对旧设备指纹抛 errcode 20028「本次请求需要验证」。
+ * 旧行为是磁盘 cookie 只在登录时写一次、dfid 拿到一次后永不刷新 —— 一旦上游轮换，
+ * 之后每个请求都带旧凭据，概率性失败且永远无法自愈，直到用户重新登录。
+ *
+ * 1) mergeKugouResponseSession：每次响应把 Set-Cookie / body 里的 token/userid/dfid
+ *    合并回 cookie 并落盘（Folia mergeResponseSession 的等价物）。
+ * 2) isKugouDeviceVerificationRequired + invalidateKugouDfid：20028 → 强制重新
+ *    register_dev 拿新 dfid → 用新凭据重试一次（Folia ensureRegistered(true) 的等价物）。
+ * ======================================================================================== */
+
+var kugouCookieMergeHook = null;
+
+function setKugouCookiePersistHook(fn) {
+  kugouCookieMergeHook = typeof fn === 'function' ? fn : null;
+}
+
+/* 只关心身份键：其余键（风控埋点之类）合并没有收益，还会让 cookie 无限膨胀。 */
+const KUGOU_SESSION_COOKIE_KEYS = ['token', 'userid', 'user_id', 'uid', 'dfid', 'kg_dfid', 'kg_mid', 'mid'];
+
+function collectSessionUpdates(source, out, allowedKeys) {
+  if (!source) return;
+  Object.keys(source).forEach(key => {
+    const lower = String(key).toLowerCase();
+    const value = String(source[key] == null ? '' : source[key]).trim();
+    if (!value) return;
+    if (!KUGOU_SESSION_COOKIE_KEYS.includes(lower)) return;
+    // 有些接口（如登录/设备注册）会下发全量会话；普通业务响应只允许白名单键
+    if (allowedKeys && !allowedKeys.includes(lower)) return;
+    // dfid 特例：上游把「未注册」写成 '-'，别把占位符当新值存进去
+    if ((lower === 'dfid' || lower === 'kg_dfid') && value === '-') return;
+    /* body.data 里有些接口用 token 当分页游标/一次性票据，不是登录凭据。
+       凭据 token 至少 8 位，短值一律忽略，免得把登录态覆盖坏。 */
+    if (lower === 'token' && value.length < 8) return;
+    out[lower] = value;
+  });
+}
+
+function mergeKugouResponseSession(cookie, json, setCookie) {
+  /* 必须以磁盘 cookie 为底、新值只做覆盖 —— 原 cookie 里的 KuGoo 复合值
+     （昵称/头像/VIP 标记）一个都不能丢，否则登录态/VIP 探测全坏。 */
+  const base = kugouCookieObject(cookie || '');
+  const updates = {};
+  (Array.isArray(setCookie) ? setCookie : []).forEach(entry => {
+    // Set-Cookie 条目形如 "token=xxx; Path=/; HttpOnly" —— 只取第一对
+    const first = String(entry || '').split(';', 1)[0];
+    const idx = first.indexOf('=');
+    if (idx <= 0) return;
+    const key = first.slice(0, idx).trim().toLowerCase();
+    const value = first.slice(idx + 1).trim();
+    if (!value || !KUGOU_SESSION_COOKIE_KEYS.includes(key)) return;
+    if ((key === 'dfid' || key === 'kg_dfid') && value === '-') return;
+    /* 注销类 Set-Cookie 常见 "token=deleted; Expires=..."；短值/占位值不是凭据，
+       写回磁盘会把登录态清掉。 */
+    if (key === 'token' && (value.length < 8 || /^deleted$/i.test(value))) return;
+    updates[key] = value;
+  });
+  /* body.data 里只有 token 可以当会话凭据：歌单/专辑响应的 data.userid 往往是
+     「歌单作者 id」，data.dfid 也可能是别的东西，写回磁盘会直接把请求身份带歪。
+     全量会话（userid/dfid）只认 HTTP 层的 Set-Cookie。 */
+  const dataBody = json && (json.data || json.body || json);
+  collectSessionUpdates(dataBody && typeof dataBody === 'object' ? dataBody : null, updates, ['token']);
+  const merged = Object.assign({}, base);
+  let touched = false;
+  Object.keys(updates).forEach(key => {
+    if (String(merged[key] == null ? '' : merged[key]).trim() !== updates[key]) touched = true;
+    merged[key] = updates[key];
+  });
+  // 合并结果绝不允许丢凭据：原 cookie 有 token 而合并后没有 → 放弃这次写盘
+  if (!touched || !kugouCookieMergeHook) return cookie;
+  if (base.token && !merged.token) return cookie;
+  const text = Object.keys(merged)
+    .map(key => `${key}=${merged[key]}`)
+    .join('; ');
+  try {
+    const next = kugouCookieMergeHook(text);
+    return typeof next === 'string' && next ? next : text;
+  } catch (_) {
+    return cookie;
+  }
+}
+
+function isKugouDeviceVerificationRequired(json) {
+  const errCode = Number(json && (json.errcode != null ? json.errcode : json.error_code));
+  if (errCode === 20028) return true;
+  const message = String((json && (json.error || json.error_msg || json.msg)) || '');
+  return message.includes('需要验证') || message.includes('verify');
+}
+
+/* 强制下一次 ensureKugouDfid 走注册分支（cookie 里残留的旧 dfid 不再直接采信），
+ * 成功后由既有的 dfid persist hook 落盘。 */
+var kugouDfidForceRefresh = false;
+
+function invalidateKugouDfid() {
+  kugouDfidCache = '';
+  kugouDfidPending = null;
+  kugouDfidForceRefresh = true;
 }
 
 function createKugouMid(seed) {
@@ -302,17 +406,19 @@ async function registerKugouCloudDevice(cookie) {
 }
 
 async function ensureKugouDfid(cookie) {
-  if (kugouDfidCache) return kugouDfidCache;
-  if (kugouDfidPending) return kugouDfidPending;
+  if (kugouDfidCache && !kugouDfidForceRefresh) return kugouDfidCache;
+  if (kugouDfidPending && !kugouDfidForceRefresh) return kugouDfidPending;
   const existing = kugouCookieObject(cookie);
   const present = existing.kg_dfid || existing.KG_DFID || existing.dfid || existing.DFID;
-  if (present && present !== '-') {
+  // 20028 自愈路径：forceRefresh 时旧 dfid 就是被风控的那一个，必须重新注册
+  if (!kugouDfidForceRefresh && present && present !== '-') {
     kugouDfidCache = String(present).trim();
     return kugouDfidCache;
   }
   kugouDfidPending = registerKugouCloudDevice(cookie)
     .then((dfid) => {
       kugouDfidCache = dfid;
+      kugouDfidForceRefresh = false;
       kugouDfidPending = null;
       try { if (kugouDfidPersistHook) kugouDfidPersistHook(dfid); } catch (_) {}
       return dfid;
@@ -331,62 +437,96 @@ async function kugouWithCloudlistDevice(opts) {
   }
 }
 
+/* 自愈 wrapper：issueOnce(cookie) 发一次请求并返回 { json, setCookie }。
+ * - 每次响应先合并会话（token 轮换立即落盘）；
+ * - 20028「需要验证」→ 强制重新注册 dfid → 用新凭据重试一次（只重试这一次，
+ *   注册失败也不无限循环，冒泡给上层的旧值兜底）。 */
+async function selfHealedKugouRequest(cookie, issueOnce) {
+  const first = await issueOnce(cookie);
+  const mergedCookie = mergeKugouResponseSession(cookie, first.json, first.setCookie);
+  if (!isKugouDeviceVerificationRequired(first.json)) return first.json;
+  console.warn('[KugouSelfHeal] device verification required (errcode 20028), re-registering dfid');
+  invalidateKugouDfid();
+  try { await ensureKugouDfid(mergedCookie); }
+  catch (e) { console.warn('[KugouSelfHeal] dfid re-register failed:', e && e.message); }
+  const second = await issueOnce(mergedCookie);
+  mergeKugouResponseSession(mergedCookie, second.json, second.setCookie);
+  return second.json;
+}
+
+async function capturedRequestJson(url, opts, body) {
+  const captured = await requestText(url, Object.assign({ captureSetCookie: true }, opts || {}), body);
+  return { json: JSON.parse(captured.text), setCookie: captured.setCookie };
+}
+
 async function kugouCloudlistRequest(path, opts) {
   opts = opts || {};
+  // router 标记是 cloudlist 通道的硬约束（quick-check 守卫防 dfid 死门控回归），
+  // issueOnce 自愈重试时要把它一起带进 local，不能丢。
   opts.router = 'cloudlist.service.kugou.com';
-  await kugouWithCloudlistDevice(opts);
-  const auth = extractKugouAuth(opts.cookie || '');
-  if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
-  const clienttime = Math.floor(Date.now() / 1000);
-  const params = Object.assign({
-    dfid: auth.dfid || '-',
-    mid: auth.mid,
-    uuid: '-',
-    appid: KUGOU_LITE_APPID,
-    clientver: KUGOU_LITE_CLIENTVER,
-    clienttime,
-    userid: auth.userid,
-    token: auth.token,
-  }, opts.params || {});
-  const dataString = opts.body == null ? '' : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
-  params.signature = signatureAndroidParams(params, dataString, KUGOU_LITE_ANDROID_SALT);
-  const u = new URL(path, KUGOU_GATEWAY);
-  Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
-  const headers = Object.assign({}, KUGOU_HEADERS, {
-    'User-Agent': KUGOU_LITE_GATEWAY_UA,
-    'x-router': 'cloudlist.service.kugou.com',
-    'kg-rc': '1',
-    'kg-thash': '5d816a0',
-    'kg-rec': '1',
-    'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
-    dfid: params.dfid,
-    mid: params.mid,
-    clienttime: String(clienttime),
-    Cookie: buildKugouRequestCookie(opts.cookie || ''),
-  });
-  if (dataString) headers['Content-Type'] = 'application/json';
-  const json = await requestJson(u.toString(), { method: 'POST', headers }, dataString || undefined);
+  const issueOnce = async (cookie) => {
+    const local = { router: opts.router, params: opts.params, body: opts.body };
+    local.cookie = cookie;
+    await kugouWithCloudlistDevice(local);
+    const auth = extractKugouAuth(local.cookie || '');
+    if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
+    const clienttime = Math.floor(Date.now() / 1000);
+    const params = Object.assign({
+      dfid: auth.dfid || '-',
+      mid: auth.mid,
+      uuid: '-',
+      appid: KUGOU_LITE_APPID,
+      clientver: KUGOU_LITE_CLIENTVER,
+      clienttime,
+      userid: auth.userid,
+      token: auth.token,
+    }, local.params || {});
+    const dataString = local.body == null ? '' : (typeof local.body === 'string' ? local.body : JSON.stringify(local.body));
+    params.signature = signatureAndroidParams(params, dataString, KUGOU_LITE_ANDROID_SALT);
+    const u = new URL(path, KUGOU_GATEWAY);
+    Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
+    const headers = Object.assign({}, KUGOU_HEADERS, {
+      'User-Agent': KUGOU_LITE_GATEWAY_UA,
+      'x-router': 'cloudlist.service.kugou.com',
+      'kg-rc': '1',
+      'kg-thash': '5d816a0',
+      'kg-rec': '1',
+      'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
+      dfid: params.dfid,
+      mid: params.mid,
+      clienttime: String(clienttime),
+      Cookie: buildKugouRequestCookie(local.cookie || ''),
+    });
+    if (dataString) headers['Content-Type'] = 'application/json';
+    return capturedRequestJson(u.toString(), { method: 'POST', headers, timeoutMs: KUGOU_UI_TIMEOUT_MS }, dataString || undefined);
+  };
+  const json = await selfHealedKugouRequest(opts.cookie || '', issueOnce);
   if (json && Number(json.status) === 0) throw kugouGatewayError(json, path);
   return json;
 }
 
 async function kugouH5GatewayRequest(path, opts) {
   opts = opts || {};
-  await kugouWithCloudlistDevice(opts);
-  const auth = extractKugouAuth(opts.cookie || '');
-  if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
-  const bodyObj = opts.body == null ? null : (typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body);
-  const bodyText = bodyObj == null ? '' : JSON.stringify(bodyObj);
-  const params = buildKugouH5Params(auth, opts.params || {});
-  params.signature = signatureH5Params(params, bodyObj);
-  const u = new URL(path, opts.baseURL || KUGOU_GATEWAY);
-  Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
-  const headers = Object.assign({}, KUGOU_HEADERS, {
-    'User-Agent': KUGOU_H5_UA,
-    Cookie: buildKugouRequestCookie(opts.cookie || ''),
-  }, opts.headers || {});
-  if (opts.router) headers['x-router'] = opts.router;
-  const json = await requestJson(u.toString(), { method: opts.method || (bodyObj == null ? 'GET' : 'POST'), headers }, bodyText || undefined);
+  const issueOnce = async (cookie) => {
+    const local = { params: opts.params, body: opts.body, baseURL: opts.baseURL, headers: opts.headers, router: opts.router, method: opts.method };
+    local.cookie = cookie;
+    await kugouWithCloudlistDevice(local);
+    const auth = extractKugouAuth(local.cookie || '');
+    if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
+    const bodyObj = local.body == null ? null : (typeof local.body === 'string' ? JSON.parse(local.body) : local.body);
+    const bodyText = bodyObj == null ? '' : JSON.stringify(bodyObj);
+    const params = buildKugouH5Params(auth, local.params || {});
+    params.signature = signatureH5Params(params, bodyObj);
+    const u = new URL(path, local.baseURL || KUGOU_GATEWAY);
+    Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
+    const headers = Object.assign({}, KUGOU_HEADERS, {
+      'User-Agent': KUGOU_H5_UA,
+      Cookie: buildKugouRequestCookie(local.cookie || ''),
+    }, local.headers || {});
+    if (local.router) headers['x-router'] = local.router;
+    return capturedRequestJson(u.toString(), { method: local.method || (bodyObj == null ? 'GET' : 'POST'), headers, timeoutMs: KUGOU_UI_TIMEOUT_MS }, bodyText || undefined);
+  };
+  const json = await selfHealedKugouRequest(opts.cookie || '', issueOnce);
   if (json && Number(json.status) === 0) {
     throw kugouGatewayError(json, path);
   }
@@ -395,28 +535,33 @@ async function kugouH5GatewayRequest(path, opts) {
 
 async function kugouGatewayRequest(path, opts) {
   opts = opts || {};
-  await kugouWithCloudlistDevice(opts);
-  const auth = extractKugouAuth(opts.cookie || '');
-  if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
-  const body = opts.body == null ? '' : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
-  const params = buildKugouGatewayParams(auth, opts.params || {});
-  if (!opts.skipSignature) params.signature = signatureAndroidParams(params, body);
-  const u = new URL(path, opts.baseURL || KUGOU_GATEWAY);
-  Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
-  const headers = Object.assign({}, KUGOU_HEADERS, {
-    'User-Agent': KUGOU_GATEWAY_UA,
-    dfid: auth.dfid || '-',
-    mid: auth.mid,
-    clienttime: String(params.clienttime),
-    'kg-rc': '1',
-    'kg-thash': '5d816a0',
-    'kg-rec': '1',
-    'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
-    Cookie: buildKugouRequestCookie(opts.cookie || ''),
-  }, opts.headers || {});
-  if (opts.router) headers['x-router'] = opts.router;
-  if (body) headers['Content-Type'] = 'application/json';
-  const json = await requestJson(u.toString(), { method: opts.method || 'GET', headers }, body || undefined);
+  const issueOnce = async (cookie) => {
+    const local = { params: opts.params, body: opts.body, baseURL: opts.baseURL, headers: opts.headers, router: opts.router, method: opts.method, skipSignature: opts.skipSignature };
+    local.cookie = cookie;
+    await kugouWithCloudlistDevice(local);
+    const auth = extractKugouAuth(local.cookie || '');
+    if (!auth.playbackReady) throw new Error('KUGOU_AUTH_REQUIRED');
+    const body = local.body == null ? '' : (typeof local.body === 'string' ? local.body : JSON.stringify(local.body));
+    const params = buildKugouGatewayParams(auth, local.params || {});
+    if (!local.skipSignature) params.signature = signatureAndroidParams(params, body);
+    const u = new URL(path, local.baseURL || KUGOU_GATEWAY);
+    Object.keys(params).forEach(key => u.searchParams.set(key, String(params[key])));
+    const headers = Object.assign({}, KUGOU_HEADERS, {
+      'User-Agent': KUGOU_GATEWAY_UA,
+      dfid: auth.dfid || '-',
+      mid: auth.mid,
+      clienttime: String(params.clienttime),
+      'kg-rc': '1',
+      'kg-thash': '5d816a0',
+      'kg-rec': '1',
+      'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
+      Cookie: buildKugouRequestCookie(local.cookie || ''),
+    }, local.headers || {});
+    if (local.router) headers['x-router'] = local.router;
+    if (body) headers['Content-Type'] = 'application/json';
+    return capturedRequestJson(u.toString(), { method: local.method || 'GET', headers, timeoutMs: KUGOU_UI_TIMEOUT_MS }, body || undefined);
+  };
+  const json = await selfHealedKugouRequest(opts.cookie || '', issueOnce);
   if (json && Number(json.status) === 0) {
     throw kugouGatewayError(json, path);
   }
@@ -512,6 +657,10 @@ module.exports = {
   kugouDfidPending,
   kugouDfidPersistHook,
   setKugouDfidPersistHook,
+  setKugouCookiePersistHook,
+  mergeKugouResponseSession,
+  isKugouDeviceVerificationRequired,
+  invalidateKugouDfid,
   kugouRandomSeed,
   kugouRegisterAesKeyIV,
   registerKugouCloudDevice,

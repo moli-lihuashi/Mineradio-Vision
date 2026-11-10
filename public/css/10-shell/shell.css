@@ -247,7 +247,8 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
 .spotify-guide-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;color:rgba(255,255,255,.48)}
 .spotify-guide-link{background:rgba(30,215,96,.12);color:rgba(30,215,96,.88);border:1px solid rgba(30,215,96,.26);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;transition:background .2s,color .2s}
 .spotify-guide-link:hover{background:rgba(30,215,96,.2);color:rgba(30,215,96,1)}
-/* ===== Cuefield AutoMix（播放选项内） ===== */
+/* Cuefield AutoMix 不再作为顶层并列开关，而是收编进「歌曲过渡」面板底部。
+   保留原 id，02 的 updateCuefieldAutoMixUi() 无需改动即可继续同步 on / ready 态。 */
 #quick-menu-automix-toggle span:first-child{display:flex;flex-direction:column;gap:2px}
 #quick-menu-automix-toggle small{font-size:9.5px;color:rgba(255,255,255,.38);letter-spacing:.2px;transition:color .25s}
 #quick-menu-automix-toggle.on small{color:rgba(255,221,150,.78)}
@@ -259,6 +260,85 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
 .fade-control-row label{font-size:10px;color:rgba(255,255,255,.50);white-space:nowrap}
 .fade-control-row input{width:100%;accent-color:var(--fc-accent);cursor:pointer}
 .fade-control-row span{font-size:10px;color:rgba(255,255,255,.48);text-align:right;font-variant-numeric:tabular-nums}
+/* ===== Audio Tuning (10-band EQ / preamp / ReplayGain / balance / anti-click) ===== */
+.audio-tuning-fold > summary,.playback-advanced-fold > summary{display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none;cursor:pointer;user-select:none;font-size:12.5px;font-weight:700;color:rgba(255,255,255,.92)}
+.audio-tuning-fold > summary::-webkit-details-marker,.playback-advanced-fold > summary::-webkit-details-marker{display:none}
+.audio-tuning-fold > summary::after,.playback-advanced-fold > summary::after{content:'▸';font-size:11px;color:rgba(255,255,255,.42);transition:transform .2s}
+.audio-tuning-fold[open] > summary::after,.playback-advanced-fold[open] > summary::after{transform:rotate(90deg)}
+.audio-tuning-fold > summary small,.playback-advanced-fold > summary small{font-size:9.5px;font-weight:500;color:rgba(255,255,255,.42);white-space:nowrap}
+.audio-tuning-body,.playback-advanced-body{padding-top:10px}
+.audio-tuning-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:10px 0 6px}
+.audio-tuning-presets button{min-height:24px;padding:0 4px;border:1px solid rgba(255,255,255,.09);border-radius:8px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.62);font-size:10.5px;font-family:inherit;cursor:pointer;transition:background .18s,color .18s,border-color .18s}
+.audio-tuning-presets button:hover{background:rgba(255,255,255,.075)}
+.audio-tuning-presets button.active{border-color:rgba(0,245,212,.42);background:rgba(0,245,212,.14);color:#d6fff8}
+.at-control-row{display:grid;grid-template-columns:32px minmax(0,1fr) 46px;align-items:center;gap:8px;min-height:22px;margin-top:5px}
+.at-control-row label{font-size:10px;color:rgba(255,255,255,.50);white-space:nowrap}
+.at-control-row input{width:100%;accent-color:var(--fc-accent);cursor:pointer}
+.at-control-row span{font-size:10px;color:rgba(255,255,255,.48);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.audio-tuning-hint{margin-top:9px;font-size:9.5px;color:rgba(255,255,255,.34);line-height:1.4}
+/* ===== Playback Advanced (speed / output device / fade+preload timing) ===== */
+.pa-section-title{margin:11px 0 5px;font-size:10px;font-weight:700;letter-spacing:.3px;color:rgba(255,255,255,.58)}
+.playback-speed-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:9px 0 6px}
+.playback-speed-presets button{min-height:24px;padding:0 4px;border:1px solid rgba(255,255,255,.09);border-radius:8px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.62);font-size:10px;font-family:inherit;cursor:pointer;transition:background .18s,color .18s,border-color .18s}
+.playback-speed-presets button:hover{background:rgba(255,255,255,.075)}
+.playback-speed-presets button.active{border-color:rgba(0,245,212,.42);background:rgba(0,245,212,.14);color:#d6fff8}
+#playback-output-device{width:100%;min-height:27px;padding:4px 7px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.82);font-family:inherit;font-size:10.5px;cursor:pointer}
+#playback-output-device option{background:#14161b;color:#e9f3f6}
+#playback-output-device:disabled{opacity:.5;cursor:not-allowed}
+.playback-output-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px}
+.playback-output-actions button{min-height:25px;border:1px solid rgba(255,255,255,.10);border-radius:8px;background:rgba(255,255,255,.045);color:rgba(255,255,255,.70);font-family:inherit;font-size:10px;cursor:pointer}
+.playback-output-actions button:hover{background:rgba(255,255,255,.085)}
+.pa-status{margin-top:7px;font-size:9.5px;color:rgba(0,245,212,.72);line-height:1.4;overflow-wrap:anywhere}
+/* ===== Track Transition (歌曲过渡效果矩阵) =====
+   独立金橙主题：四种模式各有一套 SVG 光效 / 卡片图标 / 说明 / 参数，
+   选中哪一个就整组切换。旧版那个被裁切的椭圆弧已删除。 */
+.track-transition-fold > summary{display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none;cursor:pointer;user-select:none;font-size:12.5px;font-weight:700;color:rgba(255,255,255,.92)}
+.track-transition-fold > summary::-webkit-details-marker{display:none}
+.track-transition-fold > summary::after{content:'▸';font-size:11px;color:rgba(255,255,255,.42);transition:transform .2s}
+.track-transition-fold[open] > summary::after{transform:rotate(90deg)}
+.track-transition-fold > summary small{font-size:9.5px;font-weight:500;color:rgba(255,215,158,.62);white-space:nowrap}
+.track-transition-body{padding-top:10px}
+.tt-scene{position:relative;height:104px;overflow:hidden;border:1px solid rgba(255,205,130,.14);border-radius:12px;background:#000}
+.tt-scene-art{position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity .32s ease}
+.tt-scene-art.active{opacity:1}
+.track-transition-fold.tt-off .tt-scene{opacity:.66}
+.tt-caption-row{display:flex;align-items:center;gap:7px;margin-top:8px}
+.tt-caption-row > span{flex:1;min-width:0;font-size:10px;line-height:1.35;color:rgba(255,240,220,.88);overflow-wrap:anywhere}
+.tt-reset,.tt-preview{flex:none;width:25px;height:25px;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s,background .18s,color .18s}
+.tt-reset{background:rgba(255,255,255,.07);color:rgba(255,222,174,.78);border:1px solid rgba(255,205,130,.20)}
+.tt-reset svg{width:14px;height:14px}
+.tt-reset:hover{background:rgba(255,186,94,.20);color:#ffdca6;transform:rotate(30deg)}
+.tt-preview{background:rgba(255,186,94,.92);color:#20180c;font-size:10px;line-height:1}
+.tt-preview:hover{transform:scale(1.08);background:#ffca7a}
+.tt-params{margin-top:9px}
+.tt-param-group.is-hidden{display:none}
+.tt-param-row{display:grid;grid-template-columns:62px minmax(0,1fr) 58px;align-items:center;gap:7px;min-height:23px;margin-top:5px}
+.tt-param-row label{font-size:10px;color:rgba(255,235,205,.68);white-space:nowrap}
+.tt-param-row input{width:100%;accent-color:#f5b45f;cursor:pointer}
+.tt-param-row > span{font-size:10px;color:rgba(255,214,158,.92);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tt-choice-row{display:grid;grid-template-columns:62px minmax(0,1fr);align-items:center;gap:7px;min-height:23px;margin-top:5px}
+.tt-choice-row > span{font-size:10px;color:rgba(255,235,205,.68);white-space:nowrap}
+.tt-choice{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.tt-choice button{min-height:22px;border:1px solid rgba(255,255,255,.09);border-radius:7px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.58);font-family:inherit;font-size:10px;cursor:pointer;transition:background .18s,color .18s,border-color .18s}
+.tt-choice button:hover{background:rgba(255,255,255,.08)}
+.tt-choice button.active{border-color:rgba(255,186,94,.50);background:rgba(255,186,94,.14);color:#ffdca6}
+.tt-param-note{margin-top:5px;font-size:9px;line-height:1.35;color:rgba(255,255,255,.33);overflow-wrap:anywhere}
+.tt-caption{margin-top:6px;font-size:9.5px;color:rgba(255,203,133,.74);font-variant-numeric:tabular-nums}
+.tt-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:10px 0 7px}
+.tt-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:68px;padding:7px 2px 6px;border:1px solid rgba(255,255,255,.09);border-radius:10px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.62);font-family:inherit;cursor:pointer;transition:background .18s,color .18s,border-color .18s,transform .18s}
+.tt-card:hover{background:rgba(255,255,255,.075);transform:translateY(-1px)}
+.tt-card .tt-icon{width:22px;height:22px;opacity:.72;transition:filter .18s,opacity .18s}
+.tt-card .tt-label{font-size:10px;font-weight:700;white-space:nowrap}
+.tt-card small{font-size:8.5px;color:rgba(255,255,255,.38);white-space:nowrap}
+.tt-card.active{border-color:rgba(255,186,94,.68);background:rgba(255,186,94,.13);color:#ffdca6;box-shadow:inset 0 0 16px rgba(255,186,94,.07)}
+.tt-card.active .tt-icon{opacity:1;filter:drop-shadow(0 0 5px rgba(255,186,94,.55))}
+.tt-card.active small{color:rgba(255,220,174,.72)}
+.track-transition-fold.tt-off .tt-card{opacity:.62}
+.track-transition-fold.tt-off .tt-card.active{opacity:1;border-color:rgba(255,186,94,.36);background:rgba(255,186,94,.07);box-shadow:none}
+#track-transition-toggle.on .dot{background:rgba(255,186,94,.95);box-shadow:0 0 9px rgba(255,186,94,.55)}
+.tt-status{margin-top:6px;font-size:9.5px;color:rgba(255,203,133,.78);line-height:1.4}
+.tt-legacy-row{margin:9px 0 2px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)}
+.tt-legacy-toggle{width:100%}
 /* ===== Cuefield Feedback ===== */
 #cuefield-feedback{position:fixed;z-index:201;left:50%;bottom:112px;width:min(330px,calc(100vw - 34px));padding:13px 14px 12px;border:1px solid rgba(255,240,196,.18);border-radius:14px;background:rgba(18,18,22,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);color:rgba(255,250,238,.92);opacity:0;pointer-events:none;transform:translate(-50%,14px) scale(.98);transition:opacity .24s ease,transform .28s cubic-bezier(.16,1,.3,1)}
 #cuefield-feedback.show{opacity:1;pointer-events:auto;transform:translate(-50%,0) scale(1)}
@@ -674,3 +754,29 @@ body.break-reminder-active #fx-panel,body.break-reminder-active #playlist-panel{
 .break-reminder-panel-row{display:flex;align-items:center;gap:8px;margin:8px 0 4px}
 .fx-seg.disabled{opacity:.45;pointer-events:none}
 @media (max-width:720px){.break-reminder-body{width:calc(100vw - 40px)}.break-reminder-text{font-size:13.5px}.break-reminder-close{top:14px;right:14px}}
+
+/* ===== 壁纸模式（完整桌面模式）控制器 =====
+   附着到桌面后窗口没有边框、任务栏里也点不到，右上角留一个常驻把手。
+   平时只露一条很淡的玻璃条（不遮桌面），鼠标靠近 / 键盘聚焦才变实并展开面板。
+   显隐由 body.desktop-wallpaper-mode 控制（只有真挂在桌面上时出现）。 */
+.desktop-mode-control-dock{position:fixed;top:calc(var(--desktop-safe-top,0px) + 14px);right:calc(var(--desktop-safe-right,0px) + 14px);z-index:2147483000;display:none;flex-direction:column;align-items:flex-end;gap:6px;pointer-events:none;font-family:inherit}
+/* 只有在「桌面内可交互」模式下才显示控制器：纯壁纸模式（WorkerW 标准附着）点击会被
+   桌面图标层吃掉，摆一个点不到的浮层只会挡视线。 */
+body.desktop-wallpaper-mode.desktop-wallpaper-interactive .desktop-mode-control-dock{display:flex}
+.desktop-mode-control-handle{pointer-events:auto;display:flex;align-items:center;justify-content:center;width:46px;height:26px;padding:0 8px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(14,17,22,.42);color:rgba(255,255,255,.72);backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px) saturate(1.2);cursor:pointer;transition:opacity .2s,transform .2s,background .2s,color .2s;opacity:.26}
+.desktop-mode-control-handle svg{width:17px;height:17px;flex:0 0 auto}
+.desktop-mode-control-dock:hover .desktop-mode-control-handle,
+.desktop-mode-control-dock:focus-within .desktop-mode-control-handle,
+body.desktop-mode-control-peek .desktop-mode-control-handle{opacity:.94}
+.desktop-mode-control-handle:hover{background:rgba(24,28,35,.66);color:#fff;transform:translateY(1px)}
+.desktop-mode-control-panel{pointer-events:auto;display:none;width:212px;padding:8px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(12,15,20,.74);backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);box-shadow:0 18px 44px rgba(0,0,0,.44)}
+.desktop-mode-control-dock.is-open .desktop-mode-control-panel{display:block}
+.desktop-mode-control-heading{padding:2px 6px 7px;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:rgba(0,245,212,.62);font-weight:800}
+.desktop-mode-control-btn{display:flex;flex-direction:column;gap:2px;width:100%;padding:8px 9px;margin-bottom:4px;border-radius:10px;border:1px solid transparent;background:rgba(255,255,255,.045);color:rgba(255,255,255,.86);text-align:left;cursor:pointer;font-family:inherit;transition:background .18s,border-color .18s}
+.desktop-mode-control-btn:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.10)}
+.desktop-mode-control-btn[aria-checked="true"]{border-color:rgba(0,245,212,.42);background:rgba(0,245,212,.10)}
+.desktop-mode-control-btn:disabled{opacity:.42;cursor:not-allowed}
+.desktop-mode-control-label{font-size:12px;line-height:1.35}
+.desktop-mode-control-state{font-size:10px;line-height:1.4;color:rgba(255,255,255,.44)}
+.desktop-mode-control-exit{margin-bottom:0;border-color:rgba(255,120,120,.26);background:rgba(255,90,90,.10)}
+.desktop-mode-control-exit:hover{background:rgba(255,90,90,.18);border-color:rgba(255,120,120,.42)}

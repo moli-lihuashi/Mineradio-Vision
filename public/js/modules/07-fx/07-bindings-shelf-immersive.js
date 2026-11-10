@@ -66,6 +66,10 @@ function bindFxPanel() {
   bindFxPanelDom();
 }
 
+// 滑块右侧读数：桌面歌词这组用 px / % / °，比裸小数直观，也让「控件确实生效」一眼可见。
+function fxSliderOutputLabel(key, el) {
+  return fxSliderReadout(el && el.id, fx[key]);
+}
 function bindFxPanelDom() {
   if (fxPanelDomBound) return;
   if (!window.__fxPanelDomModulesReady) return;
@@ -78,7 +82,8 @@ function bindFxPanelDom() {
   var ids = [
     ['fx-intensity','intensity'],['fx-particlecount','particleCount'],['fx-depth','depth'],['fx-coverres','coverResolution'],['fx-cineshake','cinemaShake'],['fx-lyricglow','lyricGlowStrength'],['fx-bgopacity','backgroundOpacity'],['fx-glassaberration','controlGlassChromaticOffset'],
     ['fx-liquidglassblur','liquidGlassBlur'],['fx-liquidglassrefraction','liquidGlassRefraction'],['fx-liquidglassaberration','liquidGlassAberration'],['fx-liquidglasshighlight','liquidGlassHighlight'],['fx-liquidglassbrightness','liquidGlassBrightness'],['fx-liquidglassbevel','liquidGlassBevel'],['fx-liquidglasssaturation','liquidGlassSaturation'],
-    ['fx-desktoplyricssize','desktopLyricsSize'],['fx-desktoplyricsopacity','desktopLyricsOpacity'],['fx-desktoplyricsy','desktopLyricsY'],['fx-wallpaperopacity','wallpaperOpacity'],
+    ['fx-liquidglassspecular','liquidGlassSpecular'],['fx-liquidglassfresnel','liquidGlassFresnel'],['fx-liquidglassshadow','liquidGlassShadow'],['fx-liquidglassshadowspread','liquidGlassShadowSpread'],['fx-liquidglasstint','liquidGlassTint'],['fx-liquidglassdistortion','liquidGlassDistortion'],['fx-liquidglassbevelmode','liquidGlassBevelMode'],
+    ['fx-desktoplyricssize','desktopLyricsSize'],['fx-desktoplyricsopacity','desktopLyricsOpacity'],['fx-desktoplyricstilt','desktopLyricsTilt'],['fx-wallpaperopacity','wallpaperOpacity'],
     ['fx-shelfsize','shelfSize'],['fx-shelfx','shelfOffsetX'],['fx-shelfy','shelfOffsetY'],['fx-shelfz','shelfOffsetZ'],['fx-shelfangle','shelfAngleY'],['fx-shelfopacity','shelfOpacity'],['fx-shelfbgalpha','shelfBgOpacity'],
     ['fx-lyricspacing','lyricLetterSpacing'],['fx-lyriclineheight','lyricLineHeight'],['fx-lyricweight','lyricWeight'],
     ['fx-lyricscale','lyricScale'],['fx-lyricx','lyricOffsetX'],['fx-lyricy','lyricOffsetY'],['fx-lyricz','lyricOffsetZ'],['fx-lyrictiltx','lyricTiltX'],['fx-lyrictilty','lyricTiltY'],
@@ -137,12 +142,22 @@ function bindFxPanelDom() {
         if (pair[1] === 'liquidGlassBrightness') fx.liquidGlassBrightness = clampRange(fx.liquidGlassBrightness, -0.5, 0.5);
         if (pair[1] === 'liquidGlassBevel') fx.liquidGlassBevel = Math.round(clampRange(fx.liquidGlassBevel, 0, 60));
         if (pair[1] === 'liquidGlassSaturation') fx.liquidGlassSaturation = clampRange(fx.liquidGlassSaturation, 0, 1);
-        if (window.applyHomeLiquidGlassConfig) window.applyHomeLiquidGlassConfig();
-        if (window.applyFxLiquidGlassConfig) window.applyFxLiquidGlassConfig();
+        if (pair[1] === 'liquidGlassSpecular') fx.liquidGlassSpecular = clampRange(fx.liquidGlassSpecular, 0, 1);
+        if (pair[1] === 'liquidGlassFresnel') fx.liquidGlassFresnel = clampRange(fx.liquidGlassFresnel, 0, 2);
+        if (pair[1] === 'liquidGlassShadow') fx.liquidGlassShadow = clampRange(fx.liquidGlassShadow, 0, 1);
+        if (pair[1] === 'liquidGlassShadowSpread') fx.liquidGlassShadowSpread = Math.round(clampRange(fx.liquidGlassShadowSpread, 0, 60));
+        if (pair[1] === 'liquidGlassTint') fx.liquidGlassTint = clampRange(fx.liquidGlassTint, 0, 1);
+        if (pair[1] === 'liquidGlassDistortion') fx.liquidGlassDistortion = clampRange(fx.liquidGlassDistortion, 0, 1);
+        if (pair[1] === 'liquidGlassBevelMode') fx.liquidGlassBevelMode = Math.round(clampRange(fx.liquidGlassBevelMode, 0, 1));
+        if (window.applyAllLiquidGlassConfig) window.applyAllLiquidGlassConfig();
+        else {
+          if (window.applyHomeLiquidGlassConfig) window.applyHomeLiquidGlassConfig();
+          if (window.applyFxLiquidGlassConfig) window.applyFxLiquidGlassConfig();
+        }
       }
-      if (pair[1] === 'desktopLyricsSize') fx.desktopLyricsSize = clampRange(fx.desktopLyricsSize, 0.72, 1.55);
+      if (pair[1] === 'desktopLyricsSize') fx.desktopLyricsSize = clampRange(fx.desktopLyricsSize, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX);
       if (pair[1] === 'desktopLyricsOpacity') fx.desktopLyricsOpacity = clampRange(fx.desktopLyricsOpacity, 0.28, 1);
-      if (pair[1] === 'desktopLyricsY') fx.desktopLyricsY = clampRange(fx.desktopLyricsY, 0.08, 0.92);
+      if (pair[1] === 'desktopLyricsTilt') fx.desktopLyricsTilt = Math.round(clampRange(fx.desktopLyricsTilt, DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX));
       if (pair[1] === 'wallpaperOpacity') fx.wallpaperOpacity = clampRange(fx.wallpaperOpacity, 0.35, 1);
       if (/^sonic/.test(pair[1])) {
         if (pair[1] === 'sonicThemeCycleInterval') fx.sonicThemeCycleInterval = Math.round(clampRange(fx.sonicThemeCycleInterval, 8, 180));
@@ -186,20 +201,29 @@ function bindFxPanelDom() {
           applyClassicLyricCurve(cpLines, classicPlayer.currentLyricIdx, document.getElementById('cp-lyrics-wrap'));
         }
       }
-      if (out) out.textContent = pair[1] === 'coverResolution'
-        ? coverParticleCountLabel(fx.coverResolution)
-        : (pair[1] === 'lyricWeight' || pair[1] === 'controlGlassChromaticOffset' || pair[1] === 'liquidGlassBevel' || pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY' || pair[1] === 'shelfAngleY' || pair[1] === 'lyricCustomLines' ? String(Math.round(fx[pair[1]])) : Number(el.value).toFixed(pair[1] === 'lyricLetterSpacing' ? 3 : 2));
+      if (out) out.textContent = fxSliderOutputLabel(pair[1], el);
       if (pair[1] === 'particleCount') updateFxParticleFireSliderVisual(fx.particleCount);
       syncFxUniforms();
       if (/^shelf(Size|OffsetX|OffsetY|OffsetZ|AngleY|Opacity|BgOpacity)$/.test(pair[1]) && shelfManager && shelfManager.refreshTheme) shelfManager.refreshTheme();
       if (pair[1] === 'lyricLetterSpacing' || pair[1] === 'lyricLineHeight' || pair[1] === 'lyricWeight') refreshCurrentLyricStyle();
       if (pair[1] === 'lyricLetterSpacing' || pair[1] === 'lyricLineHeight' || pair[1] === 'lyricWeight' || pair[1] === 'lyricScale' || pair[1] === 'lyricGlowStrength') pushDesktopLyricsState(true);
-      if (/^(desktopLyricsSize|desktopLyricsOpacity|desktopLyricsY)$/.test(pair[1])) pushDesktopLyricsState(true);
+      if (/^(desktopLyricsSize|desktopLyricsOpacity|desktopLyricsTilt)$/.test(pair[1])) pushDesktopLyricsState(true);
       if (pair[1] === 'wallpaperOpacity') pushWallpaperState(true);
       if (scheduleLyricLayoutSave) scheduleLyricLayoutSave(); else saveLyricLayout();
     });
     // 松手立即落盘，不必等 debounce 尾巴；拖动期间的重复写已被合并
-    el.addEventListener('change', function () { saveLyricLayout(); });
+    el.addEventListener('change', function () {
+      saveLyricLayout();
+      // 桌面歌词这组参数改的是另一个窗口，光看滑块不会有反馈，松手弹一次读数
+      if (/^desktopLyrics(Size|Tilt|Opacity)$/.test(pair[1]) && typeof showToast === 'function') {
+        var label = {
+          desktopLyricsSize: '大小',
+          desktopLyricsTilt: '倾斜',
+          desktopLyricsOpacity: '透明度'
+        }[pair[1]];
+        showToast('桌面歌词' + label + ' ' + fxSliderOutputLabel(pair[1], el));
+      }
+    });
   });
   var lyricCustomLinesRebuildTimer = 0;
   function scheduleLyricCustomLinesRebuild() {
@@ -361,6 +385,33 @@ function bindFxPanelDom() {
       showToast(fx.desktopLyricsFps ? ('桌面歌词帧数 ' + fx.desktopLyricsFps) : '桌面歌词帧数无上限');
     });
   });
+  document.querySelectorAll('#desktop-lyrics-lines-seg [data-desktop-lyrics-lines]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      fx.desktopLyricsLines = normalizeDesktopLyricsLineCount(btn.getAttribute('data-desktop-lyrics-lines'));
+      updateDesktopLyricsLayoutControls();
+      saveLyricLayout();
+      pushDesktopLyricsState(true);
+      showToast(fx.desktopLyricsLines <= 1 ? '桌面歌词恢复单行' : ('桌面歌词显示 ' + fx.desktopLyricsLines + ' 行'));
+    });
+  });
+  document.querySelectorAll('#desktop-lyrics-motion-seg [data-desktop-lyrics-motion]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      fx.desktopLyricsMotion = normalizeDesktopLyricsMotion(btn.getAttribute('data-desktop-lyrics-motion'));
+      updateDesktopLyricsLayoutControls();
+      saveLyricLayout();
+      pushDesktopLyricsState(true);
+      showToast('桌面歌词动效：' + desktopLyricsMotionLabel(fx.desktopLyricsMotion));
+    });
+  });
+  document.querySelectorAll('#wallpaper-fps-seg [data-wallpaper-fps]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      fx.wallpaperFps = Math.max(1, Math.min(60, Math.round(Number(btn.getAttribute('data-wallpaper-fps')) || 60)));
+      if (typeof updateWallpaperFpsControls === 'function') updateWallpaperFpsControls();
+      saveLyricLayout();
+      pushWallpaperState(true);
+      showToast('壁纸帧数 ' + fx.wallpaperFps);
+    });
+  });
   document.querySelectorAll('#performance-background-seg [data-performance-background]').forEach(function(btn){
     btn.addEventListener('click', function(){
       setPerformanceBackgroundMode(btn.getAttribute('data-performance-background'));
@@ -412,7 +463,13 @@ function toggleFx(key) {
   syncFxUniforms();
   if (key === 'lyricCameraLock' || key === 'lyricGlow' || key === 'lyricGlowBeat' || key === 'lyricGlowParticles' || key === 'backgroundStarRiver' || key === 'lyricVerticalFloat' || key === 'lyricPauseHold' || key === 'bloom' || key === 'edge' || key === 'cinema' || key === 'desktopLyrics' || key === 'desktopLyricsClickThrough' || key === 'desktopLyricsCinema' || key === 'desktopLyricsHighlight' || key === 'wallpaperMode' || key === 'shelfShowPodcasts' || key === 'shelfMergeCollections' || key === 'liveBackgroundKeep' || key === 'classicShowCover' || key === 'classicShowBg' || key === 'classicLyricArcTilt' || /^sonic/.test(key)) saveLyricLayout();
   if (key === 'floatLayer') { if (fx.floatLayer) createFloatLayer(); else destroyFloatLayer(); }
-  if (key === 'desktopLyrics') applyDesktopLyricsState(true);
+  if (key === 'desktopLyrics') {
+    applyDesktopLyricsState(true);
+    // 开关关掉就把整块细项设置收起，只留一行提示
+    if (typeof updateDesktopLyricsPanelVisibility === 'function') updateDesktopLyricsPanelVisibility();
+    // 播放选项菜单里的同名开关要跟着变（两处入口共用一个状态）
+    if (typeof updatePlayerQuickMenuUi === 'function') updatePlayerQuickMenuUi();
+  }
   if (key === 'desktopLyricsClickThrough' || key === 'desktopLyricsCinema' || key === 'desktopLyricsHighlight') pushDesktopLyricsState(true);
   if (key === 'lyricGlow' || key === 'lyricGlowBeat' || key === 'lyricGlowParticles') pushDesktopLyricsState(true);
   if (key === 'wallpaperMode') applyWallpaperModeState(true);
@@ -453,7 +510,8 @@ function toggleFx(key) {
   if (key === 'desktopLyricsClickThrough') showToast(fx.desktopLyricsClickThrough !== false ? '桌面歌词已锁定' : '桌面歌词可移动');
   if (key === 'desktopLyricsCinema') showToast(fx.desktopLyricsCinema !== false ? '桌面歌词电影震动已开启' : '桌面歌词电影震动已关闭，基础漂浮保留');
   if (key === 'desktopLyricsHighlight') showToast(fx.desktopLyricsHighlight === true ? '桌面歌词高亮跟随已开启' : '桌面歌词高亮跟随已关闭');
-  if (key === 'wallpaperMode') showToast(fx.wallpaperMode ? '壁纸模式已开启' : '壁纸模式已关闭');
+  // 开启是异步附着到桌面（可能要 1s），成功不加提示；失败由 applyWallpaperModeState 弹具体原因
+  if (key === 'wallpaperMode') showToast(fx.wallpaperMode ? '正在把 Mineradio 放到桌面…' : '壁纸模式已关闭');
   if (key === 'shelfShowPodcasts') showToast(fx.shelfShowPodcasts !== false ? '3D歌单架已显示播客歌单' : '3D歌单架已隐藏播客歌单');
   if (key === 'shelfMergeCollections') showToast(fx.shelfMergeCollections === true ? '我的歌单与收藏歌单已合并滚动' : '收藏歌单恢复滚到底切页');
   if (key === 'liveBackgroundKeep') showToast(fx.liveBackgroundKeep ? '直播后台保持已开启' : '直播后台保持已关闭');
@@ -515,6 +573,7 @@ function toggleFxPanel(force) {
     return;
   }
   closePlayerQuickMenu();
+  if (typeof closeSkinPopover === 'function') closeSkinPopover();
   el.classList.remove('show', 'closing');
   setPeek(el, true, 'fx');
 }
@@ -542,6 +601,7 @@ function toggleFxPanelPin(e) {
   });
   if (peekTimers && peekTimers.fx) { clearTimeout(peekTimers.fx); peekTimers.fx = null; }
   closePlayerQuickMenu();
+  if (typeof closeSkinPopover === 'function') closeSkinPopover();
   el.classList.remove('closing', 'peek');
   el.classList.add('show');
   if (window.MineradioMotion && typeof window.MineradioMotion.springUiIn === 'function') {

@@ -2,6 +2,152 @@
 //  启动页 (splash) 控制
 // ============================================================
 
+/* =====「进入卡顿随车记录仪」================================================
+ * 用户报「点击进入卡几秒」，但 CDP 探针在真机上只能测到 <1s 的主线程滞后 ——
+ * 差异只可能发生在真实会话里。这里被动记录三样东西：
+ *   1) 心跳滞后（setInterval 100ms 的实际间隔超出量 = 主线程被占住多久）
+ *   2) longtask（>50ms 的任务）
+ *   3) rAF 帧间隔 >80ms（GPU/合成器停顿也会体现成 rAF 缺帧，这是「眼睛看到的卡」）
+ * 窗口：脚本求值 → splash 摘掉（home-revealed）后 +12s，然后一行 JSON 写到
+ * 稳定数据目录 logs/enter-perf.log（经 preload 的 notePerfEvent）。无任何网络上报。
+ * 采样本身极便宜：100ms 心跳 + longtask 观察器，rAF 循环只在记录窗口内跑。
+ * ========================================================================= */
+(function installEnterStallRecorder() {
+  try {
+    var BOOT_ID = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    var R = { bootId: BOOT_ID, lag: [], long: [], frames: [], vis: [], lgActiveAt: null };
+    var flushAt = 0, flushed = false, lgWatchStarted = false;
+    var evalAt = performance.now();
+
+    function rel(t) { return Math.round((t - evalAt) * 10) / 10; }
+
+    var lastBeat = evalAt;
+    /* 记录窗口结束后必须真正停掉：以前 flushed 只跳过后半段，心跳仍每 100ms
+     * 往 R.lag 里 push，rAF / longtask 观察器也不停 —— 挂机越久内存越涨。 */
+    var beatTimer = setInterval(function () {
+      if (flushed) return;
+      var now = performance.now();
+      var lag = now - lastBeat - 100;
+      lastBeat = now;
+      if (lag > 80) R.lag.push([rel(now), Math.round(lag), document.visibilityState, document.hasFocus()]);
+      if (!lgWatchStarted && document.querySelector('.home-grid .lg-active, .home-rail .lg-active, #bottom-bar.lg-active, #search-box.lg-active')) {
+        lgWatchStarted = true;
+        R.lgActiveAt = rel(now);
+      }
+    }, 100);
+
+    var longTaskObserver = null;
+    try {
+      longTaskObserver = new PerformanceObserver(function (l) {
+        if (flushed) return;
+        l.getEntries().forEach(function (e) { R.long.push([rel(e.startTime), Math.round(e.duration)]); });
+      });
+      longTaskObserver.observe({ entryTypes: ['longtask'] });
+    } catch (_) {}
+
+    /* 后台重活的指纹：boot 3s 之后才创建的 Worker / WebGL 上下文。
+     * 「恢复播放 → 节奏分析」「歌词主题 PixiJS 场景」都会在这里现形。 */
+    R.bgWorkers = []; R.bgContexts = [];
+    try {
+      var NativeWorker = window.Worker;
+      if (NativeWorker) {
+        window.Worker = function (url, opts) {
+          var t = rel(performance.now());
+          if (t > 3000) R.bgWorkers.push([t, String(url || '').slice(0, 120)]);
+          return new NativeWorker(url, opts);
+        };
+        window.Worker.prototype = NativeWorker.prototype;
+      }
+    } catch (_) {}
+    try {
+      var proto = HTMLCanvasElement.prototype;
+      var nativeGetContext = proto.getContext;
+      proto.getContext = function (type) {
+        var t = rel(performance.now());
+        var ctx = nativeGetContext.apply(this, arguments);
+        if (ctx && t > 3000 && /^(webgl2?|experimental-webgl)$/i.test(String(type))) {
+          R.bgContexts.push([t, String(type), Math.round(this.width) + 'x' + Math.round(this.height)]);
+        }
+        return ctx;
+      };
+    } catch (_) {}
+
+    var plast = evalAt;
+    (function frame() {
+      if (flushed) return;  // 记录窗口结束，不再续帧
+      var t = performance.now();
+      var g = t - plast;
+      if (g > 80) R.frames.push([rel(t), Math.round(g)]);
+      plast = t;
+      requestAnimationFrame(frame);
+    })();
+
+    document.addEventListener('visibilitychange', function () {
+      if (flushed) return;
+      R.vis.push([rel(performance.now()), document.visibilityState]);
+    });
+
+    function gpuInfo() {
+      try {
+        var c = document.createElement('canvas');
+        var gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+        if (!gl) return 'no-webgl';
+        var ext = gl.getExtension('WEBGL_debug_renderer_info');
+        var s = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        (gl.getExtension('WEBGL_lose_context') || {}).loseContext && gl.getExtension('WEBGL_lose_context').loseContext();
+        return String(s || '?').slice(0, 120);
+      } catch (e) { return 'gpu-err'; }
+    }
+
+    // splash 摘掉后 +12s 落盘。markAppPerf 由本文件后段定义，这里轮询它的产物即可。
+    var poll = setInterval(function () {
+      var marks = (typeof appPerfMarks !== 'undefined') ? appPerfMarks : null;
+      if (!marks || !marks.length) return;
+      var dismiss = null, revealed = null;
+      marks.forEach(function (m) {
+        if (m.name === 'splash-dismiss' && dismiss === null) dismiss = m.value;
+        if (m.name === 'home-revealed' && revealed === null) revealed = m.value;
+      });
+      if (dismiss === null) return;
+      clearInterval(poll);
+      flushAt = revealed !== null ? revealed + 12000 : dismiss + 13000;
+      var wait = Math.max(0, flushAt - performance.now());
+      setTimeout(function () {
+        flushed = true;
+        clearInterval(beatTimer);
+        try { if (longTaskObserver) longTaskObserver.disconnect(); } catch (_) {}
+        var rec = {
+          kind: 'enter-stall',
+          bootId: BOOT_ID,
+          ts: new Date().toISOString(),
+          appVersion: (document.documentElement && document.documentElement.getAttribute('data-app-version')) || '',
+          marks: marks.map(function (m) { return { n: m.name, t: Math.round(m.value) }; }),
+          gpu: gpuInfo(),
+          screen: window.innerWidth + 'x' + window.innerHeight + '@' + (window.devicePixelRatio || 1),
+          evalAtAbs: Math.round(evalAt),   // lag/long/frames/lgActiveAt 的 0 点（绝对 performance.now() 基准）
+          heap: (performance.memory && performance.memory.usedJSHeapSize) ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null,
+          lgActiveAt: R.lgActiveAt,
+          bgWorkers: R.bgWorkers, bgContexts: R.bgContexts,
+          lag: R.lag, long: R.long, frames: R.frames, vis: R.vis,
+          body: String(document.body.className).slice(0, 300)
+        };
+        rec.lag.sort(function (a, b) { return b[1] - a[1]; });
+        rec.frames.sort(function (a, b) { return b[1] - a[1]; });
+        rec.long.sort(function (a, b) { return b[1] - a[1]; });
+        rec.lag = rec.lag.slice(0, 40);
+        rec.frames = rec.frames.slice(0, 40);
+        rec.long = rec.long.slice(0, 40);
+        try {
+          if (window.desktopWindow && typeof window.desktopWindow.notePerfEvent === 'function') {
+            window.desktopWindow.notePerfEvent(rec);
+            console.log('[EnterStall] recorded → logs/enter-perf.log bootId=' + BOOT_ID);
+          }
+        } catch (e) { console.warn('[EnterStall] flush failed:', e); }
+      }, wait);
+    }, 250);
+  } catch (e) { try { console.warn('[EnterStall] install failed:', e); } catch (_) {} }
+})();
+
 document.body.classList.add('splash-active');
 var splashAnimating = true;
 var splashCanvas = null, splashCtx = null;
@@ -1310,6 +1456,9 @@ function bootstrapStartupLoginStatus() {
     typeof refreshLoginStatus === 'function' ? refreshLoginStatus() : Promise.resolve(null),
     typeof refreshQQLoginStatus === 'function' ? refreshQQLoginStatus({ forceVip: true, reason: 'startup' }) : Promise.resolve(null),
     typeof refreshKugouLoginStatus === 'function' ? refreshKugouLoginStatus() : Promise.resolve(null),
+    // 下面两家定义在延迟波，本函数在主波顶层执行时 typeof 必为 undefined —— 这里只是占位。
+    // 真正的补刷由 02-login-status.js 的 refreshDeferredProviderLoginStatus() 在
+    // index-loader 注入完延迟波后触发（window.__onDeferredLoginStatusReady）。
     typeof refreshQishuiLoginStatus === 'function' ? refreshQishuiLoginStatus() : Promise.resolve(null),
     typeof refreshSpotifyLoginStatus === 'function' ? refreshSpotifyLoginStatus() : Promise.resolve(null),
     // 内置歌单与平台登录态并行拉：未登录也要能在面板/书架上看到自己的歌单

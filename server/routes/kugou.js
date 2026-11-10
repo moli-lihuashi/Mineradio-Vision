@@ -176,6 +176,8 @@ module.exports = function register(ctx) {
           sendJSON(res, data, authFail ? 401 : 400);
           return;
         }
+        // 歌单内容变了：作废服务端歌单缓存，下一次打开拿到的是新列表
+        if (typeof ctx.clearKugouPlaylistCache === 'function') ctx.clearKugouPlaylistCache();
         sendJSON(res, data);
       } catch (err) {
         console.error('[KugouPlaylistAddSong]', err);

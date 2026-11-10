@@ -37,6 +37,7 @@ async function refreshSpotifyLoginStatus() {
     var info = await apiJson('/api/spotify/status?t=' + Date.now());
     var prevLogged = !!spotifyLoginStatus.loggedIn;
     spotifyLoginStatus = normalizeSpotifyLoginStatus(info);
+    auditProviderVipState('spotify', spotifyLoginStatus);
     if (!spotifyLoginStatus.loggedIn) {
       if (prevLogged || spotifyLoginWasLoggedIn) showToast(spotifyLoginStatus.stale ? 'Spotify 登录已失效' : 'Spotify 已退出');
       spotifyPlaylists = [];
@@ -59,12 +60,6 @@ async function refreshSpotifyLoginStatus() {
     renderUserBtn();
     return spotifyLoginStatus;
   }
-}
-function startSpotifyLoginStatusAutoRefresh() {
-  if (spotifyLoginAutoRefreshTimer) clearInterval(spotifyLoginAutoRefreshTimer);
-  spotifyLoginAutoRefreshTimer = setInterval(function () {
-    refreshSpotifyLoginStatus().catch(function (e) { console.warn('Spotify login auto refresh failed:', e); });
-  }, 45000);
 }
 function spotifyLoginStatusText(info) {
   info = info || spotifyLoginStatus || {};

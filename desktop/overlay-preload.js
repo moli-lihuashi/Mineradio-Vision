@@ -16,4 +16,6 @@ contextBridge.exposeInMainWorld('desktopOverlay', {
   setLyricsLockState: (locked) => ipcRenderer.invoke('mineradio-desktop-lyrics-set-lock-state', !!locked),
   moveLyricsBy: (dx, dy) => ipcRenderer.invoke('mineradio-desktop-lyrics-move-by', Number(dx) || 0, Number(dy) || 0),
   closeLyrics: () => ipcRenderer.invoke('mineradio-desktop-lyrics-set-enabled', false, {}),
+  // 桌面歌词悬停控制条：主窗口播放控制复用全局热键转发通道
+  sendPlaybackAction: (action) => ipcRenderer.invoke('mineradio-desktop-lyrics-playback-action', String(action || '')),
 });

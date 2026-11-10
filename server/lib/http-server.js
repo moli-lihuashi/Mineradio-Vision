@@ -35,7 +35,79 @@ module.exports = function createHttpServer(deps) {
   // shader 市场目录缓存：mtime 未变则复用上次结果，避免每次请求同步扫目录阻塞主进程（server 内嵌主进程）
   let shaderMarketCache = { dir: '', mtime: 0, shaders: null };
 
-  const server = http.createServer(async (req, res) => {
+  // ---------- 汉字笔顺：同源取 hanzi-writer medians ----------
+  // 为什么要有这一段：渲染层 index.html 的 CSP 是 `connect-src 'self' …`，
+  // 模组直连 jsDelivr / unpkg / npmmirror 会全部被挡 —— 表现是笔顺一个字都取不到，
+  // 整段歌词退回字体骨架。这里由主进程去取、落盘缓存，用同源路径发给渲染层。
+  // 路径故意不放在 /api/ 下：/api/* 一律要 token，而模组在渲染层拿不到 token。
+  // 内容是公开字形数据，不含用户信息，不需要鉴权。
+  const HANZI_PREFIX = '/hanzi-strokes/';
+  const HANZI_CDN = [
+    'https://cdn.jsdelivr.net/npm/hanzi-writer-data@2.0/',
+    'https://unpkg.com/hanzi-writer-data@2.0/',
+    'https://registry.npmmirror.com/hanzi-writer-data/2.0.1/files/',
+  ];
+  const hanziMemo = new Map();       // ch → medians|null，挡住同一句反复读盘
+  const hanziDir = () => {
+    try {
+      const electron = require('electron');
+      const userDataPath = electron.app ? electron.app.getPath('userData') : '';
+      return userDataPath ? path.join(userDataPath, 'hanzi-strokes') : '';
+    } catch (_) { return ''; }
+  };
+  // 只认单个 CJK 统一表意文字：这个白名单同时也是路径穿越的防线（文件名由它重新拼，不用请求里的原文）
+  const hanziOf = (raw) => {
+    let s = '';
+    try { s = decodeURIComponent(String(raw || '')); } catch (_) { return ''; }
+    s = s.replace(/\.json$/i, '');
+    if ([...s].length !== 1) return '';
+    const c = s.codePointAt(0);
+    const ok = (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff);
+    return ok ? s : '';
+  };
+  async function fetchHanziFromCdn(ch) {
+    for (const base of HANZI_CDN) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 6000);
+      try {
+        const r = await fetch(base + encodeURIComponent(ch) + '.json', { signal: ac.signal });
+        if (!r.ok) continue;
+        const data = await r.json();
+        if (Array.isArray(data?.medians) && data.medians.length) return data.medians;
+      } catch (_) { /* 换下一个源 */ }
+      finally { clearTimeout(timer); }
+    }
+    return null;
+  }
+  async function serveHanziStrokes(res, raw) {
+    const ch = hanziOf(raw);
+    if (!ch) { sendJSON(res, { error: 'BAD_CHAR' }, 400); return; }
+    if (hanziMemo.has(ch)) { sendJSON(res, { ch, medians: hanziMemo.get(ch) }); return; }
+    const dir = hanziDir();
+    const file = dir ? path.join(dir, ch + '.json') : '';
+    if (file) {
+      try {
+        const parsed = JSON.parse(await require('fs').promises.readFile(file, 'utf8'));
+        if (Array.isArray(parsed) && parsed.length) { hanziMemo.set(ch, parsed); sendJSON(res, { ch, medians: parsed }); return; }
+      } catch (_) { /* 没缓存过 */ }
+    }
+    const medians = await fetchHanziFromCdn(ch);
+    hanziMemo.set(ch, medians);
+    if (medians && file) {
+      try {
+        await require('fs').promises.mkdir(dir, { recursive: true });
+        await require('fs').promises.writeFile(file, JSON.stringify(medians));
+      } catch (_) { /* 落盘失败不影响这次返回 */ }
+    }
+    if (!medians) { sendJSON(res, { error: 'NOT_FOUND', ch }, 404); return; }
+    sendJSON(res, { ch, medians });
+  }
+
+  // 抽成具名 async 函数，由下面的同步监听器统一 .catch()。
+  // http.createServer 不会处理 async 监听器返回的 rejected Promise：
+  // 以前任一 handler 抛出未被自身捕获的异常时，这个连接既没有响应、
+  // 又会产生进程级 unhandledRejection，前端 fetch 只能一直挂到超时。
+  async function handleRequest(req, res) {
     const url = new URL(req.url, 'http://localhost:' + PORT);
     const pn = url.pathname;
 
@@ -101,6 +173,12 @@ module.exports = function createHttpServer(deps) {
       return;
     }
 
+    // ---------- 汉字笔顺（同源，给雾笺 / 雾窗取 hanzi-writer medians）----------
+    if (pn.startsWith(HANZI_PREFIX)) {
+      await serveHanziStrokes(res, pn.slice(HANZI_PREFIX.length));
+      return;
+    }
+
     // ---------- 静态资源 ----------
       if (pn === '/favicon.ico') {
       serveStatic(res, path.join(appRoot, 'build', 'icon.ico'));
@@ -120,6 +198,34 @@ module.exports = function createHttpServer(deps) {
       return;
     }
     serveStatic(res, filePath);
+  }
+
+  const server = http.createServer((req, res) => {
+    handleRequest(req, res).catch((err) => {
+      console.error('[HttpServer] unhandled request error:', (err && (err.stack || err.message)) || err);
+      if (res.writableEnded || res.headersSent || res.destroyed) return;
+      const status = Number(err && err.statusCode) === 413 ? 413 : 500;
+      try {
+        sendJSON(res, {
+          error: status === 413 ? 'BODY_TOO_LARGE' : 'INTERNAL_ERROR',
+          message: status === 413 ? '请求体过大' : '服务器内部错误',
+        }, status);
+      } catch (_) {
+        try { res.writeHead(status); res.end(status === 413 ? 'Payload Too Large' : 'Internal Server Error'); } catch (_) {}
+      }
+    });
+  });
+
+  server.on('clientError', (_err, socket) => {
+    if (!socket || socket.destroyed) return;
+    try { socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); } catch (_) {}
+  });
+
+  // waitForServer() 在启动探活结束后会 removeListener 掉自己的 once('error')，
+  // 没有常驻监听时，运行期的 server 级 error（EADDRINUSE / EACCES 等）会变成
+  // 进程级未捕获异常。这里只记日志，不改变启动期的 reject 语义。
+  server.on('error', (err) => {
+    console.error('[HttpServer] server error:', (err && (err.stack || err.message)) || err);
   });
 
   function startHttpServer() {

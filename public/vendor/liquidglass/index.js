@@ -22,6 +22,23 @@ var DEFAULTS = {
 };
 var BLUR_ITERATIONS = 4; // Optimized from 6 for performance
 var SHADOW_PAD = 20;
+/**
+ * 让出一次渲染机会：下一帧再继续。
+ *
+ * 逐元素做 html-to-image 时，单张卡的同步段（克隆 DOM + 内联 CSS + 序列化 SVG）
+ * 约 35ms，串起来抓 4 张就变成同一帧里 140ms+ 的长任务 —— 实测正是「点击进入」
+ * 之后那帧 187ms 掉帧。每张之间 await 一次本函数，把一个大任务拆成四个小任务，
+ * 合成器与输入事件就能插进来。
+ */
+function yieldToRenderer() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(resolve, 16);
+    }
+  });
+}
 
 // node_modules/html-to-image/es/util.js
 function resolveUrl(url, baseUrl) {
@@ -918,6 +935,27 @@ var _sharedFontBlocks = null;
 function invalidateFontEmbedCache() {
   _sharedFontBlocks = null;
 }
+/* 字体内联原本是在第一个实例的 _start() 里现算的，而 _start() 又恰好落在
+ * 「splash 淡出 → 主界面首帧」这段最敏感的窗口里 —— 样式表打不开时能白挂 2s 预算。
+ * 改成脚本一加载就开始（离用户点「进入」还有好几秒），把这段等待彻底移出关键路径。
+ * 走 force-cache，命中的是浏览器已经为渲染抓过的同一份文件，不额外占带宽。 */
+function startSharedFontBlocks() {
+  if (_sharedFontBlocks) return _sharedFontBlocks;
+  // 总预算兜底：即使有多个外链样式表各自超时，也不能把 _start() 一直挂着。
+  // 超时就按「没有可内联字体」继续，玻璃照常预热。
+  _sharedFontBlocks = Promise.race([
+    buildFontBlocks(),
+    new Promise((resolve) => setTimeout(() => resolve([]), FONT_EMBED_TOTAL_BUDGET_MS))
+  ]);
+  return _sharedFontBlocks;
+}
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => { startSharedFontBlocks(); }, { once: true });
+  } else {
+    startSharedFontBlocks();
+  }
+}
 function parseFontFamily(block) {
   const m = block.match(/font-family\s*:\s*(['"]?)([^;'"]+)\1/i);
   return m ? m[2].trim() : "";
@@ -1014,9 +1052,28 @@ function filterFontBlocksForElement(blocks, element) {
     return true;
   });
 }
+/**
+ * 字体内联的取数超时。外链样式表（例如 fonts.googleapis.com）在部分网络下会长时间挂住，
+ * 而 buildFontBlocks() 是在每个实例 _start() 里被 await 的 —— 一个打不开的字体 CDN
+ * 就能把整套液态玻璃预热堵在门口（实测国内「点击进入」后卡 5 秒左右才恢复，就是等这个）。
+ * 超时后按「拿不到就当作没有」处理，回退系统字体，不影响玻璃本身。
+ */
+var FONT_EMBED_FETCH_TIMEOUT_MS = 1200;
+var FONT_EMBED_TOTAL_BUDGET_MS = 2000;
+
+function fetchWithTimeout(url, ms, init) {
+  if (typeof AbortController === "undefined") return fetch(url, init);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => {
+    try { ctrl.abort(); } catch (_) {}
+  }, ms);
+  const opts = Object.assign({}, init || {}, { signal: ctrl.signal });
+  return fetch(url, opts).finally(() => clearTimeout(timer));
+}
+
 async function fetchAsDataUrl(url) {
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, FONT_EMBED_FETCH_TIMEOUT_MS);
     if (!res.ok) return null;
     const blob = await res.blob();
     return new Promise((resolve, reject) => {
@@ -1037,7 +1094,7 @@ async function buildFontBlocks() {
   for (const link of links) {
     if (!link.href) continue;
     try {
-      const res = await fetch(link.href, { cache: "force-cache" });
+      const res = await fetchWithTimeout(link.href, FONT_EMBED_FETCH_TIMEOUT_MS, { cache: "force-cache" });
       if (!res.ok) continue;
       const cssText = await res.text();
       const sheet = new CSSStyleSheet();
@@ -1141,10 +1198,8 @@ var HtmlCapture = class {
    * the @font-face blocks, and inline each url(...) ourselves.
    */
   async prefetchFontEmbedCSS() {
-    if (!_sharedFontBlocks) {
-      _sharedFontBlocks = buildFontBlocks();
-    }
-    this._fontBlocks = await _sharedFontBlocks;
+    if (!_sharedFontBlocks) startSharedFontBlocks();
+    this._fontBlocks = (await _sharedFontBlocks) || [];
   }
   /**
    * Return the @font-face CSS string for a specific element,
@@ -1911,6 +1966,11 @@ var LiquidGlass = class _LiquidGlass {
      * element instead of every glass on the page.
      */
     this._glassContentDirty = /* @__PURE__ */ new Set();
+    /**
+     * Only these glass elements need a content snapshot at all — see
+     * _glassContentIsSampled(). Filled by _refreshContentSampled().
+     */
+    this._contentSampled = /* @__PURE__ */ new Set();
     this._fpsFrames = 0;
     this._fpsTime = 0;
     this._observer = null;
@@ -1988,7 +2048,7 @@ var LiquidGlass = class _LiquidGlass {
           continue;
         }
         if (owner) {
-          this._glassContentDirty.add(owner);
+          if (this._contentSampled.has(owner)) this._glassContentDirty.add(owner);
           this._markGlassAndDependents(owner);
         }
       }
@@ -2253,11 +2313,23 @@ var LiquidGlass = class _LiquidGlass {
    */
   async _captureGlassContent(targets = null) {
     if (this._capturingGlassContent) return;
+    // 内容快照只有被「后面的玻璃」采样时才会被读到（见 _glassContentIsSampled）。
+    // 没人采样就直接跳过 —— 首页那组卡片原本每次都要白烧 350~900ms。
+    const wanted = targets
+      ? new Set(Array.from(targets).filter((el) => this._contentSampled.has(el)))
+      : this._contentSampled;
+    if (!wanted || !wanted.size) return;
     this._capturingGlassContent = true;
-    console.log('[LG-STAGE] _captureGlassContent:start targets=' + (targets ? targets.size : 'ALL'));
+    console.log('[LG-STAGE] _captureGlassContent:start targets=' + wanted.size);
     try {
+      let first = true;
       for (const [el, glassCanvas] of this.glassCanvases) {
-        if (targets && !targets.has(el)) continue;
+        if (!wanted.has(el)) continue;
+        // 单张卡的 html-to-image（克隆 DOM + 内联 CSS + 序列化 SVG + 解码）同步段约 35ms，
+        // 串起来抓 4 张就是同一帧里 140ms+ —— 实测正是「点击进入」后 187ms 掉帧的那一帧。
+        // 每张之间让出一次渲染机会，把一个大任务拆成四个小任务。
+        if (!first) await yieldToRenderer();
+        first = false;
         const rect = el.getBoundingClientRect();
         console.log('[LG-STAGE] captureToCanvas:begin el=' + (el.className || el.tagName) + ' rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height));
         const img = await this.capture.captureToCanvas(
@@ -2277,6 +2349,46 @@ var LiquidGlass = class _LiquidGlass {
     }
   }
   /**
+   * 这张玻璃的像素会不会被「排在它后面的玻璃面板」采样？
+   *
+   * _glassContentImages 全库只有一处消费：_drawPriorGlassToScene()，用来把前一张
+   * 玻璃的**文字标签**合成进后一张玻璃的采样场景。
+   *
+   * 判据用「真实面板重叠」而不是 _drawPriorGlassToScene 里那个带 SHADOW_PAD 的采样框：
+   * 首页卡片实测间距 13px / 9px，采样框按 20px 外扩后确实会蹭到邻卡，但那只重叠出
+   * 7px 一条窄边 —— 为这条窄边去抓整张卡的内容快照（clone DOM + 内联全部 CSS +
+   * 序列化 SVG，单张约 35~80ms）极不划算：实测 5 张卡的初始捕获 429ms，卡片文字
+   * 每次变化还要整块重抓 142~207ms，正好全部压在「点击进入」的退场动画上。
+   * 真正叠在一起的玻璃（例如玻璃浮层盖在玻璃卡上）仍然照抓，功能不丢。
+   */
+  _glassContentIsSampled(element) {
+    if (!this.glassSet.has(element)) return false;
+    const rootRect = this.root.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const contentRect = this._getPixelRect(element.getBoundingClientRect(), rootRect, dpr);
+    let seen = false;
+    for (const child of this._sortedChildren) {
+      if (child === element) {
+        seen = true;
+        continue;
+      }
+      if (!seen) continue;
+      if (!this.glassSet.has(child)) continue;
+      const panelRect = this._getPixelRect(child.getBoundingClientRect(), rootRect, dpr);
+      if (_LiquidGlass._rectsIntersect(contentRect, panelRect)) return true;
+    }
+    return false;
+  }
+  /** 重算「需要内容快照」的玻璃集合。布局变化（resize / 尺寸变化）后必须重算。 */
+  _refreshContentSampled() {
+    const next = /* @__PURE__ */ new Set();
+    for (const el of this.glassSet) {
+      if (this._glassContentIsSampled(el)) next.add(el);
+    }
+    this._contentSampled = next;
+    return next;
+  }
+  /**
    * Synchronously walk every non-glass direct child of root and
    * await its html-to-image capture so the cache is fully populated
    * by the time the render loop starts. Without this, the first
@@ -2284,11 +2396,28 @@ var LiquidGlass = class _LiquidGlass {
    * ~one or two frames while the async captures resolve.
    */
   async _prewarmStaticCaptures() {
-    for (const child of this._sortedChildren) {
+    // 只有「排在最后一块玻璃之前」的非玻璃子节点才可能被合成进采样场景：
+    // _composeSceneForGlass() 遍历 _sortedChildren，遇到 currentGlass 就 break，
+    // 所以排在所有玻璃之后的兄弟节点永远进不了任何场景。
+    // 实测 #bottom-bar 的 #controls（整条控制条，图标+文字一大堆）就排在 .lg-glass-shell
+    // 之后，却被无差别抓了一遍 html-to-image —— 单这一项就是 1294ms，
+    // 而且正好压在「点击进入」的主线程上。跳过它，视觉零变化。
+    const sorted = this._sortedChildren;
+    let lastGlassIdx = -1;
+    for (let i = 0; i < sorted.length; i++) {
+      if (this.glassSet.has(sorted[i])) lastGlassIdx = i;
+    }
+    let first = true;
+    for (let i = 0; i < sorted.length; i++) {
+      if (i > lastGlassIdx && lastGlassIdx >= 0) break;
+      const child = sorted[i];
       if (this.glassSet.has(child)) continue;
       const tag = child.tagName;
       if (tag === "CANVAS" || tag === "IMG" || tag === "VIDEO") continue;
       if (child.hasAttribute("data-dynamic")) continue;
+      // 同 _captureGlassContent：逐个子元素之间让出渲染，避免合并成一个长任务
+      if (!first) await yieldToRenderer();
+      first = false;
       try {
         await this.capture.captureElement(child, false);
       } catch (err) {
@@ -2430,7 +2559,11 @@ var LiquidGlass = class _LiquidGlass {
       this._updateGlassCanvasSize(el);
     }
     this._glassCache.clear();
-    for (const el of this.glassSet) this._glassContentDirty.add(el);
+    // 布局变了，「谁会采样谁」也跟着变，重新算一遍内容快照集合
+    this._refreshContentSampled();
+    for (const el of this.glassSet) {
+      if (this._contentSampled.has(el)) this._glassContentDirty.add(el);
+    }
     this._globalDirty = true;
   }
   _updateGlassCanvasSize(el) {
@@ -2464,7 +2597,8 @@ var LiquidGlass = class _LiquidGlass {
         this._updateGlassCanvasSize(el);
         this._glassCache.delete(el);
         this.capture.invalidateCache(el);
-        this._glassContentDirty.add(el);
+        this._refreshContentSampled();
+        if (this._contentSampled.has(el)) this._glassContentDirty.add(el);
         changed = true;
       }
     }
@@ -2581,7 +2715,13 @@ var LiquidGlass = class _LiquidGlass {
       this._fpsFrames = 0;
       this._fpsTime = now;
     }
-    if (this._checkGlassSizeChanges()) {
+    // 逐帧读 offsetWidth/offsetHeight 是强制布局：5 个根 × N 个玻璃，每帧几十次 reflow 读，
+    // 实测常驻吃掉 4~6% 主线程（用户真实会话剖析里每个 2s 桶 80~130ms），还把布局树搞脏、
+    // 连累同一帧的合成。尺寸变化本身不是高频事件，250ms 巡检足够；
+    // resize 走 _handleResize 的独立路径，仍是立即处理。
+    if (now - (this._lastSizeCheckAt || 0) >= 250) {
+      this._lastSizeCheckAt = now;
+      this._checkGlassSizeChanges();
     }
     if (this._glassContentDirty.size > 0 && !this._capturingGlassContent) {
       const targets = new Set(this._glassContentDirty);

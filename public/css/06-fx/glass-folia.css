@@ -1,0 +1,127 @@
+/* ===== Folia 世界的玻璃回退（CSS backdrop-filter） =====
+ *
+ * 为什么不用 WebGL 玻璃：Folia 的模组（Pixi / three）自驱自己的 rAF，主循环在另一个
+ * rAF 里 drawImage，拿到的是已被合成清空的缓冲（preserveDrawingBuffer:false）；
+ * DOM 歌词、贴纸、monet 的 img 底图又根本不在 canvas 里。
+ * 实测把主题光晕关掉后：classic（0 画布）与 hanabi（blit 71 次）的镜像都是 std=0 / colors=1，
+ * 差值全为 0 —— 玻璃一点 Folia 画面都折射不到。
+ *
+ * 这里改用合成器采样的 backdrop-filter：DOM 歌词、贴纸、canvas 全部参与合成，效果真实，
+ * 且不需要碰任何模组代码。代价是失去折射与色散，只有模糊 / 饱和 / 亮度三项可映射。
+ *
+ * 开关：06-liquidglass-folia-css.js 在 body 上切 .lg-folia-css，
+ * 并把 --lg-folia-filter / --lg-folia-bg 写到 :root。
+ * 必须晚于 fx-glass.css 引入，才能压住 .lg-active 的 backdrop-filter:none。 */
+
+/* 只隐藏 LiquidGlass 自己的 WebGL shell canvas。
+ * ⚠ 不要写成 `#bottom-bar.lg-active canvas` / `#fx-panel.lg-active canvas` 这种后代选择器：
+ *   它会把控制条里的频谱 canvas（#bar-spectrum-canvas）、面板里的火焰滑块 / 频谱 / 心形预览
+ *   一起 visibility:hidden（2026-11-10 实测：Folia 世界下控制条频谱整条消失）。
+ *   `.lg-glass-shell` 一定挂在宿主内部（01-liquidglass-config 的 ensureLiquidGlassBackdropShell），
+ *   这一条就覆盖面板、搜索框、底栏、首页卡片全部 shell。 */
+body.lg-folia-css .lg-host > .lg-glass-shell canvas,
+body.lg-folia-css .lg-glass-shell > canvas {
+  visibility: hidden !important;
+}
+
+body.lg-folia-css #fx-panel.lg-active,
+body.lg-folia-css #search-box.lg-active {
+  background: var(--lg-folia-bg, rgba(20, 22, 28, .42)) !important;
+  backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) !important;
+  -webkit-backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) !important;
+}
+
+/* ===== 首页卡片：按「液态玻璃」五层重做 =====
+ *
+ * 用户反馈 Folia 下右侧卡片「发黑」成了一块黑板。两个原因叠加：
+ *   1) 卡片的 WebGL canvas 是**直接子元素**（vendor 库 el.insertBefore(canvas, firstChild)），
+ *      上面那条 `.lg-glass-shell > canvas` 命中不到；实例停掉后 canvas 冻在最后一帧近黑画面，
+ *      垫在半透明底色下面 = 整块发黑。
+ *   2) 卡片原本和面板共用一个单色 `--lg-folia-bg`，没有边缘光、没有高光带 —— 玻璃的三层里缺两层。
+ *
+ * 配方取自 2026 年通行的 liquid glass 做法（iOS 26 风格）：
+ *   层0 backdrop-filter（模糊+饱和）→ 层1 低浓度冷色 tint（保住「能透」）
+ *   → 层2 镜面边缘光（inset 顶部 1.5px 白 + 底部回弹，靠「不对称」造出受光）
+ *   → 层3 斜向 sheen（135°，screen 混合）→ 层4 底部内阴影（厚度）。
+ *   暗底材质的关键是**低 alpha + 亮边缘**，不是把 tint 调灰或调白。 */
+body.lg-folia-css .home-card.lg-active > canvas,
+body.lg-folia-css .home-tile.lg-active > canvas,
+body.lg-folia-css .home-mosaic-cell.lg-active > canvas,
+body.lg-folia-css .listening-today-card.lg-active > canvas {
+  visibility: hidden !important;
+}
+
+body.lg-folia-css .home-card.lg-active,
+body.lg-folia-css .home-tile.lg-active,
+body.lg-folia-css .home-mosaic-cell.lg-active,
+body.lg-folia-css .listening-today-card.lg-active {
+  /* ⚠ 防「发灰」的关键在这一行参数关系里：
+   *   灰 = 无彩的中等亮度。中性 tint 盖得越厚、saturate 越低，越像一层灰膜。
+   *   所以 tint 只留 ~.22（背景能透上来），浓度交给 saturate(1.55) + brightness(1.28) 去「提亮并保色」。
+   *   参考值来自 iOS 26 那套做法：saturate 170~190%、tint 10~13%、靠镜面边光收边。 */
+  background:
+    linear-gradient(142deg, rgba(20, 30, 54, .28), rgba(14, 22, 40, .20) 55%, rgba(10, 16, 30, .16)),
+    radial-gradient(120% 90% at 6% 0%, rgba(120, 175, 255, .16), transparent 58%),
+    radial-gradient(64% 48% at 100% 0%, rgba(255, 140, 200, .08), transparent 64%),
+    radial-gradient(100% 80% at 100% 100%, rgba(0, 240, 220, .11), transparent 60%) !important;
+  backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) saturate(2.05) brightness(1.42) !important;
+  -webkit-backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) saturate(2.05) brightness(1.42) !important;
+  border-color: rgba(255, 255, 255, .13) !important;
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, .30),
+    /* 镜面顶边：整块效果的 80% 来自这一条 */
+    inset 0 1.5px 0 rgba(255, 255, 255, .66),
+    /* 侧边弱光：只给一点点，太多会像描边 */
+    inset 1px 0 0 rgba(255, 255, 255, .09),
+    inset -1px 0 0 rgba(255, 255, 255, .07),
+    /* 底缘回弹 + 内阴影：造厚度 */
+    inset 0 -1px 0 rgba(255, 255, 255, .12),
+    inset 0 -16px 32px rgba(0, 0, 0, .22) !important;
+}
+
+/* 斜向 sheen：光从左上来，screen 混合让它在暗底上真的「亮」而不是糊一层灰 */
+body.lg-folia-css .home-card.lg-active::before,
+body.lg-folia-css .home-tile.lg-active::before,
+body.lg-folia-css .home-mosaic-cell.lg-active::before {
+  background: linear-gradient(135deg,
+    rgba(255, 255, 255, .22) 0%,
+    rgba(255, 255, 255, .07) 18%,
+    rgba(255, 255, 255, .015) 38%,
+    transparent 52%) !important;
+  opacity: .9 !important;
+  mix-blend-mode: screen;
+}
+
+/* 底缘亮线保留，压到很淡：它是「玻璃片边缘」而不是描边 */
+body.lg-folia-css .home-card.lg-active::after,
+body.lg-folia-css .home-tile.lg-active::after,
+body.lg-folia-css .home-mosaic-cell.lg-active::after {
+  opacity: .55 !important;
+}
+
+body.lg-folia-css #bottom-bar.lg-active,
+body.lg-folia-css #bottom-bar.visible.lg-active {
+  background: rgba(0, 0, 0, .16) !important;
+  backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) !important;
+  -webkit-backdrop-filter: var(--lg-folia-filter, blur(22px) saturate(1.5) brightness(1)) !important;
+}
+
+/* 面板自带的渐变 / 噪点涂层：与 backdrop-filter 同时存在会叠加过重，减到一半 */
+body.lg-folia-css #fx-panel.lg-active::after {
+  opacity: .45;
+}
+
+/* 面板提示：告诉用户这个模式下哪些参数不参与渲染，避免以为控件坏了 */
+.fx-folia-glass-hint {
+  margin: 6px 0 2px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .62);
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .10);
+}
+.fx-folia-glass-hint[hidden] {
+  display: none !important;
+}

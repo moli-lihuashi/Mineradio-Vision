@@ -25,7 +25,7 @@ const KUGOU_SKIP_TESTS = new Set([
   'platform-account-sync-guard.test.js',     // ENOENT 05-playback/02-listen-stats.js
   'playback-audio-graph-recovery.test.js',   // 期望 audioGraphHealthy，酷狗版并入 09-queue-playback-core
   // playback-source-fallback-transaction.test.js — P2 已适配 09b/09d/11，已解绑
-  'qq-vip-entitlement.test.js',              // ENOENT 08-account/02-login-status.js
+  // qq-vip-entitlement.test.js — 2026-11-05 复核：单独运行 1/1 通过，已解绑
   'search-frontend-pagination.test.js',      // 期望 emptySearchHistoryState/searchProviderCanSearch 等，酷狗版未拆出
   'ui-default-theme-shelf-layer.test.js',    // ENOENT 00-state/04-fx-defaults.js + 04-shelf/01-manager-core.js
   'home-hero-mp4-platform-recommend.test.js', // 期望 home-platform-recommend-mask/MP4 入口 —— 用户裁定重复（FX 面板已有视频背景），Home 界面保持原样

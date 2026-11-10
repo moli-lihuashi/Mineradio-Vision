@@ -240,6 +240,9 @@ function togglePlayerQuickMenu(e) {
   document.body.classList.toggle('player-quick-menu-open', opening);
   syncPlayerQuickMenuTriggers(opening);
   if (opening) {
+    /* 皮肤弹层与播放选项是兄弟弹层，从这一侧打开时也要收掉那一块（另一侧在 07-fx/05e 里反着做）。
+       00b 在主波、05e 在延迟波，typeof 兜住加载时序。 */
+    if (typeof closeSkinPopover === 'function') closeSkinPopover();
     positionPlayerQuickMenuPopover();
     updateSleepTimerUi();
     updatePlayerQuickMenuUi();

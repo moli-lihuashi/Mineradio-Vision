@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>雾笺 · 独立验画面</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
+  #stage { position: absolute; inset: 0; }
+  #hud { position: absolute; left: 12px; top: 12px; z-index: 5; color: #9fe1cb;
+         font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="hud"></div>
+<script type="module">
+import { NebbiaRuntime } from './runtime.mjs';
+
+/* 造一段歌词：每句 4 秒，逐字均匀分布（真机上是 LRC 逐字时间轴，这里够验画面）。
+ * ?t=秒 直接定位；?lines=N 改句数。 */
+const Q = new URLSearchParams(location.search);
+const seek = Number(Q.get('t') ?? 0);
+const COUNT = Number(Q.get('lines') ?? 12);
+const TEXT = [
+  '雨点落在车窗上',
+  '把整座城市揉成一片光',
+  '我用指尖写下你的名字',
+  '字被雾一点点吃掉',
+  '车上没有人说话',
+  '只有引擎在低低地响',
+  '窗外霓虹一盏一盏往后退',
+  '像谁把夜晚慢慢擦掉',
+  '玻璃上全是水',
+  '写下去就看不见了',
+  '那就再写一遍',
+  '写到雨停为止',
+];
+const lines = [];
+for (let i = 0; i < COUNT; i++) {
+  const fullText = TEXT[i % TEXT.length];
+  const startTime = 4 + i * 4.5;
+  const chars = Array.from(fullText);
+  const per = 3.4 / Math.max(1, chars.length);
+  const words = [];
+  const wordText = [];
+  let acc = '';
+  for (const ch of chars) {
+    acc += ch;
+    if (acc.length >= 2) { wordText.push(acc); acc = ''; }
+  }
+  if (acc) wordText.push(acc);
+  let k = 0;
+  for (const w of wordText) {
+    const n = Array.from(w).length;
+    words.push({ text: w, startTime: startTime + k * per, endTime: startTime + (k + n) * per });
+    k += n;
+  }
+  lines.push({ fullText, startTime, endTime: startTime + 4, words });
+}
+
+const theme = { accentColor: '#7fd4ff', secondaryColor: '#ff9ec4', primaryColor: '#ffe9b0', backgroundColor: '#05070a' };
+
+const stage = document.getElementById('stage');
+const hud = document.getElementById('hud');
+let now = seek;
+const clock = { get: () => now };
+
+const runtime = new NebbiaRuntime({
+  host: stage,
+  time: clock,
+  fontFamily: '"Kaiti SC", KaiTi, STKaiti, "Noto Serif SC", serif',
+  fontWeight: 600,
+});
+runtime.setTheme(theme);
+runtime.setTuning(window.__nebbiaTuning = {
+  appear: ['write', 'fade'], fade: ['fog'], layouts: ['ribbon', 'lines2', 'lines3', 'cross', 'pillar', 'header', 'badge', 'columns', 'orbit'],
+  behind: 'night', glass: 'rain', scenery: ['spot', 'buildings', 'lights', 'cars', 'road'], rain: 'slant',
+  credits: true, jitter: 0.6, warp: 0.6, mist: 0.75, hold: 1.2, refog: 4,
+  strokeWidth: 0.09, writeSpeed: 1, doodle: 0, busSpeed: 1, neon: 1,
+  spot: 0.5, spotX: 0.8, rainHit: 1, rainBig: 1, bump: 1,
+});
+runtime.setSong({ lines, seed: 'probe', title: '雨夜车窗外', artist: 'Mineradio' });
+
+if (seek > 0) { now = seek; }
+const t0 = performance.now();
+let frozen = seek > 0;
+
+function loop() {
+  const dt = (performance.now() - t0) / 1000;
+  if (!frozen) now = seek + dt;
+  const p = runtime.probe();
+  hud.textContent = `t=${now.toFixed(2)}  ready=${p.ready}  first=${p.firstDrawn}\n`
+    + `laid=${p.laid}  chars=${p.chars}  drops=${p.drops}  field=${p.fieldDrops}\n`
+    + `strokes=${p.strokes.hits}/${p.strokes.loaded} waiting=${p.strokes.waiting}`;
+  requestAnimationFrame(loop);
+}
+loop();
+
+window.__nebbiaProbe = () => runtime.probe();
+window.__nebbiaSeek = (t) => { frozen = true; now = t; runtime.requestFrame(); };
+</script>
+</body>
+</html>

@@ -1173,3 +1173,52 @@ test('stale setInteractive after disable does not poison the disabled phase', as
   assert.equal(status.phase, 'disabled');
   assert.equal(status.lastError, '');
 });
+
+/* 透明主窗口的 WS_EX_LAYERED 在挂载 WorkerW 期间会被原生层临时去掉（否则完全不出画面），
+ * detach 必须把这个原值带回去还原，否则退出壁纸模式后玻璃圆角永远是矩形。 */
+test('passive attach keeps the desktop host kind and hands the stripped layered ex-style to detach', async () => {
+  const win = new FakeBrowserWindow();
+  const { runtime, calls } = makeRuntime({
+    attachNative: async (input) => ({
+      ok: true,
+      targetWindowId: String(input.hwnd),
+      parentWindowId: '263022',
+      parentClassName: 'WorkerW',
+      hostKind: 'workerw-sibling',
+      exStyleBefore: '136839200',
+    }),
+  });
+
+  await runtime.enable(win, { interactive: false, reason: 'passive-layered-enable' });
+  const status = runtime.getStatus('passive-layered-status');
+  assert.equal(status.parentClassName, 'WorkerW');
+  assert.equal(runtime.attachment.hostKind, 'workerw-sibling',
+    '宿主类型要记进 attachment，排查「挂哪去了」全靠它');
+  assert.equal(runtime.attachment.exStyleBefore, '136839200');
+
+  await runtime.disable('passive-layered-disable');
+  const detachInput = calls.detach[calls.detach.length - 1];
+  assert.ok(detachInput, 'disable 必须真的走 native detach');
+  assert.equal(detachInput.exStyleBefore, '136839200',
+    'detach 必须带上挂载前的 ex-style，否则分层合成（玻璃圆角）回不来');
+});
+
+test('passive attach tolerates an ack without host diagnostics instead of failing closed', async () => {
+  const win = new FakeBrowserWindow();
+  const { runtime, calls } = makeRuntime({
+    attachNative: async (input) => ({
+      ok: true,
+      targetWindowId: String(input.hwnd),
+      parentWindowId: '263022',
+      parentClassName: 'WorkerW',
+    }),
+  });
+
+  await runtime.enable(win, { interactive: false, reason: 'legacy-ack-enable' });
+  assert.equal(runtime.attachment.hostKind, '');
+  assert.equal(runtime.attachment.exStyleBefore, '');
+
+  await runtime.disable('legacy-ack-disable');
+  const detachInput = calls.detach[calls.detach.length - 1];
+  assert.equal(detachInput.exStyleBefore, '', '没有原值时不能伪造一个 ex-style 去覆盖窗口属性');
+});

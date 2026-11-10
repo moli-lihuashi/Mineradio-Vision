@@ -55,12 +55,24 @@ async function exportLoginSessionPackQr() {
     showToast('请在桌面版中使用二维码同步');
     return;
   }
-  var password = window.prompt('设置同步口令（另一台电脑导入时需要）');
+  // Electron 不支持 window.prompt（直接抛异常），口令统一走应用内异步输入弹窗
+  var password = null;
+  try {
+    if (typeof promptPasswordWithConfirm !== 'function') {
+      showToast('当前版本不支持口令输入');
+      return;
+    }
+    password = await promptPasswordWithConfirm({
+      title: '设置同步口令',
+      message: '另一台电脑导入同步链接时需要输入同一口令',
+      placeholder: '同步口令'
+    });
+  } catch (e) {
+    console.warn('[LoginPackQrExport] password prompt failed:', e);
+    showToast('口令输入失败');
+    return;
+  }
   if (password == null) return;
-  if (!String(password).trim()) { showToast('口令不能为空'); return; }
-  var confirmPassword = window.prompt('再输入一次口令确认');
-  if (confirmPassword == null) return;
-  if (String(password) !== String(confirmPassword)) { showToast('两次口令不一致'); return; }
   try {
     var result = await api.startLoginPackQrSync({
       password: String(password),
@@ -96,12 +108,34 @@ async function importLoginSessionPackFromQr() {
     showToast('请在桌面版中使用链接导入');
     return;
   }
-  var url = window.prompt('粘贴另一台电脑的同步链接（http://...）');
-  if (url == null) return;
-  if (!String(url).trim()) { showToast('链接不能为空'); return; }
-  var password = window.prompt('输入同步口令');
+  // 链接 + 口令两个输入都走应用内弹窗；任一步取消即整体放弃，不产生副作用
+  var url = null;
+  var password = null;
+  try {
+    if (typeof openAppPromptModal !== 'function') {
+      showToast('当前版本不支持链接导入输入');
+      return;
+    }
+    url = await openAppPromptModal({
+      title: '链接导入登录包',
+      message: '粘贴另一台电脑的同步链接（http://...）',
+      placeholder: 'http://192.168.1.10:12345/login-pack',
+      okText: '下一步',
+      allowEmpty: false,
+      maxLength: 2048
+    });
+    if (url == null) return;
+    password = await promptPasswordOnce({
+      title: '输入同步口令',
+      message: '请输入发起同步时设置的口令',
+      placeholder: '同步口令'
+    });
+  } catch (e) {
+    console.warn('[LoginPackQrImport] input prompt failed:', e);
+    showToast('输入失败，已取消链接导入');
+    return;
+  }
   if (password == null) return;
-  if (!String(password).trim()) { showToast('口令不能为空'); return; }
   try {
     var result = await api.importLoginPackFromQrUrl({
       url: String(url).trim(),

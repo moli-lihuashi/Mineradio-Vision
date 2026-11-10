@@ -153,6 +153,9 @@ function applyCustomBackground() {
     video.muted = true;
     video.loop = true;
     video.playsInline = true;
+    /* Folia 世界把壁纸整块盖住：不拉起播放（退出世界时统一恢复），但 src 照常设置，
+     * 退出后恢复逻辑能看到正确的视频。 */
+    if (typeof foliaWorldActive === 'function' && foliaWorldActive()) return;
     var p = video.play();
     if (p && p.catch) p.catch(function(){});
   }

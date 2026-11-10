@@ -274,6 +274,43 @@ async function defaultParseMetadata(filePath) {
   return module.parseFile(filePath, { duration: true, skipCovers: false });
 }
 
+// ReplayGain track gain（dB）。music-metadata 在不同版本里可能给 number / {dB} / 字符串，
+// 部分容器还会把 REPLAYGAIN_TRACK_GAIN 留在 native tag 里，这里统一兼容。
+function parseReplayGainDb(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(-24, Math.min(24, value));
+  if (value && typeof value === 'object') {
+    if (Number.isFinite(value.dB)) return Math.max(-24, Math.min(24, value.dB));
+    if (Number.isFinite(value.gain)) return Math.max(-24, Math.min(24, value.gain));
+  }
+  if (typeof value === 'string') {
+    const matched = value.match(/-?\d+(?:\.\d+)?/);
+    if (matched) {
+      const parsed = Number(matched[0]);
+      if (Number.isFinite(parsed)) return Math.max(-24, Math.min(24, parsed));
+    }
+  }
+  return null;
+}
+
+function readReplayGainTrackDb(metadata) {
+  const common = metadata && metadata.common ? metadata.common : {};
+  const format = metadata && metadata.format ? metadata.format : {};
+  let gain = parseReplayGainDb(common.replayGainTrackGain);
+  if (gain === null) gain = parseReplayGainDb(format.replayGainTrackGain);
+  if (gain === null) {
+    const native = metadata && metadata.native ? metadata.native : {};
+    for (const tagType of Object.keys(native)) {
+      for (const tag of Array.isArray(native[tagType]) ? native[tagType] : []) {
+        if (!/replaygain[_ ]?track[_ ]?gain/i.test(String(tag && tag.id || ''))) continue;
+        gain = parseReplayGainDb(tag.value);
+        if (gain !== null) break;
+      }
+      if (gain !== null) break;
+    }
+  }
+  return gain;
+}
+
 async function buildLrcSidecarIndex(entries) {
   const directories = Array.from(new Set(entries.map((entry) => path.dirname(entry.path))));
   const maps = new Map();
@@ -336,6 +373,7 @@ class LocalMusicLibrary {
           coverMime: cleanText(source.coverMime, '', 100),
           lyric: cleanText(source.lyric, '', MAX_LYRIC_BYTES),
           lyricSource: source.lyricSource === 'sidecar' ? 'sidecar' : (source.lyricSource === 'embedded' ? 'embedded' : ''),
+          replayGainTrackDb: parseReplayGainDb(source.replayGainTrackDb),
           importedAt: Math.max(0, Number(source.importedAt) || 0),
         };
         nextRecords.set(id, record);
@@ -366,6 +404,7 @@ class LocalMusicLibrary {
       cover: coverAvailable ? localMediaUrl('cover', record.id, record.revision, this.mediaToken) : '',
       hasLyric: !!record.lyric,
       lyricSource: record.lyricSource || '',
+      replayGainTrackDb: parseReplayGainDb(record.replayGainTrackDb),
     };
   }
 
@@ -522,6 +561,9 @@ class LocalMusicLibrary {
         coverMime: cover.mime,
         lyric,
         lyricSource,
+        replayGainTrackDb: metadataError && previous
+          ? parseReplayGainDb(previous.replayGainTrackDb)
+          : readReplayGainTrackDb(metadata),
         importedAt: Date.now(),
       },
       metadataError,

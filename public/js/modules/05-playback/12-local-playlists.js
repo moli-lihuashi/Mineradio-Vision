@@ -18,11 +18,23 @@ function readLocalPlaylists() {
   }
 }
 
+function localPlaylistCapacityExceededToast(extra) {
+  if (typeof showToast !== 'function') return;
+  showToast('本地歌单已达上限 ' + LOCAL_PLAYLIST_MAX_COUNT + ' 个' + (extra || '') + '，原有歌单不会被删除');
+}
+// 写入即「全量落盘」：绝不在这里静默截断。
+// 旧实现 list.slice(0, 50) 会让第 51 个新歌单把最早的一个从存储里挤掉，
+// 而调用方拿到的仍是成功——数据静默丢失。容量判断统一放在新增/导入入口。
 function writeLocalPlaylists(list) {
+  if (!Array.isArray(list)) return false;
+  if (list.length > LOCAL_PLAYLIST_MAX_COUNT) {
+    localPlaylistCapacityExceededToast('，本次新增未保存');
+    return false;
+  }
   try {
     localStorage.setItem(LOCAL_PLAYLIST_STORE_KEY, JSON.stringify({
       version: 1,
-      playlists: list.slice(0, LOCAL_PLAYLIST_MAX_COUNT),
+      playlists: list,
     }));
     return true;
   } catch (e) {
@@ -57,9 +69,17 @@ function getLocalPlaylistById(id) {
   return readLocalPlaylists().find(function (pl) { return pl.id === String(id || ''); }) || null;
 }
 
-function createLocalPlaylist(name, songs) {
+function createLocalPlaylist(name, songs, opts) {
+  opts = opts || {};
   var cleanName = String(name || '').trim().slice(0, 40) || '我的本地歌单';
   var list = readLocalPlaylists();
+  // 容量上限：明确拒绝，而不是先 unshift 再靠 slice 把老歌单挤掉
+  if (list.length >= LOCAL_PLAYLIST_MAX_COUNT) {
+    if (!opts.quiet && typeof showToast === 'function') {
+      showToast('本地歌单已达上限 ' + LOCAL_PLAYLIST_MAX_COUNT + ' 个，请先删除一个再新建');
+    }
+    return null;
+  }
   var base = cleanName;
   var suffix = 2;
   while (list.some(function (pl) { return pl.name === cleanName; })) {
@@ -116,17 +136,30 @@ function exportLocalPlaylistPayload(id) {
 }
 
 // 导入：接受单个歌单对象或数组（本应用导出格式，或含 name+songs 的通用 JSON）
+// 返回 { imported, skipped, limitReached, capacity }：
+// 容量满之后不再创建，也不覆盖/删除已有歌单，调用方据此给出准确的成功数与上限提示。
 function importLocalPlaylistsFromPayload(payload) {
   var items = Array.isArray(payload) ? payload : [payload];
-  var imported = 0;
+  var result = { imported: 0, skipped: 0, limitReached: false, capacity: LOCAL_PLAYLIST_MAX_COUNT };
   items.forEach(function (item) {
     if (!item || !Array.isArray(item.songs)) return;
     var songs = item.songs.filter(function (s) { return s && (s.hash || s.id) && (s.name || s.title); });
     if (!songs.length) return;
-    var pl = createLocalPlaylist(item.name || '导入的歌单', songs);
-    if (pl) imported += 1;
+    if (readLocalPlaylists().length >= LOCAL_PLAYLIST_MAX_COUNT) {
+      result.limitReached = true;
+      result.skipped += 1;
+      return;
+    }
+    var pl = createLocalPlaylist(item.name || '导入的歌单', songs, { quiet: true });
+    if (pl) {
+      result.imported += 1;
+    } else {
+      // 写盘失败（容量 / 存储空间）也算未导入，绝不谎报成功
+      result.limitReached = result.limitReached || readLocalPlaylists().length >= LOCAL_PLAYLIST_MAX_COUNT;
+      result.skipped += 1;
+    }
   });
-  return imported;
+  return result;
 }
 
 // ===== 详情区操作：重命名 / 导出 / 导入 =====
@@ -193,9 +226,19 @@ function pickLocalPlaylistImportFile() {
           if (typeof showToast === 'function') showToast('导入失败：不是有效的 JSON 文件');
           return;
         }
-        var n = importLocalPlaylistsFromPayload(payload);
+        var result = importLocalPlaylistsFromPayload(payload);
         if (typeof renderUserPlaylistsList === 'function') renderUserPlaylistsList({ reset: true });
-        if (typeof showToast === 'function') showToast(n ? ('已导入 ' + n + ' 个本地歌单') : '导入失败：文件里没有可识别的歌单');
+        if (typeof showToast === 'function') {
+          if (result.imported && result.limitReached) {
+            showToast('已导入 ' + result.imported + ' 个本地歌单，' + result.skipped + ' 个因歌单数量上限（' + result.capacity + '）未导入');
+          } else if (result.imported) {
+            showToast('已导入 ' + result.imported + ' 个本地歌单');
+          } else if (result.limitReached) {
+            showToast('本地歌单已达上限 ' + result.capacity + ' 个，请先删除一个再导入');
+          } else {
+            showToast('导入失败：文件里没有可识别的歌单');
+          }
+        }
       };
       reader.readAsText(file, 'utf8');
       _localImportInput.value = '';

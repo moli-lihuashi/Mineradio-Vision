@@ -216,13 +216,18 @@ async function retryNeteaseSourceMatchPlayback(song, data, idx, token, opts, req
   }
   if (token !== trackSwitchToken) return false;
   if (!nextData || !nextData.url || !nextData.sourceMatch) return null;
+  // 换候选是长异步：期间用户可能删掉前面的队列项或随机重排，
+  // 捕获的 idx 会指向别的歌（选中 C 却装入 B 的候选音源）。
+  // 起播前按队列项身份重新定位，目标已消失就直接中止。
+  var retryIdx = typeof queueIndexForItem === 'function' ? queueIndexForItem(song) : playQueue.indexOf(song);
+  if (retryIdx < 0) return false;
   var retryOpts = Object.assign({}, opts, {
     preResolvedPlaybackData: nextData,
     neteaseSourceMatchRetryDepth: retryDepth + 1,
     qualityOverride: requestedQuality,
     suppressPlayFailureNotice: true,
   });
-  var retryStarted = await playQueueAt(idx, retryOpts);
+  var retryStarted = await playQueueAt(retryIdx, retryOpts);
   if (token !== trackSwitchToken) return false;
   return retryStarted === true;
 }

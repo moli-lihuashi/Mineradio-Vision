@@ -228,7 +228,13 @@ async function retryQQPlaybackWithCompatibleQuality(song, idx, token, opts, data
   if (!opts.startupAutoplay) showSourceFallbackNotice('QQ 音质自动兼容', '当前音质启动失败，正在切到 ' + playbackQualityLabel(nextQuality, 'qq') + '。');
   var retryResumeAt = opts.resumeAt;
   if (retryResumeAt == null && opts.startupAutoplay && pendingPlaybackResumeAt > 0) retryResumeAt = pendingPlaybackResumeAt;
-  var retryStarted = await playQueueAt(idx, Object.assign({}, opts, {
+  // 重试同样是一次「异步之后再动播放器」：取址期间用户可能删掉前面的队列项
+  // （目标整体前移）或随机重排，捕获的 idx 会指向别的歌 —— 按队列项身份重新定位，
+  // 目标已不在队列里就直接中止，绝不用旧索引起播别人的歌。
+  var retryIdx = typeof queueIndexForItem === 'function' ? queueIndexForItem(song) : (playQueue.indexOf(song));
+  if (retryIdx < 0) return false;
+  if (token !== trackSwitchToken) return false;
+  var retryStarted = await playQueueAt(retryIdx, Object.assign({}, opts, {
     qualityOverride: nextQuality,
     qqQualityTried: tried,
     resumeAt: retryResumeAt,
@@ -322,6 +328,30 @@ function isSameTitleArtist(source, candidate) {
   if (!a.length || !b.length) return false;
   return a.some(function (name) { return b.indexOf(name) >= 0; });
 }
+// 括号里的「版本标识」：氛围版 / Live / 伴奏 / DJ版 / 钢琴版 等。
+// normalizeMatchText 会把整个括号删掉，导致「歌（氛围版）」与「歌」归一后同名 ——
+// 换源时会把原版当成同名同歌手版本播出去（用户侧＝点 A 播 B）。
+// 这里只做大小写与标点归一，保留括号内容用于比较。
+function matchTitleDecoration(text) {
+  var parts = [];
+  var pattern = /[（(【\[]([^）)】\]]*)[）)】\]]/g;
+  var raw = String(text || '');
+  var matched;
+  while ((matched = pattern.exec(raw))) {
+    var token = String(matched[1] || '')
+      .toLowerCase()
+      .replace(/[\s·・\-—_.,，。:：'"“”‘’/\\|]+/g, '');
+    if (token) parts.push(token);
+  }
+  return parts.sort().join('|');
+}
+// 换源专用的严格同名判定：在宽松同名之上，要求版本标识完全一致。
+// 不给 isSameTitleArtist 本身加严 —— 它还被歌词匹配与搜索打分共用，
+// 收紧会让「氛围版」找不到歌词。
+function isSameTitleArtistStrict(source, candidate) {
+  if (!isSameTitleArtist(source, candidate)) return false;
+  return matchTitleDecoration(source.name || source.title) === matchTitleDecoration(candidate.name || candidate.title);
+}
 var SOURCE_FALLBACK_SEARCH_TIMEOUT_MS = 6500;
 var SOURCE_FALLBACK_DIRECT_PROVIDERS = ['netease', 'qq', 'kugou'];
 var SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS = 20000;
@@ -333,9 +363,13 @@ var sourceFallbackBudgetTimeoutResult = {};
 
 function sourceFallbackRecoveryContentKey(song) {
   if (!song) return '';
-  var title = normalizeMatchText(song.name || song.title || '');
+  var rawTitle = song.name || song.title || '';
+  var title = normalizeMatchText(rawTitle);
+  // 版本标识必须进 key：否则「歌（氛围版）」和「歌」会被当成同一项去重，
+  // 换源时会把其中一首直接跳过。
+  var decoration = matchTitleDecoration(rawTitle);
   var artists = artistNameParts(song).sort().join(',');
-  if (title && artists) return title + '|' + artists;
+  if (title && artists) return title + (decoration ? '{' + decoration + '}' : '') + '|' + artists;
   return sourceFallbackSongKey(song);
 }
 function sourceFallbackRecoveryFromOptions(opts) {
@@ -385,9 +419,20 @@ function beginSourceFallbackPlaybackInvocation(opts) {
 function ensureSourceFallbackRecovery(opts, song, idx, token) {
   var recovery = sourceFallbackRecoveryFromOptions(opts);
   if (recovery) return sourceFallbackRecoveryIdentityActive(recovery) ? recovery : null;
+  var songKey = sourceFallbackRecoveryContentKey(song);
+  /* 反复点同一首歌：复用仍在进行中的那次换源，不要 cancel 后重开一轮。
+   * 每轮换源都要重跑封面解码 / canvas / 三张 three.js 纹理 / 歌词准备 / 队列与歌单架重建，
+   * 连点几次就把渲染进程原生内存打穿 —— render-process-gone 之后自动重载，用户侧就是「卡死重启」。
+   * 复用时 skipDepth / queueAdvances 继续累计，到上限后正常终局，不会无限重建。 */
+  if (songKey && activeSourceFallbackRecovery
+      && sourceFallbackRecoveryIdentityActive(activeSourceFallbackRecovery)
+      && activeSourceFallbackRecovery.activeSongKey === songKey) {
+    return activeSourceFallbackRecovery;
+  }
   cancelSourceFallbackRecovery('new-recovery');
   recovery = {
     id: 'source-fallback-' + Date.now() + '-' + (++sourceFallbackRecoverySerial),
+    activeSongKey: songKey,
     startedAt: Date.now(),
     deadlineAt: Date.now() + SOURCE_FALLBACK_RECOVERY_TIMEOUT_MS,
     rootIndex: idx,
@@ -402,7 +447,6 @@ function ensureSourceFallbackRecovery(opts, song, idx, token) {
     cancelled: false,
     completed: false
   };
-  var songKey = sourceFallbackRecoveryContentKey(song);
   if (songKey) recovery.visitedSongKeys[songKey] = true;
   activeSourceFallbackRecovery = recovery;
   return recovery;
@@ -434,9 +478,11 @@ function settleExpiredSourceFallbackPlayback(idx, token, opts, message) {
   if (opts && opts.fallbackOriginalSong && opts.fallbackCandidateSong) {
     restoreSourceFallbackQueueItem(idx, opts.fallbackOriginalSong, opts.fallbackCandidateSong, token);
   }
+  // 必须用调用方传入的 idx / token 结算：这里已经过若干次 await，
+  // 全局 currentIdx / trackSwitchToken 可能已经指向另一首歌，会把终止态打到错误项上。
   return settleSourceFallbackTerminal(
-    currentIdx,
-    trackSwitchToken,
+    idx,
+    token,
     message || '自动恢复已达到时间上限，请稍后手动重试。',
     sourceFallbackRecoveryFailureOptions(opts) || { sourceFallbackRecovery: recovery }
   );
@@ -578,7 +624,9 @@ async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
     if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
     for (var i = 0; list && i < list.length; i++) {
       if (typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(identity.source, list[i], target)) continue;
-      if (isSameTitleArtist(identity.source, list[i])) {
+      // 换源必须用严格同名：版本标识（氛围版 / Live / 伴奏…）不一致就不算同一首，
+      // 否则「歌（氛围版）」会被原版顶替播放。
+      if (isSameTitleArtistStrict(identity.source, list[i])) {
         var strictHit = cloneSong(list[i]);
         strictHit.autoFallbackConfidence = 'same-title-artist';
         return strictHit;
@@ -603,16 +651,47 @@ function sourceFallbackSongKey(song) {
   if (typeof queueItemKey === 'function') return queueItemKey(song);
   return [songProviderKey(song), song.id || song.mid || song.hash || '', song.name || song.title || '', song.artist || ''].join(':');
 }
+// 队列项身份定位：换源搜索是长异步，等待期间用户可能删项 / 随机重排，
+// 捕获的 idx 会指向别的歌。写回队列、回滚、重试、结算之前必须重新定位，
+// 优先对象引用（精确，不怕同名重复），其次内容 key（队列被重建过时兜底）。
+function sourceFallbackQueueIndexFor(songs) {
+  if (!playQueue || !playQueue.length || !songs) return -1;
+  var list = Array.isArray(songs) ? songs : [songs];
+  for (var r = 0; r < list.length; r++) {
+    var ref = list[r];
+    if (!ref) continue;
+    var byRef = playQueue.indexOf(ref);
+    if (byRef >= 0) return byRef;
+  }
+  for (var k = 0; k < list.length; k++) {
+    var key = sourceFallbackSongKey(list[k]);
+    if (!key) continue;
+    for (var i = 0; i < playQueue.length; i++) {
+      if (sourceFallbackSongKey(playQueue[i]) === key) return i;
+    }
+  }
+  return -1;
+}
+// 队列项已不在队列里（被删除 / 被整体替换）：放弃本次换源，绝不写到别的槽位
+function abandonSourceFallbackForMissingItem(recovery, reason) {
+  if (recovery && typeof cancelSourceFallbackRecovery === 'function') {
+    cancelSourceFallbackRecovery(reason || 'queue-item-missing');
+  }
+  return false;
+}
 function restoreSourceFallbackQueueItem(idx, originalSong, candidateSong, expectedToken) {
-  if (!originalSong || idx < 0 || idx >= playQueue.length) return false;
+  if (!originalSong) return false;
   if (expectedToken != null && expectedToken !== trackSwitchToken) return false;
-  if (currentIdx !== idx || sourceFallbackSongKey(playQueue[idx]) !== sourceFallbackSongKey(candidateSong)) return false;
-  playQueue[idx] = hydrateCustomCover(originalSong);
-  if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(playQueue[idx]);
+  // 旧 idx 只能当提示：真正要回滚的位置必须按候选/原曲身份重新定位
+  var targetIdx = sourceFallbackQueueIndexFor([candidateSong, originalSong]);
+  if (targetIdx < 0) return false;
+  if (currentIdx !== targetIdx || sourceFallbackSongKey(playQueue[targetIdx]) !== sourceFallbackSongKey(candidateSong)) return false;
+  playQueue[targetIdx] = hydrateCustomCover(originalSong);
+  if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(playQueue[targetIdx]);
   var title = document.getElementById('thumb-title');
   var artist = document.getElementById('thumb-artist');
-  if (title) title.textContent = playQueue[idx].name || playQueue[idx].title || '';
-  if (artist) artist.textContent = playQueue[idx].artist || '';
+  if (title) title.textContent = playQueue[targetIdx].name || playQueue[targetIdx].title || '';
+  if (artist) artist.textContent = playQueue[targetIdx].artist || '';
   safeRenderQueuePanel('source-fallback-rollback', { scrollCurrent: miniQueueOpen });
   safeShelfRebuild('source-fallback-rollback');
   return true;
@@ -653,7 +732,7 @@ function settleSourceFallbackTerminal(idx, token, message, opts) {
   playing = false;
   setPlayIcon(false);
   if (typeof syncPlaybackStateFromAudioEvent === 'function') syncPlaybackStateFromAudioEvent('source-fallback-terminal');
-  if (!opts.silent) showSourceFallbackNotice('当前没有可用音源', message || '当前歌曲不可播放，并且没有其它已登录、已授权的音源可接管。');
+  if (!opts.silent) showSourceFallbackNotice('当前没有可用音源', message || '当前歌曲不可播放，并且没有其它可用音源能接管（可能未登录或尚未就绪）。');
   return false;
 }
 function markQueueItemPlaybackFailed(idx, recovery) {
@@ -715,6 +794,18 @@ async function skipFailedQueueItem(idx, token, message, opts) {
   if (playQueue.length <= 1) {
     return settleSourceFallbackTerminal(idx, token, message || '当前歌曲不可播放，队列里没有其他歌曲。', terminalOpts);
   }
+  /* 用户明确点选这一首：换源已把所有平台都试过，仍然没有同一版本。
+   * 此时不能自动跳下一首 —— 用户点的和听到的必须是同一首，跳走就是「点 A 播 B」。
+   * 停在当前项并说明原因，下一首交给用户自己点。
+   * 自动连播（没带 userPick）仍保持原有「跳过受限歌曲继续播」的行为。 */
+  if (opts.userPick) {
+    return settleSourceFallbackTerminal(
+      idx,
+      token,
+      '这首歌在当前音源拿不到播放地址，其它平台也没有同一版本（歌手与版本标识都一致）。已停在这里，可手动选择下一首。',
+      terminalOpts
+    );
+  }
   if (recentQueuePlaybackFailureCount(recovery) >= Math.min(MAX_RECENT_AUTO_QUEUE_FAILURES, playQueue.length)) {
     return settleSourceFallbackTerminal(idx, token, '', terminalOpts);
   }
@@ -725,7 +816,7 @@ async function skipFailedQueueItem(idx, token, message, opts) {
   if (nextIdx < 0) {
     return settleSourceFallbackTerminal(idx, token, '已尝试绕开受限歌曲，当前队列没有新的可播放项。', terminalOpts);
   }
-  if (!opts.silent) showSourceFallbackNotice('已跳过受限歌曲', message || '未找到同名同歌手的另一个平台版本，正在播放下一首。');
+  if (!opts.silent) showSourceFallbackNotice('已跳过受限歌曲', message || '未找到同一版本（歌手与版本标识一致）的其它平台音源，正在播放下一首。');
   recovery.queueAdvances++;
   var nextRecoveryKey = sourceFallbackRecoveryContentKey(playQueue[nextIdx]);
   if (nextRecoveryKey) recovery.visitedSongKeys[nextRecoveryKey] = true;
@@ -737,7 +828,9 @@ async function skipFailedQueueItem(idx, token, message, opts) {
   var nextStarted = await playQueueAt(nextIdx, nextPlaybackOpts);
   if (nextStarted === true) completeSourceFallbackRecovery(recovery);
   else if (sourceFallbackRecoveryIdentityActive(recovery) && !sourceFallbackRecoveryCanContinue(recovery)) {
-    return settleSourceFallbackTerminal(currentIdx, trackSwitchToken, '自动恢复已达到时间上限，请稍后手动重试。', terminalOpts);
+    // 用本次换源的 idx / token 结算，不用全局 currentIdx / trackSwitchToken：
+    // await 期间用户可能已经切到别的歌，全局值会把终止态打到错误项上。
+    return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', terminalOpts);
   }
   return nextStarted === true;
 }
@@ -757,16 +850,31 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
   var recovery = ensureSourceFallbackRecovery(opts, song, idx, token);
   if (!recovery) return false;
   opts = Object.assign({}, opts, { sourceFallbackRecovery: recovery });
+  /* 队列项身份：整个换源过程以这个队列项为中心。
+   * 搜索 / 取址都是长异步，等待期间用户可能删掉前面的歌或点「随机」，
+   * 捕获的 idx 会指向别的曲目 —— 写回候选、回滚、结算都必须重新定位。 */
+  var queueItemSong = song;
+  var committedCandidate = null;
+  function liveQueueIndex() {
+    return sourceFallbackQueueIndexFor([queueItemSong, committedCandidate]);
+  }
+  function settleFallback(message) {
+    var settleIdx = liveQueueIndex();
+    if (settleIdx < 0) return abandonSourceFallbackForMissingItem(recovery, 'queue-item-missing');
+    return settleSourceFallbackTerminal(settleIdx, token, message, skipOpts);
+  }
   var skipPlaybackOpts = sourceFallbackQueuePlaybackOptions(opts, recovery);
   skipPlaybackOpts.startupAutoplay = true;
   if (opts.resumeAt != null) skipPlaybackOpts.resumeAt = opts.resumeAt;
   var skipOpts = {
     silent: !!recovery.silent,
     playbackOpts: skipPlaybackOpts,
-    sourceFallbackRecovery: recovery
+    sourceFallbackRecovery: recovery,
+    // 用户点选的歌换源无果时停住而不是跳下一首（详见 skipFailedQueueItem）
+    userPick: !!(opts && opts.userPick)
   };
   if (!sourceFallbackRecoveryCanContinue(recovery)) {
-    return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+    return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
   }
   if (!alternateProviders.length) {
     // 没有任何已登录/已授权的音源可接管时，不再走 skipFailedQueueItem：
@@ -778,21 +886,16 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
     // 它会置 terminal、清 activeSourceFallbackRecovery，并回收 album-gapless / cuefield / watchdog / 音频句柄。
     // 只做 hideLoading 之类的局部收尾会留下「未结算的 recovery」，
     // 后续换源会被这份旧事务挡住（tests/playback-source-fallback-transaction.test.js 覆盖此契约）。
-    return settleSourceFallbackTerminal(
-      idx,
-      token,
-      '当前歌曲不可播放，并且没有其它已登录、已授权的音源可接管。',
-      skipOpts
-    );
+    return settleFallback('当前歌曲不可播放，并且没有其它可用音源能接管（可能未登录或尚未就绪）。');
   }
   if (!opts.startupAutoplay) {
-    showSourceFallbackNotice('正在自动换源', fromLabel + ' 当前不可播，正在检查 ' + alternateProviders.map(sourceFallbackProviderTitle).join('、') + ' 的同名同歌手版本。');
+    showSourceFallbackNotice('正在自动换源', fromLabel + ' 当前不可播，正在检查 ' + alternateProviders.map(sourceFallbackProviderTitle).join('、') + ' 的同一版本（歌手与版本标识一致）。');
   }
   for (var providerIndex = 0; providerIndex < alternateProviders.length; providerIndex++) {
     var alternateProvider = alternateProviders[providerIndex];
     if (!beginSourceFallbackProviderAttempt(recovery, song, alternateProvider)) {
       if (!sourceFallbackRecoveryCanContinue(recovery)) {
-        return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+        return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
       }
       continue;
     }
@@ -801,7 +904,7 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
       var alternate = await searchAlternatePlatformSong(song, alternateProvider, recovery);
       if (token !== trackSwitchToken) return false;
       if (!sourceFallbackRecoveryCanContinue(recovery)) {
-        return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+        return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
       }
       if (!alternate) continue;
       var alternateData = typeof resolveAlbumGaplessPlaybackData === 'function'
@@ -809,13 +912,17 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
         : null;
       if (token !== trackSwitchToken) return false;
       if (alternateData === sourceFallbackBudgetTimeoutResult || !sourceFallbackRecoveryCanContinue(recovery)) {
-        return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+        return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
       }
       if (!alternateData || !alternateData.url) continue;
-      var originalSong = playQueue[idx];
+      // 提交前最后一道定位：搜索等待期间可能已删项 / 重排，旧 idx 不能直接用于写入
+      var commitIdx = sourceFallbackQueueIndexFor([queueItemSong]);
+      if (commitIdx < 0) return abandonSourceFallbackForMissingItem(recovery, 'queue-item-missing');
+      var originalSong = playQueue[commitIdx];
       alternate.autoFallbackFrom = songProviderKey(song);
-      var committedCandidate = hydrateCustomCover(alternate);
-      playQueue[idx] = committedCandidate;
+      var nextCandidate = hydrateCustomCover(alternate);
+      committedCandidate = nextCandidate;
+      playQueue[commitIdx] = nextCandidate;
       safeRenderQueuePanel('source-fallback-provisional', { scrollCurrent: miniQueueOpen });
       safeShelfRebuild('source-fallback-provisional');
       var fallbackPlaybackOpts = {
@@ -823,18 +930,22 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
         startupAutoplay: !!opts.startupAutoplay,
         preserveHomeState: !!opts.preserveHomeState,
         suppressPlayFailureNotice: true,
+        // 暂停意图必须穿透自动换源：删除暂停中的当前项接续时只加载音源，
+        // 换到候选版本也不能自己出声（否则删除暂停曲目会突然播放）。
+        holdPaused: !!opts.holdPaused,
         preResolvedPlaybackData: alternateData,
         fallbackOriginalSong: originalSong,
-        fallbackCandidateSong: committedCandidate,
+        fallbackCandidateSong: nextCandidate,
         sourceFallbackRecovery: recovery,
         qqQualityTried: ['hires', 'lossless', 'exhigh', 'standard']
       };
       if (opts.resumeAt != null) fallbackPlaybackOpts.resumeAt = opts.resumeAt;
-      var fallbackPromise = playQueueAt(idx, fallbackPlaybackOpts);
+      var fallbackPromise = playQueueAt(commitIdx, fallbackPlaybackOpts);
       var fallbackToken = trackSwitchToken;
       var fallbackStarted = await fallbackPromise;
       if (fallbackToken !== trackSwitchToken) return false;
       if (fallbackStarted === true) {
+        queueItemSong = committedCandidate;
         completeSourceFallbackRecovery(recovery);
         if (!opts.startupAutoplay) {
           if (alternate.autoFallbackConfidence === 'same-title') {
@@ -846,20 +957,26 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
         }
         return true;
       }
-      restoreSourceFallbackQueueItem(idx, originalSong, committedCandidate, fallbackToken);
+      // 回滚同样按身份定位（内部会重新解析候选当前所在位置）
+      restoreSourceFallbackQueueItem(commitIdx, originalSong, committedCandidate, fallbackToken);
+      committedCandidate = null;
       token = fallbackToken;
       if (!sourceFallbackRecoveryCanContinue(recovery)) {
-        return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+        return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
       }
     } catch (e) {
       if (token !== trackSwitchToken) return false;
       if (!sourceFallbackRecoveryCanContinue(recovery)) {
-        return settleSourceFallbackTerminal(idx, token, '自动恢复已达到时间上限，请稍后手动重试。', skipOpts);
+        return settleFallback('自动恢复已达到时间上限，请稍后手动重试。');
       }
       console.warn('[SourceFallback]', alternateProvider, e && (e.message || e));
     }
   }
-  return await skipFailedQueueItem(idx, token, '没有找到可播放的已登录平台版本，正在播放下一首。', skipOpts);
+  var skipIdx = sourceFallbackQueueIndexFor([queueItemSong]);
+  if (skipIdx < 0) return abandonSourceFallbackForMissingItem(recovery, 'queue-item-missing');
+  // 换源只接受「同一版本」（歌手 + 版本标识一致）。氛围版 / Live / 伴奏 这类版本没有同版本音源时，
+  // 宁可跳过并说明，也不拿原版顶替 —— 用户点的和听到的必须是同一首。
+  return await skipFailedQueueItem(skipIdx, token, '没有找到这首歌同一版本（歌手与版本标识都一致）的其它平台音源，正在播放下一首。', skipOpts);
 }
 function handlePlaybackUnavailable(song, data) {
   hideLoading();

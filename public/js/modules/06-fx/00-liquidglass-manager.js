@@ -113,27 +113,9 @@
       bevelMode: 0,
       rootSelector: '#bottom-bar',
       glassSelector: '#bottom-bar > .lg-glass-shell'
-    },
-    // 主页 Hero 区
-    homeHero: {
-      blurAmount: 0.50,
-      refraction: 0.12,
-      chromAberration: 0.0,
-      edgeHighlight: 0.08,
-      specular: 0.03,
-      fresnel: 0.8,
-      cornerRadius: 20,
-      zRadius: 12,
-      shadowOpacity: 0.30,
-      shadowSpread: 24,
-      shadowOffsetY: 5,
-      saturation: 0.24,
-      brightness: 0.02,
-      tintStrength: 0.0,
-      bevelMode: 0,
-      rootSelector: '.home-hero',
-      glassSelector: '.home-hero .hero-card'
     }
+    // 这里曾有 homeHero 预设（glassSelector 指向一个不存在的子节点）。
+    // .home-hero 是独立的 CSS 玻璃，不接 WebGL 宿主，见 01-liquidglass-config.js 末尾说明。
   };
 
   // === 管理器：实例注册表 ===

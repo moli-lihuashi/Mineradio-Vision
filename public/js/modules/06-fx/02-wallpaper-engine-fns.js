@@ -318,6 +318,12 @@ function requestWallpaperEngineVideoPlayback(video, item, kind, token, revealLay
     if (revealLayer) wallpaperEngineLayerReady('video', token);
     return;
   }
+  /* Folia 世界把壁纸整块盖住：不拉起播放（退出世界时统一恢复），但选择照常生效。 */
+  if (typeof foliaWorldActive === 'function' && foliaWorldActive()) {
+    try { video.pause(); } catch (e) { }
+    if (revealLayer) wallpaperEngineLayerReady('video', token);
+    return;
+  }
   var promise;
   try {
     promise = video.play();

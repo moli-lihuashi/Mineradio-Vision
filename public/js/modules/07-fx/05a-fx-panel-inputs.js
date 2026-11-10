@@ -40,6 +40,24 @@ function getFxSliderRow(el) {
 function particleCountToNorm(value) {
   return clampRange((Number(value) - 0.3) / 0.7, 0, 1);
 }
+/* 滑块右侧读数：桌面歌词这组用 px / % / °，比裸小数直观，
+ * 也让「拖了到底有没有生效」一眼可见。启动刷新和拖动都要走这里，避免两套格式。 */
+function fxSliderReadout(id, value) {
+  var num = Number(value);
+  if (!isFinite(num)) num = 0;
+  if (id === 'fx-coverres') return coverParticleCountLabel(num);
+  if (id === 'fx-desktoplyricssize') {
+    return Math.round(DESKTOP_LYRICS_BASE_FONT * clampRange(num, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX)) + 'px';
+  }
+  if (id === 'fx-desktoplyricsopacity') return Math.round(clampRange(num, 0.28, 1) * 100) + '%';
+  if (id === 'fx-desktoplyricstilt') return Math.round(num) + '°';
+  if (id === 'fx-lyricweight' || id === 'fx-glassaberration' || id === 'fx-lyrictiltx'
+    || id === 'fx-lyrictilty' || id === 'fx-shelfangle' || id === 'fx-lyriccustomlines'
+    || id === 'fx-liquidglassbevel' || id === 'fx-liquidglassshadowspread' || id === 'fx-liquidglassbevelmode') {
+    return String(Math.round(num));
+  }
+  return num.toFixed(id === 'fx-lyricspacing' ? 3 : 2);
+}
 function setRange(id, value) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -49,9 +67,7 @@ function setRange(id, value) {
   el.value = value;
   var row = getFxSliderRow(el);
   var out = row ? row.querySelector('output') : null;
-  if (out) out.textContent = id === 'fx-coverres'
-    ? coverParticleCountLabel(value)
-    : (id === 'fx-lyricweight' || id === 'fx-glassaberration' || id === 'fx-lyrictiltx' || id === 'fx-lyrictilty' || id === 'fx-shelfangle' ? String(Math.round(Number(value) || 0)) : Number(value).toFixed(id === 'fx-lyricspacing' ? 3 : 2));
+  if (out) out.textContent = fxSliderReadout(id, value);
   if (id === 'fx-particlecount') updateFxParticleFireSliderVisual(value);
   // 程序化改 value 不会触发 input 事件；必须同步 --prism-fill，否则蓝色进度条会停在旧位置
   syncPrismalRangeFill(el);
@@ -78,7 +94,7 @@ function updateDevelopmentFxControls() {
     ['desktopLyricsClickThrough', 't-desktopLyricsClickThrough', '锁定后防误触；鼠标移到桌面歌词上按中键可锁定/解锁'],
     ['desktopLyricsCinema', 't-desktopLyricsCinema', '桌面歌词绑定鼓点电影震动，基础漂浮始终保留'],
     ['desktopLyricsHighlight', 't-desktopLyricsHighlight', '桌面歌词按播放进度高亮'],
-    ['wallpaperMode', 't-wallpaperMode', '开发中，暂不可用']
+    ['wallpaperMode', 't-wallpaperMode', '把完整 Mineradio 放到 Windows 桌面当壁纸；右上角控制器可显示/隐藏桌面图标，Esc 退出']
   ].forEach(function(item){
     var locked = isDevelopmentLockedFx(item[0]);
     var el = document.getElementById(item[1]);
@@ -96,7 +112,7 @@ function updateDevelopmentFxControls() {
   [
     ['desktopLyrics', 'fx-desktoplyricssize'],
     ['desktopLyrics', 'fx-desktoplyricsopacity'],
-    ['desktopLyrics', 'fx-desktoplyricsy'],
+    ['desktopLyrics', 'fx-desktoplyricstilt'],
     ['wallpaperMode', 'fx-wallpaperopacity']
   ].forEach(function(item){
     var locked = isDevelopmentLockedFx(item[0]);
@@ -113,6 +129,57 @@ function updateDesktopLyricsFpsControls() {
     btn.classList.toggle('active', normalizeDesktopLyricsFps(btn.getAttribute('data-desktop-lyrics-fps')) === fps);
   });
 }
+// 壁纸模式帧数分段（24 / 30 / 60）的选中态
+function updateWallpaperFpsControls() {
+  var fps = Math.max(1, Math.min(60, Math.round(Number(fx.wallpaperFps) || 60)));
+  document.querySelectorAll('#wallpaper-fps-seg [data-wallpaper-fps]').forEach(function(btn){
+    btn.classList.toggle('active', Math.max(1, Math.min(60, Math.round(Number(btn.getAttribute('data-wallpaper-fps')) || 0))) === fps);
+  });
+}
+// 行数 / 换行动效两个分段控件的选中态（面板打开、预设切换、外部改 fx 都要刷新）
+function updateDesktopLyricsLayoutControls() {
+  var lines = normalizeDesktopLyricsLineCount(fx.desktopLyricsLines);
+  document.querySelectorAll('#desktop-lyrics-lines-seg [data-desktop-lyrics-lines]').forEach(function(btn){
+    btn.classList.toggle('active', normalizeDesktopLyricsLineCount(btn.getAttribute('data-desktop-lyrics-lines')) === lines);
+  });
+  var motion = normalizeDesktopLyricsMotion(fx.desktopLyricsMotion);
+  document.querySelectorAll('#desktop-lyrics-motion-seg [data-desktop-lyrics-motion]').forEach(function(btn){
+    btn.classList.toggle('active', normalizeDesktopLyricsMotion(btn.getAttribute('data-desktop-lyrics-motion')) === motion);
+  });
+}
+/* 桌面歌词主开关关掉时，把「大小 / 透明度 / 行数 / 动效 / 倾斜 / 帧率」整块收起，
+ * 只留一行提示。这些参数作用于另一个窗口，主开关没开时摆在面板里只会让人以为「拖了没反应」。 */
+function updateDesktopLyricsPanelVisibility() {
+  var panel = document.getElementById('fx-panel');
+  if (!panel) return;
+  var locked = typeof isDevelopmentLockedFx === 'function' && isDevelopmentLockedFx('desktopLyrics');
+  var on = !!(fx && fx.desktopLyrics) && !locked;
+  panel.classList.toggle('dl-on', on);
+  panel.classList.toggle('dl-off', !on);
+}
+// 壁纸模式的「帧数 / 透明度」只在开关打开时显示（与桌面歌词设置块同一条 UX 约定）
+function updateWallpaperPanelVisibility() {
+  var on = !!(fx && fx.wallpaperMode);
+  var groupLabel = document.getElementById('wallpaper-settings-label');
+  if (groupLabel) groupLabel.hidden = !on;
+  var fpsLabel = document.getElementById('wallpaper-fps-label');
+  if (fpsLabel) fpsLabel.hidden = !on;
+  var fpsSeg = document.getElementById('wallpaper-fps-seg');
+  if (fpsSeg) fpsSeg.hidden = !on;
+  var opacityInput = document.getElementById('fx-wallpaperopacity');
+  var row = opacityInput && opacityInput.closest && opacityInput.closest('.fx-slider');
+  if (row) row.hidden = !on;
+}
+/* 低画质会关掉行层渲染（14-stage-lyrics-rendering.js: quality==='eco' → false），
+ * 舞台只剩 cur/next/next2 三层 = 3 行。这件事以前完全没提示，用户只会觉得「行数设置坏了」，
+ * 所以在「显示行数」下面挂一条只在 eco 时出现的说明。 */
+function updateLyricRowsEcoHint() {
+  var el = document.getElementById('fx-lyric-rows-eco-hint');
+  if (!el) return;
+  var eco = (typeof resolvedPerformanceQuality === 'function') && resolvedPerformanceQuality() === 'eco';
+  el.hidden = !eco;
+}
+
 function updatePerformanceControls() {
   fx.performanceBackground = normalizePerformanceBackgroundMode(fx.performanceBackground, fx.liveBackgroundKeep === true);
   fx.liveBackgroundKeep = fx.performanceBackground === 'keep';
@@ -134,6 +201,7 @@ function updatePerformanceControls() {
   var liveBackgroundKeepToggle = document.getElementById('t-liveBackgroundKeep');
   if (liveBackgroundKeepToggle) liveBackgroundKeepToggle.classList.toggle('on', fx.liveBackgroundKeep === true);
   updateGpuThrottleReasonUi();
+  updateLyricRowsEcoHint();
 }
 function formatGpuThrottleReasonText(snapshot) {
   snapshot = snapshot || (typeof getGpuThrottleSnapshot === 'function' ? getGpuThrottleSnapshot() : null) || {};
@@ -189,7 +257,7 @@ function setPerformanceQualityMode(mode, silent) {
     var label = next === 'auto'
       ? ('自动 → ' + (resolved === 'eco' ? '低' : (resolved === 'balanced' ? '中' : (resolved === 'ultra' ? '超高' : '高'))))
       : (next === 'eco' ? '低' : (next === 'balanced' ? '中' : (next === 'ultra' ? '超高' : '高')));
-    showToast('画质档位: ' + label);
+    showToast('画质档位: ' + label + (resolved === 'eco' ? '（歌词行数限制为 3 行）' : ''));
   }
 }
 
@@ -316,9 +384,16 @@ function updateFxInputs() {
   setRange('fx-liquidglassbrightness', fx.liquidGlassBrightness);
   setRange('fx-liquidglassbevel', fx.liquidGlassBevel);
   setRange('fx-liquidglasssaturation', fx.liquidGlassSaturation);
+  setRange('fx-liquidglassspecular', fx.liquidGlassSpecular);
+  setRange('fx-liquidglassfresnel', fx.liquidGlassFresnel);
+  setRange('fx-liquidglassshadow', fx.liquidGlassShadow);
+  setRange('fx-liquidglassshadowspread', fx.liquidGlassShadowSpread);
+  setRange('fx-liquidglasstint', fx.liquidGlassTint);
+  setRange('fx-liquidglassdistortion', fx.liquidGlassDistortion);
+  setRange('fx-liquidglassbevelmode', fx.liquidGlassBevelMode);
   setRange('fx-desktoplyricssize', fx.desktopLyricsSize);
   setRange('fx-desktoplyricsopacity', fx.desktopLyricsOpacity);
-  setRange('fx-desktoplyricsy', fx.desktopLyricsY);
+  setRange('fx-desktoplyricstilt', fx.desktopLyricsTilt || 0);
   setRange('fx-wallpaperopacity', fx.wallpaperOpacity);
   setRange('fx-shelfsize', fx.shelfSize);
   setRange('fx-shelfx', fx.shelfOffsetX);
@@ -385,6 +460,9 @@ function updateFxInputs() {
   var desktopLyricsHighlightToggle = document.getElementById('t-desktopLyricsHighlight');
   if (desktopLyricsHighlightToggle) desktopLyricsHighlightToggle.classList.toggle('on', fx.desktopLyricsHighlight === true);
   updateDesktopLyricsFpsControls();
+  updateDesktopLyricsLayoutControls();
+  updateWallpaperFpsControls();
+  updateWallpaperPanelVisibility();
   var wallpaperModeToggle = document.getElementById('t-wallpaperMode');
   if (wallpaperModeToggle) wallpaperModeToggle.classList.toggle('on', fx.wallpaperMode);
   var shelfPodcastsToggle = document.getElementById('t-shelfShowPodcasts');
@@ -398,6 +476,7 @@ function updateFxInputs() {
   if (typeof updateWasapiOutputControls === 'function') updateWasapiOutputControls();
   if (typeof updateAiLyricTranslateToggle === 'function') updateAiLyricTranslateToggle();
   updateDevelopmentFxControls();
+  updateDesktopLyricsPanelVisibility();
   var aiDepthToggle = document.getElementById('t-aidepth');
   if (aiDepthToggle) aiDepthToggle.classList.toggle('on', fx.aiDepth);
   // 三态
@@ -459,3 +538,15 @@ function ensureFxSliderResetButton(id, key) {
   });
   row.appendChild(btn);
 }
+
+/* 启动刷一次：eco 状态下打开面板就要能看到那条提示，不必先动一下画质档位 */
+(function bootLyricRowsEcoHint() {
+  if (typeof document === 'undefined') return;
+  function run() {
+    try { updateLyricRowsEcoHint(); } catch (_) {}
+    /* 画质可能被自动降级/迁移改动，延迟再对一次 */
+    setTimeout(function () { try { updateLyricRowsEcoHint(); } catch (_) {} }, 2500);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once: true });
+  else run();
+})();

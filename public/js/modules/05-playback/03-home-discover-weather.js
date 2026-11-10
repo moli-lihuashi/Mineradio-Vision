@@ -759,12 +759,33 @@ function locateWeatherRadio(e) {
   }
   useIpFallback();
 }
-function changeWeatherCity(e) {
+async function changeWeatherCity(e) {
   if (e) {
     e.preventDefault();
     e.stopPropagation();
   }
-  var city = window.prompt('输入城市名', homeWeatherRadioState.city || '上海');
+  // Electron 不支持 window.prompt（直接抛异常），城市输入改走应用内异步弹窗
+  var city = null;
+  try {
+    if (typeof openAppPromptModal !== 'function') {
+      showToast('当前版本不支持城市输入');
+      return;
+    }
+    city = await openAppPromptModal({
+      title: '修改天气城市',
+      message: '输入城市名后立即按该城市刷新天气与场景电台',
+      placeholder: '例如：上海',
+      value: homeWeatherRadioState.city || '上海',
+      okText: '使用该城市',
+      allowEmpty: false,
+      maxLength: 32
+    });
+  } catch (err) {
+    console.warn('[WeatherCity] prompt failed:', err);
+    showToast('城市输入失败');
+    return;
+  }
+  if (city == null) return;
   city = String(city || '').trim();
   if (!city) return;
   markManualWeatherCity();

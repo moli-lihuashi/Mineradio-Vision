@@ -10,6 +10,22 @@ function queueItemKey(song) {
   if (song.id != null && song.id !== '') return 'song:' + song.id;
   return String(song.name || '') + '|' + String(song.artist || '');
 }
+/* 队列项身份定位：任何「await 之后还要动队列」的地方都不能信任捕获的 idx。
+ * 等待期间用户可能删掉前面的项（后面的整体前移）或随机重排，旧 idx 会指向别的歌。
+ * 优先对象引用（精确，同曲重复入队也不会错），其次内容 key（队列被重建过时兜底）。
+ * 返回 -1 表示队列里已经没有这一项，调用方必须中止、不能退化成「改索引 0」。 */
+function queueIndexForItem(song) {
+  if (!song || !playQueue || !playQueue.length) return -1;
+  var byRef = playQueue.indexOf(song);
+  if (byRef >= 0) return byRef;
+  var key = typeof queueItemKey === 'function' ? queueItemKey(song) : '';
+  if (!key) return -1;
+  for (var i = 0; i < playQueue.length; i++) {
+    var item = playQueue[i];
+    if (item && item !== song && queueItemKey(item) === key) return i;
+  }
+  return -1;
+}
 function queueSong(song, opts) {
   opts = opts || {};
   if (!song) return -1;

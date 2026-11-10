@@ -79,6 +79,36 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .preset-card[data-preset="6"] .pc-yui7w{color:#3257f7;font-family:"Microsoft Yi Baiti","SimHei","Microsoft YaHei",sans-serif;font-weight:900;font-style:italic;letter-spacing:.7px}
 .preset-card[data-preset="6"] .pc-icon{color:#3257f7}
 .preset-card[data-preset="6"].active .pc-icon{color:#3257f7!important;text-shadow:0 0 12px rgba(50,87,247,.44)}
+
+/* --- 红心动效：并排预览格 ---
+ * 每格自带一颗 18px 的心，点哪格就地放哪套动效（预览与选中是同一个动作）。
+ * 关键：overflow 必须 visible —— 粒子要飞出格子，裁掉就只剩一颗心在闪。
+ * 因此圆角边框靠 border 画，不靠 overflow:hidden 裁。 */
+.heart-fx-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.heart-fx-tile{position:relative;min-height:76px;border-radius:12px;cursor:pointer;padding:10px 6px 8px;
+  border:1.5px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+  font-family:inherit;color:rgba(255,255,255,.62);overflow:visible;transition:border-color .22s,background .22s,color .22s,box-shadow .22s}
+.heart-fx-tile:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.05);color:rgba(255,255,255,.86)}
+.heart-fx-tile.active{border-color:rgba(255,122,144,.5);background:rgba(255,122,144,.075);color:#fff;
+  box-shadow:0 0 0 1px rgba(255,122,144,.18),0 14px 40px rgba(255,122,144,.06)}
+.heart-fx-tile .hfx-host{position:relative;width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#ff7a90}
+.heart-fx-tile .hfx-host svg{width:18px;height:18px;display:block;fill:currentColor;
+  filter:drop-shadow(0 0 8px rgba(255,122,144,.34))}
+.heart-fx-tile .hfx-name{font-size:11px;font-weight:700;letter-spacing:.3px;line-height:1}
+.heart-fx-tile .hfx-sub{font-size:9px;font-weight:600;letter-spacing:.2px;line-height:1;
+  color:rgba(255,255,255,.34)}
+.heart-fx-tile.active .hfx-sub{color:rgba(255,180,192,.72)}
+.heart-fx-tile[data-heart-fx="off"] .hfx-host{color:rgba(255,255,255,.34);opacity:.9}
+.heart-fx-tile[data-heart-fx="off"] .hfx-host svg{filter:none}
+
+/* 预览格里的心形跳动与主按钮共用一套 keyframes（playback.css），
+ * 这里只是把「触发类」从 #heart-btn 放宽到 .hfx-host 的父按钮。 */
+.heart-fx-tile .hfx-host.heart-beat-pop svg{animation:heart-beat-pop .66s cubic-bezier(.16,1,.3,1) both}
+.heart-fx-tile .hfx-host.heart-beat-soft svg{animation:heart-beat-soft .34s ease-out both}
+.heart-fx-tile .hfx-host.heart-beat-quick svg{animation:heart-beat-quick .30s cubic-bezier(.16,1,.3,1) both}
+.heart-fx-tile .hfx-host.heart-beat-bloom svg{animation:heart-beat-bloom .42s cubic-bezier(.16,1,.3,1) both}
+.heart-fx-tile .hfx-host.heart-beat-dip svg{animation:heart-beat-dip .36s ease-out both}
 .preset-card .pc-bg{position:absolute;inset:0;opacity:.35;pointer-events:none}
 @keyframes preset-card-pulse{0%{opacity:0;transform:scale(.6) rotate(0deg)}35%{opacity:1}100%{opacity:0;transform:scale(1.25) rotate(12deg)}}
 .user-archive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:0 0 12px}
@@ -237,6 +267,11 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .fx-toggle.on{color:var(--fc-accent);border-color:rgba(0,245,212,.34);background:rgba(0,245,212,.07)}
 .fx-toggle .dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.18);transition:all .2s}
 .fx-toggle.on .dot{background:var(--fc-accent);box-shadow:0 0 10px rgba(0,245,212,.45)}
+/* 桌面歌词主开关：横跨两列、比普通特效开关更显眼，避免被埋在一堆开关里找不到 */
+.fx-toggle.fx-toggle-primary{grid-column:1 / -1;min-height:44px;font-weight:700;color:rgba(255,255,255,.88);border-color:rgba(0,245,212,.24);background:rgba(0,245,212,.055)}
+.fx-toggle.fx-toggle-primary:hover{border-color:rgba(0,245,212,.4);background:rgba(0,245,212,.09)}
+.fx-toggle.fx-toggle-primary.on{border-color:rgba(0,245,212,.52);background:rgba(0,245,212,.13)}
+.fx-toggle.fx-toggle-primary .dot{width:10px;height:10px}
 .fx-toggle.dev-locked{cursor:not-allowed;color:rgba(255,255,255,.38);background:rgba(255,255,255,.018);border-color:rgba(255,255,255,.045)}
 .fx-toggle.dev-locked:hover{background:rgba(255,255,255,.026);border-color:rgba(255,255,255,.07)}
 .fx-toggle.dev-locked .dot{background:rgba(255,255,255,.10);box-shadow:none}
@@ -244,6 +279,12 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .fx-dev-badge{display:inline-flex;align-items:center;margin-left:5px;padding:1px 5px;border-radius:999px;border:1px solid rgba(244,210,138,.28);background:rgba(244,210,138,.08);color:rgba(244,210,138,.76);font-style:normal;font-size:9px;font-weight:800;line-height:1.35;vertical-align:1px;letter-spacing:.05em}
 .fx-slider.dev-locked{opacity:.48;filter:saturate(.72)}
 .fx-slider.dev-locked input{cursor:not-allowed}
+/* hidden 属性要真的生效：.fx-slider / .fx-seg / .fx-section-label 都自带 display，
+   UA 的 [hidden]{display:none} 会被它们覆盖。壁纸模式的帧数/透明度、折叠区的提示
+   都靠 hidden 收起，少了这条会「设了 hidden 还显示」。 */
+#fx-panel .fx-slider[hidden],
+#fx-panel .fx-seg[hidden],
+#fx-panel .fx-section-label[hidden]{display:none}
 
 /* --- 三态分段 --- */
 .fx-seg{display:flex;border-radius:11px;border:1px solid rgba(255,255,255,.08);overflow:hidden;background:rgba(255,255,255,.026);margin-bottom:10px}
@@ -330,6 +371,13 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .fx-fold-body .fx-section-label{margin-top:12px}
 .fx-fold-body .fx-section-label:first-child{margin-top:4px}
 .fx-fold .fx-slider label{font-size:10.5px;color:rgba(255,255,255,.58)}
+/* 桌面歌词：主开关放在「镜头与叠加」开关网格里，细项设置只在开关打开时展开。
+   关掉时给一行提示，避免用户以为设置丢了。 */
+.fx-dl-settings{display:none}
+#fx-panel.dl-on .fx-dl-settings{display:block}
+.fx-dl-hint{margin-top:12px;padding:10px 12px;border-radius:10px;border:1px dashed rgba(0,245,212,.26);background:rgba(0,245,212,.05);font-size:11px;line-height:1.55;color:rgba(255,255,255,.56);letter-spacing:.2px}
+#fx-panel.dl-on .fx-dl-hint{display:none}
+#fx-panel.dl-off .fx-dl-dependent{display:none}
 .fx-fold-nested-parent{border:1px solid rgba(0,245,212,.16);background:rgba(0,245,212,.025)}
 .fx-fold-nested-parent > .fx-fold-head{padding:13px 12px}
 .fx-fold-nested-parent > .fx-fold-head .fx-fold-title strong{color:rgba(0,245,212,.92);letter-spacing:.6px}

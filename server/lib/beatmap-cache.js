@@ -61,6 +61,14 @@ module.exports = function createBeatmapCache(deps) {
       map,
     };
   }
+  /* 读命中刷 mtime：容量裁剪（cache-prune）拿 mtime 当 usedAt，刷过之后它才表示
+     「最近播放」而不是「最早下载」。刷失败无所谓（只读目录 / 文件刚被删），不阻塞读取。 */
+  function touchBeatMapCacheFile(file) {
+    try {
+      const now = new Date();
+      fs.promises.utimes(file, now, now).catch(() => {});
+    } catch (_) { /* 同步抛错也只是丢一次时间戳刷新 */ }
+  }
   async function readBeatMapCache(key) {
     const file = safeBeatMapCacheFile(key);
     if (!file) return null;
@@ -74,7 +82,9 @@ module.exports = function createBeatmapCache(deps) {
     }
     try {
       const parsed = JSON.parse(raw);
-      return parsed && parsed.map ? parsed : null;
+      if (!parsed || !parsed.map) return null;
+      touchBeatMapCacheFile(file);
+      return parsed;
     } catch (_) {
       fs.promises.unlink(file).catch(() => {}); // JSON 损坏：删掉，下次正常回源
       return null;
@@ -91,6 +101,28 @@ module.exports = function createBeatmapCache(deps) {
     return { ok: true, key: payload.key, savedAt: payload.savedAt, dir: path.dirname(file) };
   }
 
+  /* 容量上限：默认 512 MiB，MINERADIO_BEAT_CACHE_LIMIT_MB=0 表示明确不要上限。 */
+  function beatMapCacheLimitBytes() {
+    const raw = String(process.env.MINERADIO_BEAT_CACHE_LIMIT_MB == null ? '' : process.env.MINERADIO_BEAT_CACHE_LIMIT_MB).trim();
+    const mb = Number(raw);
+    if (raw !== '' && Number.isFinite(mb) && mb >= 0) return Math.round(mb * 1024 * 1024);
+    return require('./cache-prune').DEFAULT_CACHE_LIMIT_BYTES;
+  }
+  /* 容量裁剪。目录不可用（C 盘禁用 / 盘没挂 / 还没建目录）时返回结构化原因，绝不抛 ——
+     这个函数会被无人在意的定时器调用，抛出等于制造未捕获异常。 */
+  async function pruneBeatMapCache(options) {
+    const opts = options || {};
+    const info = beatCacheRootInfo();
+    if (!info.allowed) {
+      return { ok: false, error: 'BEAT_CACHE_ON_C_DRIVE_DISABLED', dir: info.dir, evicted: [] };
+    }
+    if (!info.available) {
+      return { ok: false, error: 'BEAT_CACHE_DRIVE_UNAVAILABLE', dir: info.dir, evicted: [] };
+    }
+    const limitBytes = opts.limitBytes == null ? beatMapCacheLimitBytes() : opts.limitBytes;
+    return require('./cache-prune').pruneDirectory({ dir: info.dir, limitBytes });
+  }
+
   return {
     beatCacheRootInfo,
     ensureBeatMapCacheDir,
@@ -98,5 +130,7 @@ module.exports = function createBeatmapCache(deps) {
     compactBeatMapCachePayload,
     readBeatMapCache,
     writeBeatMapCache,
+    beatMapCacheLimitBytes,
+    pruneBeatMapCache,
   };
 };

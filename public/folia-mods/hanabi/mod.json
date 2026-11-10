@@ -1,0 +1,10 @@
+{
+  "folium": 1,
+  "folia": ">=0.7.24 <0.8.0",
+  "id": "hanabi",
+  "name": "花火",
+  "version": "1.0.0",
+  "author": "chthollyphile / lantudou (Folia), 移植 mineradio",
+  "description": "日式歌词 PV：字块一块块弹进画面，烟花沿着词一路升空，镜头一场一场往上抬。移植自 Folia v0.7.25（AGPL-3.0）。",
+  "client": "client.mjs"
+}

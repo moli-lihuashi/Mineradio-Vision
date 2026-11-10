@@ -41,20 +41,42 @@ var fxDefaults = {
   liquidGlassBrightness: 0.04,
   liquidGlassBevel: 10,
   liquidGlassSaturation: 0.34,
+  liquidGlassSpecular: 0.05,
+  liquidGlassFresnel: 1.0,
+  liquidGlassShadow: 0.42,
+  liquidGlassShadowSpread: 22,
+  liquidGlassTint: 0,
+  liquidGlassDistortion: 0,
+  liquidGlassBevelMode: 0,
   backgroundColorCustom: false,
   backgroundImage: '',
   backgroundMedia: null,
   backgroundAlbumCover: false,
+  /* 桌面歌词默认关闭（2026-11-06 调整）：以前默认开启会导致「一打开播放器就自动
+     在桌面铺歌词」，对不想用的用户是干扰。想开就在「播放选项」菜单 / 视觉面板
+     「歌词开关」里点一下，或按 Alt+L；开启后会被记住。 */
   desktopLyrics: false,
   desktopLyricsSize: 1.0,
   desktopLyricsOpacity: 0.92,
-  desktopLyricsY: 0.76,
+  desktopLyricsLines: 3,
+  desktopLyricsTilt: 0,
+  desktopLyricsMotion: 'slide',
   desktopLyricsClickThrough: false,
   desktopLyricsCinema: true,
   desktopLyricsHighlight: false,
   desktopLyricsFps: 60,
+  /* 红心点击动效（四套 + 随机）：random / folia / riso / ring / star / off。
+     默认 random —— 每次点亮换一套且不跟上次重复；想固定某套在视觉控制台「外观」页选。 */
+  heartFx: 'random',
+  /* 收藏演出（整屏）：snow / birds / off。默认 snow —— 点亮红心时窗外落一场雪，
+     一片雪花贴到玻璃上化掉；想换在顶栏「皮肤」弹层的「收藏演出」里点。 */
+  heartScene: 'snow',
+  /* 控制条底层频谱：ripple / pulse / ribbon / off。默认 ripple —— 只贴底、不抢控件；
+     想换在顶栏「皮肤」弹层的「控制条频谱」里点，仅在 LiquidGlass 激活态显示。 */
+  barSpectrum: 'ripple',
   wallpaperMode: false,
   wallpaperOpacity: 1,
+  wallpaperFps: 60,
   floatLayer: false, cinema: true, edge: false, aiDepth: false, bloom: false, lyricGlow: true,
   lyricGlowBeat: true,
   lyricGlowParticles: false,
@@ -233,6 +255,13 @@ var PACKAGED_DEFAULT_FX_SNAPSHOT = Object.freeze({
   liquidGlassBrightness: 0.04,
   liquidGlassBevel: 10,
   liquidGlassSaturation: 0.34,
+  liquidGlassSpecular: 0.05,
+  liquidGlassFresnel: 1.0,
+  liquidGlassShadow: 0.42,
+  liquidGlassShadowSpread: 22,
+  liquidGlassTint: 0,
+  liquidGlassDistortion: 0,
+  liquidGlassBevelMode: 0,
   backgroundColorCustom: false,
   floatLayer: false,
   cinema: true,
@@ -245,11 +274,22 @@ var PACKAGED_DEFAULT_FX_SNAPSHOT = Object.freeze({
   desktopLyrics: false,
   desktopLyricsSize: 1,
   desktopLyricsOpacity: 0.92,
-  desktopLyricsY: 0.76,
+  desktopLyricsLines: 3,
+  desktopLyricsTilt: 0,
+  desktopLyricsMotion: 'slide',
   desktopLyricsClickThrough: false,
   desktopLyricsCinema: true,
   desktopLyricsHighlight: false,
   desktopLyricsFps: 60,
+  /* 红心点击动效（四套 + 随机）：random / folia / riso / ring / star / off。
+     默认 random —— 每次点亮换一套且不跟上次重复；想固定某套在视觉控制台「外观」页选。 */
+  heartFx: 'random',
+  /* 收藏演出（整屏）：snow / birds / off。默认 snow —— 点亮红心时窗外落一场雪，
+     一片雪花贴到玻璃上化掉；想换在顶栏「皮肤」弹层的「收藏演出」里点。 */
+  heartScene: 'snow',
+  /* 控制条底层频谱：ripple / pulse / ribbon / off。默认 ripple —— 只贴底、不抢控件；
+     想换在顶栏「皮肤」弹层的「控制条频谱」里点，仅在 LiquidGlass 激活态显示。 */
+  barSpectrum: 'ripple',
   performanceBackground: 'auto',
   performanceQuality: 'auto',
   foregroundFpsMode: 'vsync',
@@ -286,15 +326,15 @@ function clonePackagedDefaultFxSnapshot() {
 function packagedDefaultLyricLayoutRaw() {
   return Object.assign({ desktopLyricsSchema: 'desktop-lyrics-v3' }, clonePackagedDefaultFxSnapshot());
 }
-var DEVELOPMENT_LOCKED_FX = {
-  wallpaperMode: true
-};
+/* 壁纸模式（完整桌面模式）已完成开发并解锁：
+ * 打开开关后主窗口整体附着到 Windows 桌面当壁纸，Esc 或再点开关退出。
+ * 目前没有仍处于开发锁定的 fx 项；后续要锁新功能时往这里加键即可。 */
+var DEVELOPMENT_LOCKED_FX = {};
 function isDevelopmentLockedFx(key) {
   return !!DEVELOPMENT_LOCKED_FX[key];
 }
 function normalizeDevelopmentLockedFxState() {
   if (!fx) return;
-  fx.wallpaperMode = false;
 }
 function readSavedPlaybackVisualPreset() {
   try {

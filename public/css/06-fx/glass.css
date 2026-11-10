@@ -343,9 +343,13 @@ html.control-glass-svg-ok #visual-guide-btn:hover{
   top:-18px;
   z-index:4;
   display:grid;
-  grid-template-columns:repeat(5,minmax(0,1fr));
+  grid-auto-flow:column;
+  grid-auto-columns:minmax(0,1fr);
   gap:5px;
-  margin:-2px -2px 14px;
+  /* 只保留上方的 -2px（与 sticky top:-18px 一起贴合面板内边距）。
+     左右一栏不要负值：.fx-scroll 自身 padding 是 0，负外边距会把 tab 条顶出滚动容器，
+     让每个 tab 页都多出一条 2px 的横向滚动条。 */
+  margin:-2px 0 14px;
   padding:5px;
   border-radius:14px;
   background:rgba(0,0,0,.50);

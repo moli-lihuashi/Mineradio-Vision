@@ -41,13 +41,144 @@ function renderPlaylistSourceChip() {
   el.textContent = snap.text;
 }
 
+var PLAYLIST_FETCH_TIMEOUT_MS = 15000;
+var PLAYLIST_LIST_CACHE_KEY = 'mineradio-user-playlists-cache-v1';
+/* 所有音源都没拿到 + 手上一条个人歌单都没有 = 这次是加载失败，不是「账号里没有歌单」。
+   两者在界面上必须长得不一样，否则用户会以为歌单被清空了。 */
+var playlistListLoadFailed = false;
+
+function playlistListErrorNoticeHtml() {
+  return '<div class="pl-detail-empty pl-list-error" data-pl-list-error="1">' +
+      '<div class="pl-detail-empty-title">个人歌单加载失败</div>' +
+      '<div class="pl-detail-empty-hint">上游超时了，歌单没有丢，点下面重新加载</div>' +
+      '<button type="button" class="fx-mini-btn ghost pl-detail-retry-btn" data-pl-list-retry="1">重新加载</button>' +
+    '</div>';
+}
+
+function playlistListEmptyHtml() {
+  if (playlistListLoadFailed) return playlistListErrorNoticeHtml();
+  return '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
+}
+
+/* 失败提示要压在列表最上面：内置歌单照常显示，但用户得知道自己那批没加载出来。 */
+function playlistListBodyHtml(listHtml) {
+  var notice = playlistListLoadFailed ? playlistListErrorNoticeHtml() : '';
+  return notice + (listHtml || playlistListEmptyHtml());
+}
+
+/* 单个音源的歌单请求：超时/失败都只返回 null（=「这次没拿到」，保留上一轮）；
+   未登录时返回空列表（=「这个音源确实没有歌单」，要把旧数据清掉）。
+   两种「没数据」必须区分，否则登出后旧歌单会一直挂在列表里。 */
+function fetchPlaylistSource(url) {
+  if (!url) return Promise.resolve({ playlists: [], collections: [] });
+  return apiJson(url, { timeoutMs: PLAYLIST_FETCH_TIMEOUT_MS }).catch(function (e) {
+    console.warn('[Playlists] source failed:', url, e && (e.message || e));
+    return null;
+  });
+}
+
+function playlistRowsFromPayload(payload, provider) {
+  if (!payload || !Array.isArray(payload.playlists)) return null;
+  return payload.playlists.map(function (pl) {
+    if (!pl) return pl;
+    pl.provider = provider;
+    pl.source = provider;
+    return pl;
+  });
+}
+
+/* 列表缓存：下次启动先拿缓存渲染，网络回来再覆盖。
+   只存各平台的个人歌单，内置歌单由主进程 JSON 提供，不掺进来。 */
+function readPlaylistListCache() {
+  /* 带版本读取：老档（无 v 字段）按 v0 处理，迁移只补版本号，结构一直是 { at, playlists }。
+     迁移结果由 00-storage-migration 回写；解析失败 / 未来版本一律当作没有缓存。 */
+  if (typeof readVersionedJson === 'function') {
+    var restored = readVersionedJson(PLAYLIST_LIST_CACHE_KEY, {
+      version: 1,
+      migrate: function (parsed) { return { at: parsed.at, playlists: parsed.playlists }; }
+    });
+    if (!restored.ok) return null;
+    var list = restored.value.playlists;
+    if (!Array.isArray(list) || !list.length) return null;
+    return restored.value;
+  }
+  try {
+    var raw = localStorage.getItem(PLAYLIST_LIST_CACHE_KEY);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.playlists) || !parsed.playlists.length) return null;
+    return parsed;
+  } catch (e) { return null; }
+}
+
+function writePlaylistListCache() {
+  try {
+    var list = (userPlaylists || []).filter(function (pl) {
+      var provider = pl && (pl.provider || pl.source);
+      return provider && provider !== 'mineradio' && provider !== 'local';
+    });
+    if (!list.length) return;
+    if (typeof writeVersionedJson === 'function') {
+      writeVersionedJson(PLAYLIST_LIST_CACHE_KEY, { at: Date.now(), playlists: list }, 1);
+      return;
+    }
+    localStorage.setItem(PLAYLIST_LIST_CACHE_KEY, JSON.stringify({ at: Date.now(), playlists: list }));
+  } catch (e) {}
+}
+
+/* 用缓存把各平台数组灌回去，供首屏直接渲染。 */
+function hydrateUserPlaylistsFromCache() {
+  var cached = readPlaylistListCache();
+  if (!cached) return false;
+  var buckets = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
+  cached.playlists.forEach(function (pl) {
+    var provider = pl && (pl.provider || pl.source);
+    if (provider && buckets[provider]) buckets[provider].push(pl);
+  });
+  if (buckets.netease.length) neteasePlaylists = buckets.netease;
+  if (buckets.qq.length) qqPlaylists = buckets.qq;
+  if (buckets.kugou.length) kugouPlaylists = buckets.kugou;
+  if (buckets.qishui.length) qishuiPlaylists = buckets.qishui;
+  if (buckets.spotify.length) spotifyPlaylists = buckets.spotify;
+  userPlaylists = builtInPlaylists.concat(neteasePlaylists, qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists);
+  return true;
+}
+
+/* 歌单曲目的会话内缓存（按 provider:id，60s）。只用于「秒开」，不参与持久化。 */
+var playlistPanelTracksCache = Object.create(null);
+var PLAYLIST_TRACKS_CACHE_TTL_MS = 60 * 1000;
+
+function readPlaylistTracksCache(key) {
+  var hit = playlistPanelTracksCache[key];
+  if (!hit || !hit.tracks || !hit.tracks.length) return null;
+  if (Date.now() - hit.at > PLAYLIST_TRACKS_CACHE_TTL_MS) { delete playlistPanelTracksCache[key]; return null; }
+  return hit.tracks;
+}
+
+function writePlaylistTracksCache(key, tracks) {
+  if (!key || !tracks || !tracks.length) return;
+  playlistPanelTracksCache[key] = { at: Date.now(), tracks: tracks.slice() };
+  var keys = Object.keys(playlistPanelTracksCache);
+  if (keys.length > 24) delete playlistPanelTracksCache[keys[0]];
+}
+
 async function refreshUserPlaylists(force) {
   renderPlaylistSourceChip();
   // 内置歌单不依赖任何平台登录：未登录也要能看见 / 展开 / 播放
   if (typeof refreshBuiltInPlaylists === 'function' && (force || !builtInPlaylists.length)) {
     try { await refreshBuiltInPlaylists(!!force); } catch (e) { console.warn('[BuiltInPlaylists]', e); }
   }
+  /* 首屏先用上一次的列表顶上：上游慢的时候面板也有内容可看，
+     网络回来后再用新数据覆盖（这次没拿到就保留缓存，不清空）。 */
+  var hydratedFromCache = false;
+  if (!userPlaylists.length && hydrateUserPlaylistsFromCache()) {
+    hydratedFromCache = true;
+    renderUserPlaylistsList({ reset: true });
+    renderPlaylistSourceChip();
+    scheduleShelfRebuild('refresh-user-playlists-cache', true);
+  }
   if (!loginStatus.loggedIn && !qqLoginStatus.loggedIn && !kugouLoginStatus.loggedIn && !qishuiLoginStatus.loggedIn && !spotifyLoginStatus.loggedIn) {
+    playlistListLoadFailed = false;
     resetPlaylistPanelRenderLimit();
     var podcastListLoggedOut = document.getElementById('podcast-list');
     if (podcastListLoggedOut) podcastListLoggedOut.innerHTML = '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.28);font-size:11.5px">登录后显示我的播客</div>';
@@ -70,7 +201,7 @@ async function refreshUserPlaylists(force) {
   var needsKugouRefresh = kugouLoginStatus.loggedIn && !hasCachedKugouPlaylists;
   var needsQishuiRefresh = qishuiLoginStatus.loggedIn && !hasCachedQishuiPlaylists;
   var needsSpotifyRefresh = spotifyLoginStatus.loggedIn && !hasCachedSpotifyPlaylists;
-  if (!force && !needsQQRefresh && !needsKugouRefresh && !needsQishuiRefresh && !needsSpotifyRefresh && (userPlaylists.length || myPodcastCollections.length)) {
+  if (!force && !hydratedFromCache && !needsQQRefresh && !needsKugouRefresh && !needsQishuiRefresh && !needsSpotifyRefresh && (userPlaylists.length || myPodcastCollections.length)) {
     var cachedAnimate = isPlaylistPanelVisibleForRender();
     renderPlaylistSourceChip();
     renderUserPlaylistsList({ animate: cachedAnimate });
@@ -86,21 +217,35 @@ async function refreshUserPlaylists(force) {
   var $pod = document.getElementById('podcast-list');
   if ($pod && !(myPodcastCollections && myPodcastCollections.length)) $pod.innerHTML = miniQueueSkeleton();
   try {
+    /* 一次上游抖动不该让整张歌单列表消失：
+       - 每个音源单独超时（服务端 6s + 这里兜底 15s），失败只返回 null；
+       - 返回 null 的音源保留上一轮拿到的列表，其余照常刷新；
+       - 全部失败时页面仍是「上一份列表」，而不是空白或永远转圈。 */
     var result = await Promise.all([
-      loginStatus.loggedIn ? apiJson('/api/user/playlists') : Promise.resolve({ playlists: [] }),
-      loginStatus.loggedIn ? apiJson('/api/podcast/my') : Promise.resolve({ collections: [], loggedIn: false }),
-      qqLoginStatus.loggedIn ? apiJson('/api/qq/user/playlists') : Promise.resolve({ playlists: [] }),
-      kugouLoginStatus.loggedIn ? apiJson('/api/kugou/user/playlists') : Promise.resolve({ playlists: [] }),
-      qishuiLoginStatus.loggedIn ? apiJson('/api/qishui/user/playlists') : Promise.resolve({ playlists: [] }),
-      spotifyLoginStatus.loggedIn ? apiJson('/api/spotify/user/playlists') : Promise.resolve({ playlists: [] })
+      fetchPlaylistSource(loginStatus.loggedIn ? '/api/user/playlists' : ''),
+      fetchPlaylistSource(loginStatus.loggedIn ? '/api/podcast/my' : ''),
+      fetchPlaylistSource(qqLoginStatus.loggedIn ? '/api/qq/user/playlists' : ''),
+      fetchPlaylistSource(kugouLoginStatus.loggedIn ? '/api/kugou/user/playlists' : ''),
+      fetchPlaylistSource(qishuiLoginStatus.loggedIn ? '/api/qishui/user/playlists' : ''),
+      fetchPlaylistSource(spotifyLoginStatus.loggedIn ? '/api/spotify/user/playlists' : '')
     ]);
-    var neteaseLists = (result[0].playlists || []).map(function(pl){ pl.provider = 'netease'; pl.source = 'netease'; return pl; });
-    qqPlaylists = (result[2].playlists || []).map(function(pl){ pl.provider = 'qq'; pl.source = 'qq'; return pl; });
-    kugouPlaylists = (result[3].playlists || []).map(function(pl){ pl.provider = 'kugou'; pl.source = 'kugou'; return pl; });
-    qishuiPlaylists = (result[4].playlists || []).map(function(pl){ pl.provider = 'qishui'; pl.source = 'qishui'; return pl; });
-    spotifyPlaylists = (result[5].playlists || []).map(function(pl){ pl.provider = 'spotify'; pl.source = 'spotify'; return pl; });
-    userPlaylists = builtInPlaylists.concat(neteaseLists, qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists);
-    myPodcastCollections = result[1].collections || [];
+    var nextNetease = playlistRowsFromPayload(result[0], 'netease');
+    if (nextNetease) neteasePlaylists = nextNetease;
+    var nextQQ = playlistRowsFromPayload(result[2], 'qq');
+    if (nextQQ) qqPlaylists = nextQQ;
+    var nextKugou = playlistRowsFromPayload(result[3], 'kugou');
+    if (nextKugou) kugouPlaylists = nextKugou;
+    var nextQishui = playlistRowsFromPayload(result[4], 'qishui');
+    if (nextQishui) qishuiPlaylists = nextQishui;
+    var nextSpotify = playlistRowsFromPayload(result[5], 'spotify');
+    if (nextSpotify) spotifyPlaylists = nextSpotify;
+    userPlaylists = builtInPlaylists.concat(neteasePlaylists, qqPlaylists, kugouPlaylists, qishuiPlaylists, spotifyPlaylists);
+    if (result[1] && Array.isArray(result[1].collections)) myPodcastCollections = result[1].collections;
+    var sourceResults = [result[0], result[2], result[3], result[4], result[5]];
+    var failedSources = sourceResults.filter(function (r) { return r === null; }).length;
+    playlistListLoadFailed = failedSources > 0 && !neteasePlaylists.length && !qqPlaylists.length &&
+      !kugouPlaylists.length && !qishuiPlaylists.length && !spotifyPlaylists.length;
+    writePlaylistListCache();
     // 数据落地之后再刷一次 chip：此时才知道每个音源实际拿到几个歌单
     renderPlaylistSourceChip();
     var animatePanel = isPlaylistPanelVisibleForRender();
@@ -141,6 +286,14 @@ function playlistPanelDetailWindowOptions() {
   playlistPanelDetailState.scrollTop = scrollTop;
   return { scrollTop: scrollTop, viewport: viewport };
 }
+/* 失败态的文案要说出「这次没拿到」，不能让人以为歌单被清空了。 */
+function playlistPanelDetailErrorText(error) {
+  var code = String(error || '');
+  if (code === 'KUGOU_AUTH_REQUIRED') return '酷狗登录态已失效，请重新登录';
+  if (code === 'KUGOU_PLAYLIST_EMPTY') return '这次没取到歌单曲目';
+  if (code === 'KUGOU_PLAYLIST_LOAD_FAILED') return '歌单详情加载失败';
+  return '歌单加载失败';
+}
 function playlistPanelDetailRowsHtml(options) {
   options = options || {};
   var st = playlistPanelDetailState;
@@ -149,6 +302,15 @@ function playlistPanelDetailRowsHtml(options) {
     return '<div class="pl-detail-row pl-detail-loading-row"><div style="width:34px;height:34px;border-radius:7px;background:rgba(255,255,255,.06)"></div><div style="flex:1;min-width:0"><div class="pl-detail-row-title">正在载入歌单</div><div class="pl-detail-row-artist">请稍候</div></div></div>';
   }
   if (!tracks.length) {
+    /* 关键分支：请求失败绝不能渲染成「暂无可播放歌曲」——那是把一次网络抖动
+       说成歌单事实，用户会以为自己的歌没了。只有真的空歌单才走下面那句。 */
+    if (st.error) {
+      return '<div class="pl-detail-empty" data-pl-detail-error="' + escAttr(String(st.error)) + '">' +
+        '<div class="pl-detail-empty-title">' + escHtml(playlistPanelDetailErrorText(st.error)) + '</div>' +
+        '<div class="pl-detail-empty-hint">只是这次没取到，歌单里的歌还在</div>' +
+        '<button type="button" class="fx-mini-btn ghost pl-detail-retry-btn" data-pl-detail-retry="1">重新加载</button>' +
+        '</div>';
+    }
     return '<div style="text-align:center;padding:14px 0;color:rgba(255,255,255,.30);font-size:11.5px">歌单暂无可播放歌曲</div>';
   }
   var viewport = Math.max(280, Number(options.viewport) || Math.min(620, Math.round((window.innerHeight || 800) * 0.72)));
@@ -192,6 +354,14 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
       : '<div class="pl-detail-cover"></div>');
   var creatorFallback = provider === 'qq' ? 'QQ Music' : (provider === 'kugou' ? 'Kugou' : (provider === 'qishui' ? '汽水音乐' : (provider === 'spotify' ? 'Spotify' : (provider === 'mineradio' ? 'Mineradio 内置歌单' : 'Netease'))));
   var rows = playlistPanelDetailRowsHtml(detailWindow || playlistPanelDetailWindowOptions());
+  var detailError = String(playlistPanelDetailState.error || '');
+  // 失败时曲目可能是上一次成功的内容，标题右侧要标出来，别让人以为是最新的
+  var countText = loading
+    ? '载入中'
+    : (detailError ? (tracks.length ? tracks.length + ' 首（上次）' : '加载失败') : (tracks.length + ' 首'));
+  var retryButton = detailError
+    ? '<button class="fx-mini-btn ghost pl-detail-retry-btn" type="button" data-pl-detail-retry="1">重新加载</button>'
+    : '';
   var canUncollect = !!(pl && pl.subscribed && !pl.virtual && (provider === 'netease' || provider === 'qishui' || provider === 'spotify'));
   var collectionButton = canUncollect
     ? '<button class="fx-mini-btn ghost pl-detail-collection-btn" type="button" data-pl-detail-collection="0">取消收藏</button>'
@@ -208,8 +378,8 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
       : '');
   return '<div class="pl-inline-detail" data-pl-detail="' + escAttr(key) + '">' +
     '<div class="pl-detail-sticky">' +
-      '<div class="pl-detail-head">' + img + '<div style="flex:1;min-width:0"><div class="pl-detail-title">' + escHtml(pl.name || '歌单详情') + '</div><div class="pl-detail-sub">' + escHtml((pl.trackCount || tracks.length || 0) + ' 首 · ' + (pl.creator || creatorFallback)) + '</div></div><div class="pl-detail-count">' + (loading ? '载入中' : (tracks.length + ' 首')) + '</div></div>' +
-      '<div class="pl-detail-actions"><button class="pl-detail-play" type="button" data-pl-detail-play="' + escAttr(key) + '"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>播放歌单</button>' + collectionButton + localDeleteButton + '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-top="1">回到顶部</button></div>' +
+      '<div class="pl-detail-head">' + img + '<div style="flex:1;min-width:0"><div class="pl-detail-title">' + escHtml(pl.name || '歌单详情') + '</div><div class="pl-detail-sub">' + escHtml((pl.trackCount || tracks.length || 0) + ' 首 · ' + (pl.creator || creatorFallback)) + '</div></div><div class="pl-detail-count">' + countText + '</div></div>' +
+      '<div class="pl-detail-actions"><button class="pl-detail-play" type="button" data-pl-detail-play="' + escAttr(key) + '"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>播放歌单</button>' + collectionButton + localDeleteButton + retryButton + '<button class="fx-mini-btn ghost pl-detail-top-btn" type="button" data-pl-detail-top="1">回到顶部</button></div>' +
     '</div>' +
     '<div class="pl-detail-list" data-pl-detail-scroll="' + escAttr(key) + '">' + rows + '</div>' +
   '</div>';
@@ -259,12 +429,13 @@ function scrollPlaylistPanelDetailIntoView(key) {
     catch (e) { panel.scrollTop = top; }
   });
 }
-async function openPlaylistPanelDetail(provider, pid, title) {
+async function openPlaylistPanelDetail(provider, pid, title, opts) {
+  opts = opts || {};
   if (!pid) return;
   provider = normalizePlaylistProvider(provider);
   var key = playlistPanelKey(provider, pid);
   var pl = userPlaylists.find(function(item){ return playlistPanelKey(normalizePlaylistProvider(item.provider), item.id) === key; }) || { id: pid, provider: provider, name: title || 'Playlist Detail' };
-  if (playlistPanelDetailState.key === key && !playlistPanelDetailState.loading && playlistPanelDetailState.tracks.length) {
+  if (!opts.skipCache && playlistPanelDetailState.key === key && !playlistPanelDetailState.loading && playlistPanelDetailState.tracks.length) {
     playlistPanelDetailState.key = '';
     playlistPanelDetailState.tracks = [];
     playlistPanelDetailState.playlist = null;
@@ -325,6 +496,7 @@ async function openPlaylistPanelDetail(provider, pid, title) {
       if (playlistPanelDetailState.token !== biToken) return;
       playlistPanelDetailState.loading = false;
       playlistPanelDetailState.tracks = [];
+      playlistPanelDetailState.error = String((biErr && biErr.message) || 'BUILT_IN_PLAYLIST_READ_FAILED');
       renderPlaylistPanelDetailState();
       showToast('内置歌单加载失败');
     }
@@ -336,22 +508,61 @@ async function openPlaylistPanelDetail(provider, pid, title) {
   playlistPanelDetailState = { key: key, loading: true, playlist: pl, tracks: [], token: token, renderLimit: PLAYLIST_DETAIL_INITIAL_RENDER, scrollTop: 0 };
   renderPlaylistPanelDetailState();
   scrollPlaylistPanelDetailIntoView(key);
+  /* 60s 内重开同一个歌单直接出内容：既省一次往返，也避免上游抖动时
+     明明刚看过却只能盯着「正在载入歌单」。重试时跳过这一步（skipCache），
+     但缓存本身要留着 —— 这次再失败还得靠它显示上一次的曲目。 */
+  var cachedTracks = opts.skipCache ? null : readPlaylistTracksCache(key);
+  if (cachedTracks) {
+    playlistPanelDetailState.loading = false;
+    playlistPanelDetailState.tracks = cachedTracks.map(cloneSong);
+    playlistPanelDetailState.renderLimit = Math.min(playlistPanelDetailState.tracks.length, PLAYLIST_DETAIL_INITIAL_RENDER);
+    renderPlaylistPanelDetailState();
+    return;
+  }
   try {
-    var r = await apiJson(playlistTracksEndpoint(provider, pid));
+    var r = await apiJson(playlistTracksEndpoint(provider, pid), { timeoutMs: PLAYLIST_FETCH_TIMEOUT_MS });
     if (playlistPanelDetailState.token !== token) return;
     playlistPanelDetailState.loading = false;
     playlistPanelDetailState.tracks = (r && r.tracks || []).map(cloneSong);
     playlistPanelDetailState.renderLimit = Math.min(playlistPanelDetailState.tracks.length, PLAYLIST_DETAIL_INITIAL_RENDER);
+    /* 服务端明确说「这次没拿到 / 需要重试」时不能装成空歌单：
+       否则界面会给出「0 首 / 暂无可播放歌曲」这种错误结论。 */
+    playlistPanelDetailState.error = (!playlistPanelDetailState.tracks.length && r && (r.retryable || r.error))
+      ? String(r.error || 'KUGOU_PLAYLIST_EMPTY')
+      : '';
+    if (!playlistPanelDetailState.error) writePlaylistTracksCache(key, playlistPanelDetailState.tracks);
     renderPlaylistPanelDetailState();
   } catch (e) {
     console.warn('[PlaylistPanelDetail]', pid, e);
     if (playlistPanelDetailState.token !== token) return;
     playlistPanelDetailState.loading = false;
-    playlistPanelDetailState.tracks = [];
-    playlistPanelDetailState.renderLimit = PLAYLIST_DETAIL_INITIAL_RENDER;
+    /* 这次失败不等于歌单没歌：能拿到上一次成功的曲目就继续显示，
+       拿不到才进入「可重试」状态 —— 绝不能直接把 0 首当成事实摆给用户。 */
+    var previous = readPlaylistTracksCache(key);
+    playlistPanelDetailState.tracks = previous ? previous.map(cloneSong) : [];
+    playlistPanelDetailState.renderLimit = Math.min(playlistPanelDetailState.tracks.length, PLAYLIST_DETAIL_INITIAL_RENDER);
+    playlistPanelDetailState.error = 'KUGOU_PLAYLIST_LOAD_FAILED';
     renderPlaylistPanelDetailState();
-    showToast('歌单详情加载失败');
+    showToast(previous ? '歌单刷新失败，先显示上次的内容' : '歌单详情加载失败，可点重试');
   }
+}
+/* 失败态的重试入口：必须真的重新走一次网络，不能命中「60s 秒开」缓存，
+   否则点了没反应（缓存里本来就没有曲目，但状态也一起被保留了）。 */
+async function retryPlaylistPanelDetail() {
+  var st = playlistPanelDetailState;
+  if (!st || !st.key) return;
+  var parts = String(st.key).split(':');
+  var provider = normalizePlaylistProvider(parts[0]);
+  var pid = parts.slice(1).join(':');
+  var name = (st.playlist && st.playlist.name) || '';
+  st.error = '';
+  st.tracks = [];
+  st.loading = true;
+  st.renderLimit = PLAYLIST_DETAIL_INITIAL_RENDER;
+  renderPlaylistPanelDetailState();
+  /* skipCache 只是「别再走秒开分支」，不删缓存：万一这次又失败，
+     catch 里还能拿它把上一次的曲目显示出来。 */
+  await openPlaylistPanelDetail(provider, pid, name, { skipCache: true });
 }
 function playPlaylistPanelDetail() {
   var st = playlistPanelDetailState;
@@ -579,7 +790,8 @@ function renderUserPlaylistsList(opts) {
   var seq = ++playlistRenderSeq;
   var localItems = (typeof localPlaylistPanelItems === 'function') ? localPlaylistPanelItems() : [];
   if (!userPlaylists.length && !localItems.length) {
-    $pl.innerHTML = '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
+    /* 加载失败 ≠ 没有歌单：失败的这一次要给重试入口，不能一句「未找到歌单」了事。 */
+    $pl.innerHTML = playlistListEmptyHtml();
     return;
   }
   var panel = document.getElementById('playlist-panel');
@@ -596,13 +808,16 @@ function renderUserPlaylistsList(opts) {
     renderedCount += visible.length;
     return visible;
   }
-  $pl.innerHTML = groups.map(function(group){
+  var listHtml = groups.map(function(group){
     var items = visibleGroupItems(group.items);
     if (!items.length) return '';
     return '<div class="pl-section-label" data-pl-section="' + group.key + '">' + group.label + (group.key === 'local'
       ? '<button class="fx-mini-btn ghost" type="button" data-pl-local-import="1" style="margin-left:8px">导入歌单</button>'
       : '') + '</div>' + items.map(function(pl){ return playlistCardHtmlForPanel(pl, detailWindow); }).join('');
-  }).join('') || '<div style="text-align:center;padding:24px 0;color:rgba(255,255,255,.32);font-size:11.5px">未找到歌单</div>';
+  }).join('');
+  /* 个人歌单没加载出来时，内置歌单通常还在 —— 所以错误提示要能叠在列表上方，
+     不能只在「整页空」时才出现。 */
+  $pl.innerHTML = playlistListBodyHtml(listHtml);
   if (userPlaylists.length > renderedCount) {
     $pl.insertAdjacentHTML('beforeend', '<button type="button" class="fx-mini-btn ghost pl-load-more" data-pl-load-more="1">加载更多 ' + renderedCount + '/' + userPlaylists.length + '</button>');
   }
@@ -633,6 +848,16 @@ function renderMyPodcastCollections(opts) {
   if (opts.animate) animateVisiblePanelList($pod, '.pl-card', document.getElementById('playlist-panel'));
 }
 document.getElementById('pl-list').addEventListener('click', function(e){
+  var listRetry = e.target && e.target.closest ? e.target.closest('[data-pl-list-retry]') : null;
+  if (listRetry) {
+    e.preventDefault();
+    e.stopPropagation();
+    playlistListLoadFailed = false;
+    var listEl = document.getElementById('pl-list');
+    if (listEl) listEl.innerHTML = typeof miniQueueSkeleton === 'function' ? miniQueueSkeleton() : '';
+    refreshUserPlaylists(true);
+    return;
+  }
   var loadMore = e.target && e.target.closest ? e.target.closest('[data-pl-load-more]') : null;
   if (loadMore) {
     e.preventDefault();
@@ -645,6 +870,13 @@ document.getElementById('pl-list').addEventListener('click', function(e){
     e.preventDefault();
     e.stopPropagation();
     growPlaylistPanelDetailRenderLimit();
+    return;
+  }
+  var detailRetry = e.target && e.target.closest ? e.target.closest('[data-pl-detail-retry]') : null;
+  if (detailRetry) {
+    e.preventDefault();
+    e.stopPropagation();
+    retryPlaylistPanelDetail();
     return;
   }
   var detailTop = e.target && e.target.closest ? e.target.closest('[data-pl-detail-top]') : null;

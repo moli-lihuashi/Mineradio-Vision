@@ -849,7 +849,7 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
       var card = cards.find(function(c) { return c.mesh.userData.action === action; });
       pulseCard(card, action.kind === 'loadPlaylist' ? 1.0 : 0.70);
       if (action.kind === 'playQueue') {
-        playQueueAt(action.index);
+        playQueueAt(action.index, { userPick: true });
       } else if (action.kind === 'loadPlaylist') {
         if (!contentList) contentList = makeContentListManager();
         openCardIdx = card ? card.index : -1;
@@ -870,7 +870,7 @@ void main(){ vec4 t = texture2D(uDotTex, gl_PointCoord); if (t.a < 0.02) discard
       pulseCard(card, 1.0);
       // queue 类型 → 直接播放, 不需要内容框
       if (action.kind === 'playQueue') {
-        playQueueAt(action.index);
+        playQueueAt(action.index, { userPick: true });
         return;
       }
       if (action.kind === 'loadPlaylist') {

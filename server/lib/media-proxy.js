@@ -19,7 +19,10 @@ module.exports = function createMediaProxy(deps) {
     PROXY_FETCH_TIMEOUT_MS,
     API_AUTH_QUERY_TOKEN_PATHS,
     getApiToken,
+    audioGuard,
   } = deps || {};
+  // 音频写出守卫：可注入替身做行为测试，默认走进程内单例（与诊断路由共用同一份会话状态）。
+  const guard = audioGuard || require('./media-cache-guard').getMediaCacheGuard();
 
   const PROXY_MEDIA_HOST_SUFFIXES = [
     'music.163.com',
@@ -166,6 +169,26 @@ module.exports = function createMediaProxy(deps) {
   }
 
   function sendAudioBuffer(res, buffer, contentType, range) {
+    /* 错误页 / JSON 报错不能当成音频下发给 <audio>（会变成 MEDIA_ERR_DECODE）。
+     * 小于缓存阈值的完整音频只记诊断不阻断：试听片段、短音效是合法音源。 */
+    const bytes = guard.payloadByteLength(buffer);
+    if (guard.isClearlyNonAudioPayload(contentType)) {
+      guard.noteSuspicious('NON_AUDIO_CONTENT_TYPE', {
+        contentType: String(contentType || ''), bytes: bytes,
+      });
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('UPSTREAM_NOT_AUDIO');
+      return;
+    }
+    const cacheable = guard.isCacheableAudioResponse(
+      { ok: true, headers: { get: () => String(contentType || '') } },
+      { size: bytes, type: String(contentType || '') }
+    );
+    if (!cacheable) {
+      guard.noteSuspicious('TOO_SMALL_FOR_CACHE', {
+        contentType: String(contentType || ''), bytes: bytes,
+      });
+    }
     const total = buffer.length;
     const match = /^bytes=(\d*)-(\d*)$/i.exec(String(range || ''));
     if (match) {

@@ -1,0 +1,10 @@
+{
+  "folium": 1,
+  "folia": ">=0.7.24 <0.8.0",
+  "id": "machi",
+  "name": "町景",
+  "version": "1.0.0",
+  "author": "chthollyphile / lantudou (Folia), 移植 mineradio",
+  "description": "三套夜色街区的实时 3D 场景：便利店、站台、九龙城寨。歌词是一块挂在街边的招牌，雨雪雾与地面湿反光都跟着歌走。移植自 Folia main（AGPL-3.0）。",
+  "client": "client.mjs"
+}

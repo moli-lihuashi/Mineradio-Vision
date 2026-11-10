@@ -1,0 +1,10 @@
+{
+  "folium": 1,
+  "folia": ">=0.7.21 <0.8.0",
+  "id": "nebbia",
+  "name": "雾笺歌词",
+  "version": "0.1.0",
+  "author": "lantudou / chthollyphile（原实现，AGPL-3.0）· 移植：mineradio",
+  "description": "雨夜的公交车上，手指在起雾的车窗上按笔顺一笔一笔写出歌词，写过的地方露出窗外夜景，水珠顺着笔画淌下。Folia 官方「雾笺」样式的 WebGL2 移植。",
+  "client": "client.mjs"
+}

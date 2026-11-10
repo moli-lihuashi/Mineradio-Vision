@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <!-- CSP：自包含文档（内联 style + script，无外部资源、无图片） -->
+  <!-- CSP：内联 style + script，唯一外部资源是同源的 vendor/morphicons（锁图标形变），无网络请求、无图片 -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'">
   <title>Mineradio Desktop Lyrics</title>
   <style>
@@ -75,7 +75,9 @@
     body.unlocked .stage.hint-visible .lyric-viewport{pointer-events:auto;cursor:move;-webkit-app-region:no-drag}
     .lyric-scroll{
       display:inline-block;
-      transform:translate3d(var(--lyric-scroll-x),0,0) scaleX(var(--lyric-fit-x));
+      /* 倾斜 = 绕 Y 轴的三维旋转（perspective 让远近有透视），不是画面内旋转。
+         多行时这段容器 display:none，旋转交给 .lyric-stack，不会转两次。 */
+      transform:perspective(800px) rotateY(var(--lyric-tilt, 0deg)) translate3d(var(--lyric-scroll-x),0,0) scaleX(var(--lyric-fit-x));
       transform-origin:center;
       will-change:transform;
       backface-visibility:hidden;
@@ -143,6 +145,100 @@
       background-clip:text;
     }
     .line-next:empty{display:none}
+    /* ---- 多行歌词栈（桌面歌词行数 > 1 时启用）-----------------------------
+       参考「一段连续歌词压在画面上的效果」：当前句居中放大高亮，
+       上下相邻句缩小变淡，整块可按设置倾斜，换行时只做位移动画。 */
+    body.stack-mode .stage{padding:22px 42px 26px}
+    body.stack-mode .lyric-viewport{
+      padding:.18em var(--lyric-edge-width) .26em;
+      overflow:visible;
+      /* 多行整块会整体倾斜，行尾会越过 viewport 边缘；
+         单行用的左右渐隐遮罩会把这些字直接裁掉，所以这里关掉遮罩。 */
+      -webkit-mask-image:none;
+      mask-image:none;
+    }
+    body.stack-mode .lyric-scroll{display:none}
+    .lyric-stack{
+      position:relative;
+      z-index:3;
+      display:none;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:var(--lyric-row-gap, 24px);
+      width:100%;
+      /* 绕 Y 轴旋转：左右两端一近一远，产生「整块被转过去一点」的三维感 */
+      transform:perspective(800px) rotateY(var(--lyric-tilt, 0deg));
+      transform-origin:center center;
+      transition:transform .38s cubic-bezier(.22,.8,.24,1);
+      pointer-events:none;
+      will-change:transform;
+    }
+    body.stack-mode .lyric-stack{display:flex}
+    .line-row{
+      display:block;
+      max-width:100%;
+      color:#fff;
+      font-family:var(--lyric-font);
+      font-size:var(--lyric-row-size, 34px);
+      font-weight:var(--lyric-weight);
+      line-height:var(--lyric-row-line-height, 1.18);
+      letter-spacing:var(--lyric-letter-spacing);
+      text-align:center;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:clip;
+      background:linear-gradient(90deg,var(--lyric-primary),var(--lyric-primary));
+      -webkit-background-clip:text;
+      background-clip:text;
+      -webkit-text-fill-color:transparent;
+      -webkit-text-stroke:.12px rgba(255,255,255,.44);
+      paint-order:stroke fill;
+      text-shadow:0 0 1px rgba(255,255,255,.20),0 0 10px var(--lyric-shadow-glow);
+      opacity:0;
+      transform:translate3d(0,0,0);
+      transform-origin:center center;
+      transition:opacity .34s ease, transform .42s cubic-bezier(.2,.8,.2,1), font-size .34s ease;
+      will-change:opacity,transform;
+      backface-visibility:hidden;
+    }
+    .line-row.ghost{opacity:0}
+    .line-row.past{opacity:.5}
+    .line-row.future{opacity:.64}
+    body.paused .line-row.past{opacity:.4}
+    body.paused .line-row.future{opacity:.52}
+    .line-row.active{
+      opacity:1;
+      background:linear-gradient(90deg,
+        var(--lyric-highlight) 0%,
+        var(--lyric-highlight) max(0%,calc(var(--row-progress, 0%) - 4%)),
+        var(--lyric-glow) calc(var(--row-progress, 0%) + 1.2%),
+        var(--lyric-primary) calc(var(--row-progress, 0%) + 5.5%),
+        var(--lyric-primary) 100%);
+      -webkit-background-clip:text;
+      background-clip:text;
+      -webkit-text-stroke:.2px rgba(255,255,255,.78);
+      text-shadow:0 0 2px rgba(255,255,255,.34),0 0 calc(8px + var(--lyric-css-beat-glow)) var(--lyric-shadow-soft),0 0 calc(18px + var(--lyric-css-beat-glow)) var(--lyric-shadow-glow);
+    }
+    /* 注意：这里不能用 filter:blur() 做入场虚化。
+       Chromium 下带 filter 的元素会丢失 background-clip:text 的裁切，
+       当前句会整行画不出来（只剩阴影）。入场只用位移 / 透明度 / 3D 旋转。 */
+    @keyframes row-slide{
+      0%{opacity:0;transform:translate3d(0,26px,0)}
+      100%{opacity:1;transform:translate3d(0,0,0)}
+    }
+    @keyframes row-flip{
+      0%{opacity:0;transform:perspective(560px) rotateX(-72deg) translate3d(0,12px,0)}
+      100%{opacity:1;transform:perspective(560px) rotateX(0deg) translate3d(0,0,0)}
+    }
+    @keyframes row-breathe{
+      0%,100%{transform:translate3d(0,0,0) scale(1)}
+      50%{transform:translate3d(0,-3px,0) scale(1.015)}
+    }
+    body.motion-slide .line-row.enter{animation:row-slide .58s cubic-bezier(.16,.84,.32,1) both}
+    body.motion-flip .line-row.enter{animation:row-flip .64s cubic-bezier(.2,.82,.24,1) both}
+    body.motion-float .line-row.active{animation:row-breathe 4.6s ease-in-out infinite}
+    body.motion-none .line-row{transition:opacity .18s linear}
     .lock-hint{
       position:absolute;
       z-index:4;
@@ -168,15 +264,22 @@
       transition:opacity .16s ease,transform .16s ease;
       -webkit-app-region:no-drag;
     }
+    /* 锁图标：Lucide lock ↔ lock-open，由 morphicons 做形状形变（弹簧），
+       不再用两段伪元素拼锁体/锁梁。24×24 网格，path 由脚本写入。 */
     .lock-icon{
-      position:relative;
+      display:block;
       width:13px;
       height:13px;
       flex:0 0 auto;
+      overflow:visible;
     }
-    .lock-icon::before{content:"";position:absolute;left:2px;bottom:1px;width:9px;height:7px;border:1.7px solid var(--lyric-highlight);border-radius:2px;box-sizing:border-box}
-    .lock-icon::after{content:"";position:absolute;left:3px;top:0;width:7px;height:8px;border:1.7px solid var(--lyric-highlight);border-bottom:0;border-radius:7px 7px 0 0;box-sizing:border-box}
-    body.unlocked .lock-icon::after{left:7px;transform:rotate(24deg);transform-origin:left bottom}
+    .lock-icon path{
+      fill:none;
+      stroke:var(--lyric-highlight);
+      stroke-width:2.8;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
     .lyrics-close{
       display:none;
       align-items:center;
@@ -198,6 +301,39 @@
     body.unlocked .lyrics-close{display:flex}
     body.unlocked .stage.hint-visible .lock-hint{pointer-events:auto;-webkit-app-region:no-drag}
     .stage.hint-visible .lock-hint{opacity:.94;transform:translateX(-50%) translateY(0) scale(1)}
+    /* 悬停播放控制条：酷狗式桌面歌词行为。跟随 hint-visible 显隐，锁定时不出现
+       （锁定态窗口鼠标穿透，本来就点不到按钮）。 */
+    .lyrics-controls{
+      display:none;
+      align-items:center;
+      gap:1px;
+      margin-left:1px;
+      padding-left:7px;
+      border-left:1px solid rgba(255,255,255,.16);
+      -webkit-app-region:no-drag;
+    }
+    body.unlocked .stage.hint-visible .lyrics-controls{display:flex;pointer-events:auto}
+    .lyrics-control-btn{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      width:24px;
+      height:22px;
+      padding:0;
+      border:0;
+      border-radius:7px;
+      background:transparent;
+      color:rgba(255,255,255,.82);
+      cursor:pointer;
+      -webkit-app-region:no-drag;
+      transition:background .16s ease,color .16s ease;
+    }
+    .lyrics-control-btn:hover{background:rgba(255,255,255,.14);color:#fff}
+    .lyrics-control-btn:active{background:rgba(255,255,255,.22)}
+    .lyrics-control-btn svg{width:13px;height:13px;fill:currentColor;pointer-events:none}
+    .lyrics-control-btn .icon-pause{display:none}
+    body:not(.paused) .lyrics-control-btn .icon-pause{display:block}
+    body:not(.paused) .lyrics-control-btn .icon-play{display:none}
     @keyframes lyr-in{
       0%{opacity:0;transform:translate3d(0,32px,-120px) rotateX(24deg) rotateY(-18deg) scale(.78);filter:blur(12px)}
       58%{opacity:1;filter:blur(0)}
@@ -209,10 +345,15 @@
   <canvas id="fx"></canvas>
   <div class="wrap">
     <div id="stage" class="stage">
-      <div id="lyricViewport" class="lyric-viewport"><div id="lyricScroller" class="lyric-scroll"><div id="line" class="line" data-text="Mineradio">Mineradio</div><div id="lineNext" class="line line-next" data-text=""></div></div></div>
-      <div id="lockHint" class="lock-hint"><span class="lock-icon"></span><span id="lockText">&#20013;&#38190;&#35299;&#38145;</span><button id="closeLyricsBtn" class="lyrics-close" type="button" aria-label="Close desktop lyrics">&#20851;&#38381;&#26700;&#38754;&#27468;&#35789;</button></div>
+      <div id="lyricViewport" class="lyric-viewport"><div id="lyricScroller" class="lyric-scroll"><div id="line" class="line" data-text="Mineradio">Mineradio</div><div id="lineNext" class="line line-next" data-text=""></div></div><div id="lineStack" class="lyric-stack" aria-hidden="true"></div></div>
+      <div id="lockHint" class="lock-hint"><svg class="lock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d=""></path></svg><span id="lockText">&#20013;&#38190;&#35299;&#38145;</span><div id="lyricsControls" class="lyrics-controls">
+        <button id="desktopLyricsPrevBtn" class="lyrics-control-btn" type="button" data-playback-action="prevTrack" aria-label="&#19978;&#19968;&#39318;" title="&#19978;&#19968;&#39318;"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2h2.4v20H4zM20 2v20L8.6 12z"/></svg></button>
+        <button id="desktopLyricsPlayBtn" class="lyrics-control-btn" type="button" data-playback-action="togglePlay" aria-label="&#25773;&#25918; / &#26242;&#20572;" title="&#25773;&#25918; / &#26242;&#20572;"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2l13 10L5 22z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2h5v20H4zM15 2h5v20h-5z"/></svg></button>
+        <button id="desktopLyricsNextBtn" class="lyrics-control-btn" type="button" data-playback-action="nextTrack" aria-label="&#19979;&#19968;&#39318;" title="&#19979;&#19968;&#39318;"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.6 2H20v20h-2.4zM4 2l11.4 10L4 22z"/></svg></button>
+      </div><button id="closeLyricsBtn" class="lyrics-close" type="button" aria-label="Close desktop lyrics">&#20851;&#38381;&#26700;&#38754;&#27468;&#35789;</button></div>
     </div>
   </div>
+  <script src="vendor/morphicons/morphicons.global.js"></script>
   <script>
     'use strict';
     var canvas = document.getElementById('fx');
@@ -221,9 +362,14 @@
     var lyricViewport = document.getElementById('lyricViewport');
     var line = document.getElementById('line');
     var lineNext = document.getElementById('lineNext');
+    var lineStack = document.getElementById('lineStack');
+    var stackRows = [];
+    var stackActiveIdx = -1;
+    var stackSignature = '';
     var lockHint = document.getElementById('lockHint');
     var lockText = document.getElementById('lockText');
     var closeLyricsBtn = document.getElementById('closeLyricsBtn');
+    var lyricsControls = document.getElementById('lyricsControls');
     var dpr = 1;
     var lastText = '';
     var lastNextText = '';
@@ -236,6 +382,9 @@
     var dragging = false;
     var dragPointerId = null;
     var dragLast = { x:0, y:0 };
+    // 最近一次真正挪动窗口的时间：窗口被 setBounds 移动后，Chromium 会补发一串
+    // buttons=0 的合成 move，用它区分「合成事件」和「用户真的松手了」
+    var dragMovedAt = 0;
     var lastDrawAt = 0;
     var layoutKey = '';
     var hoverInside = false;
@@ -250,6 +399,7 @@
       playbackTime:0,playbackDuration:0,playbackRate:1,playbackReceivedAt:0,beatMapKey:'',
       size:1,opacity:.92,clickThrough:true,lyricGlowParticles:false,cinema:true,highlightFollow:false,frameRate:60,
       lyricGlow:true,lyricGlowBeat:true,lyricGlowStrength:.35,highBloom:0,beatGlow:0,beatPulse:0,bass:0,feather:.055,
+      lineCount:1,lines:null,tilt:0,lyricMotion:'slide',
       fontFamily:'Inter,"Noto Sans SC","PingFang SC","Microsoft YaHei",Arial,sans-serif',
       fontWeight:900,letterSpacing:0,lineHeight:1,lyricScale:1,
       colors:{primary:'#f6fdff',secondary:'#a8f6ff',highlight:'#fff0b8',glow:'#9cffdf'},
@@ -589,6 +739,7 @@
       canvas.style.height = innerHeight + 'px';
       ctx.setTransform(dpr,0,0,dpr,0,0);
       fitLyricText(true);
+      renderLyricStack(true);
     }
     function measureLineWidth(fontSize) {
       ctx.save();
@@ -632,8 +783,15 @@
       setRootVar('--lyric-edge-width', edgeWidth + 'px');
       var size = baseFontSize;
       fitScaleX = 1;
-      var minSize = Math.max(24, Math.min(32, baseFontSize * .55));
-      var maxScrollableWidth = readableWidth * 1.76;
+      // 下限跟着基准字号走：写死 24px 会让 size 调得很小时仍被卡在 24px，
+      // 用户看到的就是「拉到最小还是有点大」。
+      var minSize = Math.max(13, Math.min(32, baseFontSize * .55));
+      // 倾斜 = 绕 Y 轴旋转，只会让近端横向探出，不再有竖向溢出；
+      // 按横向余量收窄可用宽度，并关掉倾斜时的横向滚动（滚动位移会跟着转）。
+      if (state.tilt) {
+        readableWidth = Math.max(220, readableWidth - stackTiltOverhang());
+      }
+      var maxScrollableWidth = state.tilt ? readableWidth : readableWidth * 1.76;
       for (var i = 0; i < 24; i++) {
         var width = measureLineWidth(size);
         var height = size * state.lineHeight;
@@ -641,7 +799,7 @@
         size = Math.max(minSize, size - Math.max(1.25, size * .062));
       }
       var measuredWidth = measureLineWidth(size);
-      var maxRenderedWidth = readableWidth * 1.82;
+      var maxRenderedWidth = state.tilt ? readableWidth : readableWidth * 1.82;
       if (measuredWidth > maxRenderedWidth) {
         fitScaleX = clamp(maxRenderedWidth / measuredWidth, .72, 1, 1);
       }
@@ -709,11 +867,171 @@
       void line.offsetWidth;
       line.classList.add('in');
     }
+    // ---- 多行歌词栈 --------------------------------------------------------
+    var DESKTOP_ROW_COUNTS = [1, 3, 5, 7, 10];
+    function normalizeRowCount(value) {
+      var n = Math.round(Number(value) || 0);
+      if (DESKTOP_ROW_COUNTS.indexOf(n) >= 0) return n;
+      var best = 1, bestGap = Infinity;
+      for (var i = 0; i < DESKTOP_ROW_COUNTS.length; i++) {
+        var gap = Math.abs(DESKTOP_ROW_COUNTS[i] - n);
+        if (gap < bestGap) { bestGap = gap; best = DESKTOP_ROW_COUNTS[i]; }
+      }
+      return best;
+    }
+    function normalizeRowMotion(value) {
+      return /^(slide|flip|float|none)$/.test(String(value || '')) ? String(value) : 'slide';
+    }
+    /* 行数越多单行越小；当前句比相邻句再大一点，形成图片里那种「中间一句最亮」的层次 */
+    function rowFontFor(count, active) {
+      var factor = count <= 1 ? 1
+        : (count === 3 ? .80
+          : (count === 5 ? .68
+            : (count === 7 ? .58 : .46)));
+      var size = baseFontSize * factor * (active ? 1 : .82);
+      // 下限要跟着基准字号走（size 最小 0.45 → 26px 基准），否则小字号下各行的比例会被压平
+      return Math.max(11, Math.round(size));
+    }
+    /* 字号只按宽度缩还不够：10 行 + 最大字号 + 行距拉满时整块会高过窗口，最后几行被裁掉。
+     * 这里按「窗口可用高度」再压一次，保证任意行数/字号下都在可视区内。
+     * 总高 = count * 字号 * line-height + (count-1) * gap，其中 gap 与字号无关，
+     * 所以要先把 gap 占掉的高度扣掉再换算字号，不能直接按比例乘。 */
+    function fitStackByHeight(count, fontSize) {
+      if (count <= 1) return fontSize;
+      var lineHeight = Number(state.lineHeight) || 1;
+      var gap = 6 + 18 * lineHeight;
+      var fixed = (count - 1) * gap;
+      var limit = Math.max(160, innerHeight * 0.94);
+      if (count * fontSize * lineHeight + fixed <= limit) return fontSize;
+      var allowed = (limit - fixed) / (count * lineHeight);
+      return Math.max(9, Math.floor(Math.min(fontSize, allowed)));
+    }
+    function ensureStackRows(count) {
+      if (!lineStack) return;
+      while (stackRows.length > count) {
+        var extra = stackRows.pop();
+        if (extra && extra.parentNode) extra.parentNode.removeChild(extra);
+      }
+      while (stackRows.length < count) {
+        var row = document.createElement('div');
+        row.className = 'line-row ghost';
+        row.textContent = '';
+        lineStack.appendChild(row);
+        stackRows.push(row);
+      }
+    }
+    /* 倾斜是绕 Y 轴的三维旋转：透视会把「近端」放大，屏幕上的 |x| 从 w/2 变成
+     * (w/2)·cosθ / (1 - (w/2)·sinθ/d)，差值就是需要额外预留的横向余量。
+     * 近端只在一侧，但这里按两侧对称预留（保守，不会裁字）。 */
+    var LYRIC_ROTATE_PERSPECTIVE = 800; // 必须与 CSS 里的 perspective(800px) 一致
+    function rotateYOverhang(width) {
+      var rad = Math.abs(state.tilt) * Math.PI / 180;
+      if (!rad) return 0;
+      var half = Math.max(60, (Number(width) || 0) / 2);
+      var denom = 1 - (half * Math.sin(rad)) / LYRIC_ROTATE_PERSPECTIVE;
+      if (denom <= 0.2) return Math.round(half);
+      return Math.max(0, Math.round((half * Math.cos(rad)) / denom - half));
+    }
+    /* 每行的可用宽度上限（和 fitRowText 里同一条公式，供倾斜预留量复用） */
+    function stackRowMaxWidth() {
+      return Math.max(220, Math.min(innerWidth - 96, 1180));
+    }
+    function stackTiltOverhang() {
+      if (!state.tilt) return 0;
+      return rotateYOverhang(stackRowMaxWidth());
+    }
+    /* 单行过长时按可用宽度缩小字号（不截断、不省略号，避免把一句歌词切碎） */
+    function fitRowText(row, fontSize, overhang) {
+      var text = row.textContent || '';
+      if (!text) return fontSize;
+      var maxWidth = Math.max(220, Math.min(innerWidth - 96 - (overhang || 0) * 2, 1180));
+      ctx.save();
+      ctx.font = state.fontWeight + ' ' + fontSize + 'px ' + state.fontFamily;
+      var width = ctx.measureText(text).width + Math.max(0, Array.from(text).length - 1) * fontSize * state.letterSpacing;
+      ctx.restore();
+      if (width <= maxWidth) return fontSize;
+      return Math.max(11, Math.round(fontSize * (maxWidth / width)));
+    }
+    function updateStackProgress(progress) {
+      if (stackActiveIdx < 0 || !stackRows.length) return;
+      var row = stackRows[stackActiveIdx];
+      if (row) row.style.setProperty('--row-progress', (clamp(progress, 0, 1, 0) * 100).toFixed(2) + '%');
+    }
+    function renderLyricStack(force) {
+      var count = normalizeRowCount(state.lineCount);
+      var rows = Array.isArray(state.lines) ? state.lines : null;
+      var stackMode = count > 1 && !!rows && rows.length > 0;
+      document.body.classList.toggle('stack-mode', stackMode);
+      if (!stackMode) {
+        stackActiveIdx = -1;
+        return;
+      }
+      ensureStackRows(count);
+      var activeIdx = -1;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i] && rows[i].active) { activeIdx = i; break; }
+      }
+      var activeChanged = activeIdx !== stackActiveIdx;
+      var overhang = stackTiltOverhang();
+      for (var j = 0; j < stackRows.length; j++) {
+        var row = stackRows[j];
+        var data = rows[j] || { text: '', progress: 0, active: false };
+        var text = String(data.text || '');
+        if (row.textContent !== text) row.textContent = text;
+        row.classList.toggle('ghost', !text);
+        row.classList.toggle('past', !!text && j < activeIdx);
+        row.classList.toggle('future', !!text && j > activeIdx);
+        row.classList.toggle('active', !!data.active && !!text);
+        row.style.fontSize = fitStackByHeight(count, fitRowText(row, rowFontFor(count, !!data.active), overhang)) + 'px';
+        if (data.active) row.style.setProperty('--row-progress', (clamp(data.progress, 0, 1, 0) * 100).toFixed(2) + '%');
+      }
+      stackActiveIdx = activeIdx;
+      // 只有「换到新的一句」才播入场动效；同一句的进度推进不重播，避免一直闪
+      if (activeChanged && stackRows[activeIdx]) {
+        var activeRow = stackRows[activeIdx];
+        activeRow.classList.remove('enter');
+        void activeRow.offsetWidth;
+        activeRow.classList.add('enter');
+      }
+      if (force) sendHotBounds();
+    }
+    /* 锁图标：Lucide lock / lock-open（24×24 stroke，锁体 + 锁梁两段子路径）。
+       锁体和锁梁的子路径数一致，morphicons 能把锁梁「抽出来」而不是交叉淡入淡出。
+       库没加载 / 创建失败时直接写 d 落位，图标照样正确，只是没有形变。 */
+    var LOCK_ICON_D = 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z M7 11V7a5 5 0 0 1 10 0v4';
+    var UNLOCK_ICON_D = 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z M7 11V7a5 5 0 0 1 9.9-1';
+    var lockIconMorph = null;
+    var lockIconLocked = null;
+    function syncLockIcon(locked) {
+      var svg = document.querySelector('.lock-icon');
+      if (!svg) return;
+      var path = svg.querySelector('path');
+      if (!path) return;
+      var want = locked ? LOCK_ICON_D : UNLOCK_ICON_D;
+      if (!lockIconMorph) {
+        // 首次：先落位保证画得出来，再交给库接管后续形变
+        path.setAttribute('d', want);
+        lockIconLocked = !!locked;
+        if (!window.Morphicons || typeof window.Morphicons.createMorph !== 'function') return;
+        try {
+          lockIconMorph = window.Morphicons.createMorph(path, want);
+        } catch (err) {
+          lockIconMorph = null;
+          console.warn('[desktopLyrics] lock morph unavailable:', err);
+        }
+        return;
+      }
+      // 状态轮询会反复调到这里，没变就不要再发一次形变
+      if (lockIconLocked === !!locked) return;
+      lockIconLocked = !!locked;
+      try { lockIconMorph.morphTo(want, 'snappy'); } catch (err) {}
+    }
     function syncLockClasses() {
       var locked = isLocked();
       document.body.classList.toggle('locked', locked);
       document.body.classList.toggle('unlocked', !locked);
       if (lockText) lockText.textContent = locked ? '\u4e2d\u952e\u89e3\u9501' : '\u4e2d\u952e\u9501\u5b9a';
+      syncLockIcon(locked);
     }
     function setPointerCapture(active) {
       active = !!active;
@@ -726,14 +1044,38 @@
     function sendHotBounds() {
       if (!window.desktopOverlay || !window.desktopOverlay.setLyricsHotBounds) return;
       var rect = lyricViewport.getBoundingClientRect();
+      // 播放控制条挂在 lockHint 胶囊里，热区必须把它并进来，
+      // 否则窗口鼠标穿透时主进程不会放行，按钮永远点不到。
+      var hintRect = lockHint ? lockHint.getBoundingClientRect() : null;
+      var left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
+      if (hintRect && hintRect.width > 0) {
+        left = Math.min(left, hintRect.left);
+        top = Math.min(top, hintRect.top);
+        right = Math.max(right, hintRect.right);
+        bottom = Math.max(bottom, hintRect.bottom);
+      }
       var padX = Math.max(26, Math.min(72, innerWidth * .038));
       var padY = Math.max(24, Math.min(56, innerHeight * .052));
       window.desktopOverlay.setLyricsHotBounds({
-        left:rect.left - padX,
-        top:rect.top - padY,
-        right:rect.right + padX,
-        bottom:rect.bottom + padY
+        left:left - padX,
+        top:top - padY,
+        right:right + padX,
+        bottom:bottom + padY
       }).catch(function(){});
+    }
+    /* 控制条/关闭按钮都属于「点击控件」，pointerdown 不能把它们当成拖拽起点，
+       否则按下按钮会先启动窗口拖动，click 就丢了。 */
+    function isControlTarget(target) {
+      if (!target) return false;
+      if (closeLyricsBtn && closeLyricsBtn.contains(target)) return true;
+      if (lyricsControls && lyricsControls.contains(target)) return true;
+      return false;
+    }
+    function sendPlaybackAction(action) {
+      if (!window.desktopOverlay || !window.desktopOverlay.sendPlaybackAction) return;
+      try {
+        Promise.resolve(window.desktopOverlay.sendPlaybackAction(action)).catch(function(){});
+      } catch (e) {}
     }
     function applyState(next){
       next = next || {};
@@ -751,7 +1093,8 @@
       if (motion.bass != null) state.bass = motion.bass;
       var text = String(state.text || 'Mineradio').replace(/\s+/g, ' ').trim() || 'Mineradio';
       var nextText = String(state.nextText || '').replace(/\s+/g, ' ').trim();
-      baseFontSize = Math.round(58 * clamp(state.size, .72, 1.55, 1));
+      // 基准 58px 与面板读数用同一个基准（03c 的 DESKTOP_LYRICS_BASE_FONT），改动要同步
+      baseFontSize = Math.round(58 * clamp(state.size, .45, 1.55, 1));
       state.progress = clamp(state.progress, 0, 1, 0);
       state.progressSpan = clamp(state.progressSpan, .75, 18, 4.8);
       state.progressReceivedAt = performance.now();
@@ -765,6 +1108,10 @@
       state.beatPulse = clamp(state.beatPulse, 0, 1.4, 0);
       state.bass = clamp(state.bass, 0, 1.2, 0);
       state.feather = clamp(state.feather || (next && next.feather), .030, .075, .055);
+      state.lineCount = normalizeRowCount(state.lineCount == null ? 1 : state.lineCount);
+      state.lines = Array.isArray(state.lines) ? state.lines : null;
+      state.tilt = clamp(state.tilt == null ? 0 : state.tilt, -35, 35, 0);
+      state.lyricMotion = normalizeRowMotion(state.lyricMotion);
       state.displayColors = {
         primary: normalizeLyricColor(state.colors.primary || '#f6fdff', '#f6fdff'),
         secondary: normalizeLyricColor(state.colors.secondary || '#a8f6ff', '#a8f6ff'),
@@ -785,6 +1132,12 @@
       setRootVar('--lyric-weight', String(state.fontWeight));
       setRootVar('--lyric-line-height', String(state.lineHeight));
       setRootVar('--lyric-feather', (state.feather * 100).toFixed(2) + '%');
+      setRootVar('--lyric-tilt', state.tilt.toFixed(2) + 'deg');
+      // 行间距：原来 2+12*lh（≈14px）太挤，拉开到 6+18*lh（≈24px），多行才看得清层次
+      setRootVar('--lyric-row-gap', Math.round(6 + 18 * state.lineHeight) + 'px');
+      setRootVar('--lyric-row-line-height', String(state.lineHeight));
+      document.body.classList.remove('motion-slide', 'motion-flip', 'motion-float', 'motion-none');
+      document.body.classList.add('motion-' + state.lyricMotion);
       document.body.classList.toggle('show', !!state.enabled);
       document.body.classList.toggle('paused', !state.playing);
       document.body.classList.toggle('highlight', state.highlightFollow === true);
@@ -816,6 +1169,7 @@
         lineNext.style.display = nextText ? '' : 'none';
       }
       fitLyricText(false);
+      renderLyricStack(false);
     }
     function currentDisplayProgress() {
       var target = clamp(state.progress, 0, 1, 0);
@@ -1036,6 +1390,7 @@
       if (state.enabled) {
         var progress = currentDisplayProgress();
         setRootVar('--lyric-progress', (progress * 100).toFixed(2) + '%');
+        updateStackProgress(progress);
         var offlineMotion = tickDesktopBeatMap(currentDesktopPlaybackTime(nowMs), dt);
         var motion = updateMotion(now, offlineMotion);
         applyStageMotion(now);
@@ -1137,7 +1492,10 @@
         var dy = evt.screenY - dragLast.y;
         dragLast.x = evt.screenX;
         dragLast.y = evt.screenY;
-        if (dx || dy) window.desktopOverlay.moveLyricsBy(dx, dy).catch(function(){});
+        if (dx || dy) {
+          dragMovedAt = performance.now();
+          window.desktopOverlay.moveLyricsBy(dx, dy).catch(function(){});
+        }
       }
     }
     function endDrag(evt) {
@@ -1152,8 +1510,17 @@
       dragPointerId = null;
       setPointerCapture(false);
     }
+    /* buttons=0 通常意味着「在窗口外松手了」，但窗口被拖动（setBounds）之后
+     * Chromium 会补发一串 buttons=0 的合成 move。刚挪过窗口的这段时间里不能判松手，
+     * 否则一次拖动只走一步就被打断（用户看到的「拖一下就断」）。 */
+    function shouldCancelDrag(evt, nowMs) {
+      if (!dragging) return false;
+      if (!evt || evt.buttons == null) return false;
+      if ((evt.buttons & 1) !== 0) return false;
+      return (nowMs - dragMovedAt) > 260;
+    }
     window.addEventListener('pointermove', function(evt){
-      if (dragging && evt.buttons != null && (evt.buttons & 1) === 0) {
+      if (shouldCancelDrag(evt, performance.now())) {
         endDrag(evt);
         updateHover(evt);
         return;
@@ -1176,7 +1543,7 @@
     });
     window.addEventListener('pointerdown', function(evt){
       if (!pointInStage(evt)) return;
-      if (closeLyricsBtn && closeLyricsBtn.contains(evt.target)) return;
+      if (isControlTarget(evt.target)) return;
       if (evt.button === 1) {
         evt.preventDefault();
         hideInteractionHint();
@@ -1192,6 +1559,7 @@
         dragPointerId = evt.pointerId;
         dragLast.x = evt.screenX;
         dragLast.y = evt.screenY;
+        dragMovedAt = performance.now();
         setPointerCapture(true);
         try {
           if (stage.setPointerCapture) stage.setPointerCapture(evt.pointerId);
@@ -1221,7 +1589,18 @@
         }
       });
     }
+    if (lyricsControls) {
+      lyricsControls.addEventListener('click', function(evt){
+        var btn = evt.target && evt.target.closest
+          ? evt.target.closest('button[data-playback-action]') : null;
+        if (!btn || !lyricsControls.contains(btn)) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        sendPlaybackAction(btn.getAttribute('data-playback-action'));
+      });
+    }
     window.__mineradioDesktopLyricsApplyState = applyState;
+    window.__mineradioDesktopLyricsSendPlaybackAction = sendPlaybackAction;
     window.addEventListener('message', function(event){
       var data = event && event.data;
       if (!data || data.type !== 'mineradio-desktop-lyrics-state') return;

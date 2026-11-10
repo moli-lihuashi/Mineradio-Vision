@@ -13,6 +13,13 @@ function readSavedLyricLayout() {
     var savedBgCustom = savedBgMode
       ? savedBgMode === 'custom'
       : (raw.backgroundColorCustom === true || (raw.backgroundColorCustom !== false && savedBgColor !== '#000000') || savedBgOpacity < 1);
+    /* 本文件末尾用 `var` 声明的上下限，在 12d 的启动初始化里可能还没赋值
+     * （12d 先于本文件执行，var 提升只给 undefined），直接拿来 clamp 会算出 NaN，
+     * 行数归一化更会因为 indexOf 拿到 undefined 直接抛异常 →
+     * 整个函数走 catch 返回 {} → 启动时整份存档设置被默认值覆盖。
+     * 所以统一走这几个兜底读取器。 */
+    var lyricsSizeLimits = desktopLyricsSizeLimits();
+    var lyricsTiltLimits = desktopLyricsTiltLimits();
     var desktopLyricsSchemaReady = raw.desktopLyricsSchema === 'desktop-lyrics-v3';
     var savedShelfCameraMode = normalizeShelfCameraMode(raw.shelfCameraMode || fxDefaults.shelfCameraMode);
     var savedShelfAngleManual = raw.shelfAngleYManual === true;
@@ -80,21 +87,38 @@ function readSavedLyricLayout() {
       backgroundImage: normalizeCustomBackgroundImage(raw.backgroundImage),
       backgroundMedia: normalizeCustomBackgroundMedia(raw.backgroundMedia || raw.backgroundImage),
       backgroundAlbumCover: raw.backgroundAlbumCover === true,
-      desktopLyrics: raw.desktopLyrics === true,
-      desktopLyricsSize: clampRange(Number(raw.desktopLyricsSize) || fxDefaults.desktopLyricsSize, 0.72, 1.55),
+      /* `desktopLyricsDefault` 是「存档里的值代表用户显式选择」的迁移标记。
+         2026-11-06 起桌面歌词默认改为【关】，标记同步升级为 'off-v4'：
+         凡是旧标记（含更早的 'on'）都没有这个新标记，一律按新默认值重置一次，
+         避免老存档里的 true 让播放器一启动就自动铺桌面歌词；
+         只有用户在新版本里手动开关过（写回 'off-v4'）之后，才完全听用户的。 */
+      desktopLyrics: raw.desktopLyricsDefault === 'off-v4'
+        ? raw.desktopLyrics === true
+        : fxDefaults.desktopLyrics === true,
+      desktopLyricsSize: clampRange(Number(raw.desktopLyricsSize) || fxDefaults.desktopLyricsSize, lyricsSizeLimits.min, lyricsSizeLimits.max),
       desktopLyricsOpacity: clampRange(raw.desktopLyricsOpacity == null ? fxDefaults.desktopLyricsOpacity : Number(raw.desktopLyricsOpacity), 0.28, 1),
-      desktopLyricsY: clampRange(raw.desktopLyricsY == null ? fxDefaults.desktopLyricsY : Number(raw.desktopLyricsY), 0.08, 0.92),
+      desktopLyricsLines: normalizeDesktopLyricsLineCount(raw.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : raw.desktopLyricsLines),
+      desktopLyricsTilt: clampRange(raw.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(raw.desktopLyricsTilt), lyricsTiltLimits.min, lyricsTiltLimits.max),
+      desktopLyricsMotion: normalizeDesktopLyricsMotion(raw.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
       desktopLyricsClickThrough: desktopLyricsSchemaReady ? raw.desktopLyricsClickThrough === true : fxDefaults.desktopLyricsClickThrough,
       desktopLyricsCinema: desktopLyricsSchemaReady ? raw.desktopLyricsCinema !== false : fxDefaults.desktopLyricsCinema,
       desktopLyricsHighlight: desktopLyricsSchemaReady ? raw.desktopLyricsHighlight === true : fxDefaults.desktopLyricsHighlight,
       desktopLyricsFps: desktopLyricsSchemaReady ? normalizeDesktopLyricsFps(raw.desktopLyricsFps) : fxDefaults.desktopLyricsFps,
+      /* 红心点击动效：四套 + 随机 + 关闭。白名单写在函数里而不是取本文件的 var 常量，
+         原因同下面 sizeLimits —— 本文件晚于 00-state/12d 执行，靠后文件的 var 此时还是 undefined。 */
+      heartFx: normalizeHeartFxMode(raw.heartFx, fxDefaults.heartFx),
+      /* 收藏演出（整屏）：snow / birds / off，白名单同样写在函数体内 */
+      heartScene: normalizeHeartSceneMode(raw.heartScene, fxDefaults.heartScene),
+      /* 控制条底层频谱：ripple / pulse / ribbon / off */
+      barSpectrum: normalizeBarSpectrumMode(raw.barSpectrum, fxDefaults.barSpectrum),
       performanceBackground: normalizePerformanceBackgroundMode(raw.performanceBackground, raw.liveBackgroundKeep === true),
       performanceQuality: normalizePerformanceQuality(raw.performanceQuality),
       foregroundFpsMode: normalizeForegroundFpsMode(raw.foregroundFpsMode),
       gpuThrottleMode: normalizeGpuThrottleMode(raw.gpuThrottleMode),
       liveBackgroundKeep: normalizePerformanceBackgroundMode(raw.performanceBackground, raw.liveBackgroundKeep === true) === 'keep',
-      wallpaperMode: false,
+      wallpaperMode: raw.wallpaperMode === true,
       wallpaperOpacity: clampRange(raw.wallpaperOpacity == null ? fxDefaults.wallpaperOpacity : Number(raw.wallpaperOpacity), 0.35, 1),
+      wallpaperFps: normalizeWallpaperFrameRate(raw.wallpaperFps == null ? fxDefaults.wallpaperFps : raw.wallpaperFps),
       coverResolution: normalizeCoverResolution(raw.coverResolution),
       shelf: /^(off|side|stage)$/.test(String(raw.shelf || '')) ? raw.shelf : fxDefaults.shelf,
       shelfCameraMode: savedShelfCameraMode,
@@ -229,20 +253,29 @@ function saveLyricLayout() {
       backgroundMedia: normalizeCustomBackgroundMedia(fx.backgroundMedia || fx.backgroundImage),
       backgroundAlbumCover: !!fx.backgroundAlbumCover,
       desktopLyrics: !!fx.desktopLyrics,
-      desktopLyricsSize: clampRange(Number(fx.desktopLyricsSize) || fxDefaults.desktopLyricsSize, 0.72, 1.55),
+      // 迁移标记：写过一次之后，desktopLyrics 就是用户自己的选择，不再套默认值
+      // （'off-v4' = 2026-11-06 起「默认关」的存档版本，旧标记会在读取时一次性迁移）
+      desktopLyricsDefault: 'off-v4',
+      desktopLyricsSize: clampRange(Number(fx.desktopLyricsSize) || fxDefaults.desktopLyricsSize, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX),
       desktopLyricsOpacity: clampRange(fx.desktopLyricsOpacity == null ? fxDefaults.desktopLyricsOpacity : Number(fx.desktopLyricsOpacity), 0.28, 1),
-      desktopLyricsY: clampRange(fx.desktopLyricsY == null ? fxDefaults.desktopLyricsY : Number(fx.desktopLyricsY), 0.08, 0.92),
+      desktopLyricsLines: normalizeDesktopLyricsLineCount(fx.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : fx.desktopLyricsLines),
+      desktopLyricsTilt: clampRange(fx.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(fx.desktopLyricsTilt), DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
+      desktopLyricsMotion: normalizeDesktopLyricsMotion(fx.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
       desktopLyricsClickThrough: fx.desktopLyricsClickThrough === true,
       desktopLyricsCinema: fx.desktopLyricsCinema !== false,
       desktopLyricsHighlight: fx.desktopLyricsHighlight === true,
       desktopLyricsFps: normalizeDesktopLyricsFps(fx.desktopLyricsFps),
+      heartFx: normalizeHeartFxMode(fx.heartFx, fxDefaults.heartFx),
+      heartScene: normalizeHeartSceneMode(fx.heartScene, fxDefaults.heartScene),
+      barSpectrum: normalizeBarSpectrumMode(fx.barSpectrum, fxDefaults.barSpectrum),
       performanceBackground: normalizePerformanceBackgroundMode(fx.performanceBackground, fx.liveBackgroundKeep === true),
       performanceQuality: normalizePerformanceQuality(fx.performanceQuality),
       foregroundFpsMode: normalizeForegroundFpsMode(fx.foregroundFpsMode),
       gpuThrottleMode: normalizeGpuThrottleMode(fx.gpuThrottleMode),
       liveBackgroundKeep: normalizePerformanceBackgroundMode(fx.performanceBackground, fx.liveBackgroundKeep === true) === 'keep',
-      wallpaperMode: false,
+      wallpaperMode: !!fx.wallpaperMode,
       wallpaperOpacity: clampRange(fx.wallpaperOpacity == null ? fxDefaults.wallpaperOpacity : Number(fx.wallpaperOpacity), 0.35, 1),
+      wallpaperFps: normalizeWallpaperFrameRate(fx.wallpaperFps == null ? fxDefaults.wallpaperFps : fx.wallpaperFps),
       coverResolution: normalizeCoverResolution(fx.coverResolution),
       shelf: /^(off|side|stage)$/.test(String(fx.shelf || '')) ? fx.shelf : fxDefaults.shelf,
       shelfCameraMode: normalizeShelfCameraMode(fx.shelfCameraMode || fxDefaults.shelfCameraMode),
@@ -334,6 +367,94 @@ function normalizeDesktopLyricsFps(value) {
   if (n <= 45) return 30;
   if (n <= 90) return 60;
   return 120;
+}
+// 壁纸模式帧率：面板 seg 只有 24 / 30 / 60 三档，非法值回落默认 60。
+// 与 10-shell 04-desktop-overlay-fullscreen.js 里 normalizeWallpaperFps 同语义（那边的
+// 无值兜底也应是 60），两边改动要同步。
+function normalizeWallpaperFrameRate(value) {
+  var n = Math.round(Number(value) || 0);
+  if (n <= 0) return 60;
+  return Math.max(1, Math.min(60, n));
+}
+// 桌面歌词字号缩放上下限：读取存档 / 面板滑块 / 主进程 payload / 预设归档都从这里取，
+// 避免四处写死字面量改漏（0.45 对应约 26px，再小就看不清了）。
+var DESKTOP_LYRICS_SIZE_MIN = 0.45;
+var DESKTOP_LYRICS_SIZE_MAX = 1.55;
+// 桌面歌词倾斜 = 绕 Y 轴的三维旋转角度（度）。±35 再大就明显读不动了。
+var DESKTOP_LYRICS_TILT_MIN = -35;
+var DESKTOP_LYRICS_TILT_MAX = 35;
+// 基准字号：桌面歌词页里 `baseFontSize = round(58 * size)`，面板读数用同一个基准换算成 px。
+// 两处必须保持一致（desktop-lyrics.html 里有一份同样的 58 和注释）。
+var DESKTOP_LYRICS_BASE_FONT = 58;
+// 桌面歌词多行：1 / 3 / 5 / 7 / 10 行。奇数行让当前句正好垂直居中；
+// 10 行是偶数（当前句落在第 6 行，视觉上略低于中线，更像「正在唱的这一句」）。
+var DESKTOP_LYRICS_LINE_OPTIONS = [1, 3, 5, 7, 10];
+
+/* 上面的常量用 `var` 声明，而本文件在合并脚本里排在 12d 之后 —— 12d 的
+ * `var fx = Object.assign({}, fxDefaults, readSavedLyricLayout())` 执行时，
+ * 这些 var 还是 undefined。谁在这一刻被读取，就会拿到 undefined：
+ *   · clampRange(v, undefined, undefined) → NaN（字号/倾斜静默损坏）
+ *   · DESKTOP_LYRICS_LINE_OPTIONS.indexOf(...) → TypeError →
+ *     readSavedLyricLayout 整体走 catch 返回 {} → 启动瞬间所有存档设置归零，
+ *     随后 boot 期的 saveLyricLayout 再把默认值写回本地存储（存档被真正抹掉）。
+ * 下面三个读取器给这个「常量还没就位」的窗口期兜底；常态化之后仍以常量本身为准，
+ * tests/desktop-lyrics-layout-boot-order.test.js 会守住兜底值与常量一致。 */
+function normalizeHeartFxMode(value, fallback) {
+  var allowed = ['random', 'folia', 'riso', 'ring', 'star', 'off'];
+  var v = String(value == null ? '' : value);
+  if (allowed.indexOf(v) >= 0) return v;
+  var f = String(fallback == null ? '' : fallback);
+  return allowed.indexOf(f) >= 0 ? f : 'random';
+}
+/* 收藏演出：snow / birds / off —— 同 normalizeHeartFxMode，白名单不引用文件级常量 */
+function normalizeHeartSceneMode(value, fallback) {
+  var allowed = ['snow', 'birds', 'off'];
+  var v = String(value == null ? '' : value);
+  if (allowed.indexOf(v) >= 0) return v;
+  var f = String(fallback == null ? '' : fallback);
+  return allowed.indexOf(f) >= 0 ? f : 'snow';
+}
+/* 控制条底层频谱：ripple / pulse / ribbon / off，白名单同样写在函数体内 */
+function normalizeBarSpectrumMode(value, fallback) {
+  var allowed = ['ripple', 'pulse', 'ribbon', 'off'];
+  var v = String(value == null ? '' : value);
+  if (allowed.indexOf(v) >= 0) return v;
+  var f = String(fallback == null ? '' : fallback);
+  return allowed.indexOf(f) >= 0 ? f : 'ripple';
+}
+function desktopLyricsSizeLimits() {
+  return {
+    min: typeof DESKTOP_LYRICS_SIZE_MIN === 'number' ? DESKTOP_LYRICS_SIZE_MIN : 0.45,
+    max: typeof DESKTOP_LYRICS_SIZE_MAX === 'number' ? DESKTOP_LYRICS_SIZE_MAX : 1.55
+  };
+}
+function desktopLyricsTiltLimits() {
+  return {
+    min: typeof DESKTOP_LYRICS_TILT_MIN === 'number' ? DESKTOP_LYRICS_TILT_MIN : -35,
+    max: typeof DESKTOP_LYRICS_TILT_MAX === 'number' ? DESKTOP_LYRICS_TILT_MAX : 35
+  };
+}
+function desktopLyricsLineOptions() {
+  return Array.isArray(DESKTOP_LYRICS_LINE_OPTIONS) ? DESKTOP_LYRICS_LINE_OPTIONS : [1, 3, 5, 7, 10];
+}
+function normalizeDesktopLyricsLineCount(value) {
+  var options = desktopLyricsLineOptions();
+  var n = Math.round(Number(value) || 0);
+  if (options.indexOf(n) >= 0) return n;
+  var best = 1;
+  var bestGap = Infinity;
+  for (var i = 0; i < options.length; i++) {
+    var gap = Math.abs(options[i] - n);
+    if (gap < bestGap) { bestGap = gap; best = options[i]; }
+  }
+  return best;
+}
+// 桌面歌词换行动效：slide（上浮）/ flip（3D 翻转）/ float（呼吸漂移）/ none（静止）
+function normalizeDesktopLyricsMotion(value) {
+  return /^(slide|flip|float|none)$/.test(String(value || '')) ? String(value) : 'slide';
+}
+function desktopLyricsMotionLabel(value) {
+  return { slide: '上浮', flip: '3D 翻转', float: '呼吸', none: '静止' }[normalizeDesktopLyricsMotion(value)] || '上浮';
 }
 function normalizeShelfCameraMode(value) {
   return String(value || '') === 'static' ? 'static' : 'dynamic';

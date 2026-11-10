@@ -26,6 +26,7 @@ module.exports = function createKugouProtocol(deps) {
   } = deps || {};
 
   const crypto = require('crypto');
+  const KUGOU_UI_TIMEOUT_MS = 6000;
 
   function kugouMd5(text) {
     return crypto.createHash('md5').update(String(text || '')).digest('hex');
@@ -163,7 +164,9 @@ module.exports = function createKugouProtocol(deps) {
     if (options.responseType === 'buffer') {
       return requestBuffer(u.toString(), { method, headers }, hasBody ? dataString : null);
     }
-    const text = await requestText(u.toString(), { method, headers }, hasBody ? dataString : null);
+    /* 前台可见路径：和 cloudlist 一样守 6s 预算。旧行为是默认 12s + 重试 1 次，
+       实测一次抖动能让 /api/kugou/playlist/tracks 的兜底跑到 14.7s。 */
+    const text = await requestText(u.toString(), { method, headers, timeoutMs: KUGOU_UI_TIMEOUT_MS }, hasBody ? dataString : null);
     return parseJSONText(text);
   }
   // 归口到 kugou-api.js 的 lite 身份通道（含 ensureKugouDfid）；勿再本地旁路签名/Cookie。

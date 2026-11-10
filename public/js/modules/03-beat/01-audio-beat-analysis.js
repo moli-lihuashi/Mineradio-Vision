@@ -1,45 +1,57 @@
+// 节拍分析的长度上限（秒）。
+// 整轨搬进渲染进程的代价是线性的：实测约 2.8MB/秒音频（5 分钟 +879MB、25 分钟 +4050MB），
+// 而这笔内存不计入 V8 堆（performance.memory.jsHeapSizeLimit 对它无效），
+// 直接把渲染进程往 commit 上限推 —— startup-error.log 里 reason=oom 的那批崩溃就是它。
+// 阈值取与播客路径相同的 3300s（见 02-podcast-dj-analysis.js 的 >3300 转服务端兜底）。
+var BEAT_ANALYSIS_MAX_SEC = 3300;
+// 与 MAX_SEC 配套的"下载前"闸：拿不到时长元数据时，用响应体量兜底。
+// 压缩音频按 1.1Mbps 上限估，3300s ≈ 448MB；超过这个数的响应不可能是正常时长的歌，
+// 必须在 arrayBuffer() 把它整块搬进渲染进程之前拦掉（那一下就是 GB 级外部内存）。
+var BEAT_ANALYSIS_MAX_BYTES = Math.round(BEAT_ANALYSIS_MAX_SEC * 1100 * 1000 / 8);
+// 渲染进程堆占用超过这个比例就不再启动新分析。performance.memory 的 usedJSHeapSize
+// 不含 ArrayBuffer，但堆逼近上限本身就说明进程已经在悬崖边，此时再整轨解码必炸。
+var BEAT_ANALYSIS_MAX_HEAP_RATIO = 0.82;
+// ---- 长音轨分段解码 ----
+// 上面几道闸只能"不让它进渲染进程"，长音频因此永远拿不到节拍图。真正的解法是不把
+// 整轨 PCM 留在渲染进程里：按 HTTP Range 一段一段拉、一段一段解码，每段只留帧能量包络。
+// 整轨 55 分钟的账（48kHz 立体声 float32）：
+//   解码后 AudioBuffer            1.27GB  ← 分段后归零
+//   每条频带的 OfflineAudioContext 渲染目标 0.63GB ×4  ← 分段后每段只有 23MB
+//   tempo worker 用的整轨 mono     0.63GB  ← 降到 22.05kHz 后 0.29GB
+// 峰值从 5.3GB 量级降到 ~0.3GB，且短于 SEGMENT_MIN_SEC 的歌仍走原来的整轨路径，行为不变。
+var BEAT_ANALYSIS_SEGMENT_SEC = 120;        // 每段目标时长
+var BEAT_ANALYSIS_SEGMENT_MIN_SEC = 420;    // 超过此时长才分段（7 分钟）
+var BEAT_ANALYSIS_SEGMENT_TRIM_SEC = 0.20;  // 段首丢弃：从任意字节偏移解码时解码器要重同步，前几十毫秒是垃圾
+var BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES = 320 * 1024; // 段首多拉一点，保证段尾不被截断
+var BEAT_ANALYSIS_TEMPO_RATE = 22050;       // 分段路径下 mono 的目标采样率（ Nyquist 11kHz，鼓点足够）
+// 时长元数据缺失但文件已经不小的时候，用 <audio> 元素探一次时长（只读元数据，不播放）。
+// 没有它，"时长未知 + 130MB 文件"会绕过第一道闸，整轨下载+解码照样把渲染进程顶爆。
+var BEAT_ANALYSIS_DURATION_PROBE_MIN_BYTES = 24 * 1024 * 1024;
+
 async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   options = options || {};
   var analysisProfile = cinemaAnalysisProfileForSong(options.song);
   var softGrooveAnalysis = !!(analysisProfile && analysisProfile.softGroove);
-  try {
-    beatMapBusy = true;
-    if (options.prefetch) showBeatChip('预热下一首节奏…');
-    else if (options.background) showBeatChip('后台缓冲节奏…');
-    await yieldToIdle(beatAnalysisYieldMs(options, 140, 760));
-    if (token !== beatMapToken) { hideBeatChip(); beatMapBusy = false; return null; }
-    showBeatChip('正在分析节奏…');
-    var resp = await fetch(audioUrl);
-    if (token !== beatMapToken) { hideBeatChip(); return null; }
-    var ab = await resp.arrayBuffer();
-    if (token !== beatMapToken) { hideBeatChip(); return null; }
+  // 用 OfflineAudioContext 分离低频重鼓 / 中频鼓身 / 高频敲击感.
+  // 关键：这里只保留帧能量包络，不留整轨分带。原先 4 条全长相等的 Float32Array
+  // 会一起活到函数返回（async 函数的局部变量挂在 generator context 上，跨 await 不会
+  // 提前释放），是单次分析里最大的一块 —— 帧能量只占全长的 1%，整轨分带纯属浪费。
+  // 释放一条分带的渲染资源。注意：这里不能调 off.close() —— 实测本构建里
+  // OfflineAudioContext.prototype.close 是 undefined，调用只会抛 TypeError。
+  // 真正有效的释放是断开源节点对整轨 buffer 的引用；渲染目标本身随 rendered
+  // 离开作用域（算完帧能量就返回）交给 GC。
 
-    // 用临时 AudioContext 解码 (我们不能复用 audioCtx 因为它可能 closed)
-    var TmpCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    if (!TmpCtx) { hideBeatChip(); return null; }
-    var DecodeCtx = window.AudioContext || window.webkitAudioContext;
-    var dc = new DecodeCtx();
-    var buffer = await new Promise(function(resolve, reject){
-      dc.decodeAudioData(ab.slice(0), resolve, reject);
-    }).catch(function(e){ console.warn('decode failed:', e); return null; });
-    dc.close && dc.close();
-    if (!buffer) { hideBeatChip(); return null; }
-    if (token !== beatMapToken) { hideBeatChip(); return null; }
-
-    var musicTempoBeats = [];
-    var musicTempoGridStep = 0;
-    var musicTempoTask = options.skipMusicTempo ? Promise.resolve(null) : analyzeMusicTempoInWorker(buffer, token);
-
-    // 用 OfflineAudioContext 分离低频重鼓 / 中频鼓身 / 高频敲击感.
-    var sr = buffer.sampleRate;
-    async function renderBand(hpFreq, lpFreq) {
-      var off = new TmpCtx(1, buffer.length, sr);
-      var src = off.createBufferSource(); src.buffer = buffer;
+  function releaseBandSrc(src) {
+      try { src.buffer = null; } catch (e) {}
+  }
+  async function renderBandEnergyOn(buf, hpFreq, lpFreq) {
+      var off = new TmpCtx(1, buf.length, buf.sampleRate);
+      var src = off.createBufferSource(); src.buffer = buf;
       var node = src;
       if (hpFreq) {
         var hp = off.createBiquadFilter();
         hp.type = 'highpass';
-        hp.frequency.value = Math.min(hpFreq, sr * 0.45);
+        hp.frequency.value = Math.min(hpFreq, buf.sampleRate * 0.45);
         hp.Q.value = 0.85;
         node.connect(hp);
         node = hp;
@@ -47,65 +59,196 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
       if (lpFreq) {
         var lp = off.createBiquadFilter();
         lp.type = 'lowpass';
-        lp.frequency.value = Math.min(lpFreq, sr * 0.45);
+        lp.frequency.value = Math.min(lpFreq, buf.sampleRate * 0.45);
         lp.Q.value = 0.9;
         node.connect(lp);
         node = lp;
       }
       node.connect(off.destination);
       src.start(0);
-      var renderedBand = await off.startRendering();
-      if (token !== beatMapToken) return null;
+      var rendered = await off.startRendering();
+      if (token !== beatMapToken) { releaseBandSrc(src); return null; }
       await yieldToIdle(beatAnalysisYieldMs(options, 110, 620));
-      return renderedBand.getChannelData(0);
-    }
-    var bands = [];
-    bands.push(await renderBand(38, 155));
-    if (token !== beatMapToken || !bands[0]) { hideBeatChip(); return null; }
-    bands.push(await renderBand(130, 420));
-    if (token !== beatMapToken || !bands[1]) { hideBeatChip(); return null; }
-    bands.push(await renderBand(420, 2600));
-    if (token !== beatMapToken || !bands[2]) { hideBeatChip(); return null; }
-    bands.push(await renderBand(1800, 9000));
-    if (token !== beatMapToken) { hideBeatChip(); return null; }
-    var lowPcm = bands[0];
-    var bodyPcm = bands[1];
-    var vocalPcm = bands[2];
-    var snapPcm = bands[3];
-
-    // 帧化能量 (10ms 窗口)
-    var winSize = Math.floor(sr * 0.010);
-    async function makeFrameEnergy(pcm) {
-      var frames = Math.floor(pcm.length / winSize);
+      var energy = await makeFrameEnergy(rendered.getChannelData(0), Math.floor(buf.sampleRate * 0.010));
+      // 算完包络就丢：断开源节点对整轨 buffer 的引用，渲染目标随作用域退出释放
+      releaseBandSrc(src);
+      rendered = null;
+      off = null;
+      return energy;
+  }
+  async function renderBandEnergy(hpFreq, lpFreq) {
+      return renderBandEnergyOn(buffer, hpFreq, lpFreq);
+  }
+  // 帧化能量 (10ms 窗口)。内部每 520 帧让出主线程，长音轨才不会把 UI 卡死。
+  async function makeFrameEnergy(pcm, win) {
+      var frames = Math.floor(pcm.length / win);
       var out = new Float32Array(frames);
       for (var f = 0; f < frames; f++) {
         var s = 0;
-        var off2 = f * winSize;
-        for (var i = 0; i < winSize; i++) {
+        var off2 = f * win;
+        for (var i = 0; i < win; i++) {
           var v = pcm[off2 + i];
           s += v * v;
         }
-        out[f] = Math.sqrt(s / winSize);
+        out[f] = Math.sqrt(s / win);
         if (f > 0 && f % 520 === 0) {
           await yieldToPaint();
           if (token !== beatMapToken) return null;
         }
       }
       return out;
+  }
+
+  try {
+    beatMapBusy = true;
+    // 闸门 0：进程已经吃紧时不要再见缝插针地整轨解码。
+    try {
+      var pm = performance.memory;
+      if (pm && pm.jsHeapSizeLimit && pm.usedJSHeapSize > pm.jsHeapSizeLimit * BEAT_ANALYSIS_MAX_HEAP_RATIO) {
+        console.warn('[beat] 跳过分析：渲染进程堆占用过高',
+          Math.round(pm.usedJSHeapSize / 1048576), 'MB /', Math.round(pm.jsHeapSizeLimit / 1048576), 'MB');
+        hideBeatChip();
+        return null;
+      }
+    } catch (_) {}
+    if (options.prefetch) showBeatChip('预热下一首节奏…');
+    else if (options.background) showBeatChip('后台缓冲节奏…');
+    await yieldToIdle(beatAnalysisYieldMs(options, 140, 760));
+    if (token !== beatMapToken) { hideBeatChip(); beatMapBusy = false; return null; }
+    showBeatChip('正在分析节奏…');
+    // durationSec 之前是死参数（全文只出现在签名里）。现在拿它当第一道闸：
+    // 能提前知道时长的路径（播放中分析传的是 audio.duration）在下载之前就拦掉超长音轨。
+    // 注意：串流/预热/cuefield 三条路径过去一直传 null，这道闸对它们完全不生效，
+    // 超长音频会走完"下载 → 解码"才在第二道闸被拒，而那时 GB 级外部内存已经分配掉了。
+    if (durationSec && isFinite(durationSec) && durationSec > BEAT_ANALYSIS_MAX_SEC) {
+      console.warn('[beat] 跳过超长音轨分析:', Math.round(durationSec), 's >', BEAT_ANALYSIS_MAX_SEC, 's');
+      hideBeatChip();
+      return null;
     }
-    var frameBands = [];
-    frameBands.push(await makeFrameEnergy(lowPcm));
-    await yieldToIdle(beatAnalysisYieldMs(options, 90, 520));
-    frameBands.push(await makeFrameEnergy(bodyPcm));
-    await yieldToIdle(beatAnalysisYieldMs(options, 90, 520));
-    frameBands.push(await makeFrameEnergy(vocalPcm));
-    await yieldToIdle(beatAnalysisYieldMs(options, 90, 520));
-    frameBands.push(await makeFrameEnergy(snapPcm));
-    if (token !== beatMapToken || !frameBands[0] || !frameBands[1] || !frameBands[2] || !frameBands[3]) { hideBeatChip(); return null; }
-    var energy = frameBands[0];
-    var bodyEnergy = frameBands[1];
-    var vocalEnergy = frameBands[2];
-    var snapEnergy = frameBands[3];
+    var resp = await fetch(audioUrl);
+    if (token !== beatMapToken) { hideBeatChip(); return null; }
+    // 闸门 1.5：响应体量兜底。元数据缺失（durationSec=0）时唯一能在 arrayBuffer()
+    // 之前生效的判据。流式响应没有 content-length 时跳过，交给闸门 2。
+    var contentLength = Number(resp.headers && resp.headers.get('content-length')) || 0;
+    if (contentLength > BEAT_ANALYSIS_MAX_BYTES) {
+      console.warn('[beat] 跳过异常体积的音频响应:',
+        (contentLength / 1048576).toFixed(1), 'MB >', (BEAT_ANALYSIS_MAX_BYTES / 1048576).toFixed(0), 'MB');
+      hideBeatChip();
+      return null;
+    }
+    // 时长元数据缺失但文件已经不小：先探一次时长再决定走哪条路。
+    // 探不到就维持 0，下面按"未知"处理（整轨路径 + 闸门 2 兜底）。
+    if ((!durationSec || !isFinite(durationSec) || durationSec <= 0) &&
+        contentLength >= BEAT_ANALYSIS_DURATION_PROBE_MIN_BYTES) {
+      var probed = await probeAudioDurationSec(audioUrl, token);
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+      if (probed > 0) {
+        console.log('[beat] 时长元数据缺失，<audio> 探到', Math.round(probed), 's');
+        durationSec = probed;
+      }
+    }
+    // ---- 长音轨：分段解码（不把整轨 PCM 搬进渲染进程）----
+    // 分段必须在 arrayBuffer() 之前决定：一旦整块下载+解码，GB 级外部内存已经分配掉了。
+    // 任何一步不成立（没时长 / 没体量 / 服务端不支持 Range）都退回整轨路径，行为与从前一致。
+    // 用临时 AudioContext 解码（不能复用 audioCtx，它可能已 closed）。
+    var TmpCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!TmpCtx) { hideBeatChip(); return null; }
+    var DecodeCtx = window.AudioContext || window.webkitAudioContext;
+    if (!DecodeCtx) { hideBeatChip(); return null; }
+    var segPlan = null;
+    if (durationSec && isFinite(durationSec) && durationSec > BEAT_ANALYSIS_SEGMENT_MIN_SEC && contentLength > 0) {
+      segPlan = {
+        totalSec: durationSec,
+        bytesPerSec: contentLength / durationSec,
+        contentLength: contentLength
+      };
+    }
+    var ab = null;
+    if (segPlan) {
+      // 分段落定：不再需要这个完整响应，把 body 停掉，别让它在后台把整包拉完
+      try { if (resp.body && resp.body.cancel) resp.body.cancel(); } catch (_) {}
+      var segInput = await decodeBeatsInputBySegments(audioUrl, segPlan, token, options);
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+      if (segInput) {
+        window.__lastBeatSegmentStats = segInput.stats;
+      } else {
+        console.warn('[beat] 分段解码不可用，回退整轨路径');
+        resp = await fetch(audioUrl);
+        if (token !== beatMapToken) { hideBeatChip(); return null; }
+        ab = await resp.arrayBuffer();
+        if (token !== beatMapToken) { hideBeatChip(); return null; }
+      }
+    } else {
+      ab = await resp.arrayBuffer();
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+    }
+
+    // ---- 输入源：整轨 或 分段 ----
+    // 两条路径最后归结到同一组变量：四条频带的帧能量包络 + 总时长 + tempo/画像用的降采样 PCM。
+    // 下游（onset / 节拍网格 / 音高画像）完全共用，不区分数据是怎么来的。
+    var buffer = null;            // 仅整轨路径有
+    var segMono = null;           // 仅分段路径有：降采样 mono，喂 tempo worker
+    var segMonoRate = 0;
+    var segProfilePcm = null;     // 仅分段路径有：音高画像用的降采样 PCM
+    var segProfileRate = 0;
+    var segProfileMeta = null;
+    var energy = null, bodyEnergy = null, vocalEnergy = null, snapEnergy = null;
+    var totalDuration = 0;
+    var sr = 0;
+
+    if (segInput) {
+      energy = segInput.energy;
+      bodyEnergy = segInput.bodyEnergy;
+      vocalEnergy = segInput.vocalEnergy;
+      snapEnergy = segInput.snapEnergy;
+      totalDuration = segInput.duration;
+      segMono = segInput.mono;
+      segMonoRate = segInput.monoRate;
+      segProfilePcm = segInput.profilePcm;
+      segProfileRate = segInput.profileRate;
+      segProfileMeta = segInput.profileMeta;
+      sr = segInput.sampleRate;
+      segInput = null;
+    } else {
+      var dc = new DecodeCtx();
+      buffer = await new Promise(function(resolve, reject){
+        // decodeAudioData 会接管并 detach 传入的 ArrayBuffer，用不着预先 slice。
+        // 原先的 ab.slice(0) 让整条压缩音频在内存里同时存在两份（5 分钟歌 ≈ 24MB 白给）。
+        dc.decodeAudioData(ab, resolve, reject);
+      }).catch(function(e){ console.warn('decode failed:', e); return null; });
+      ab = null;
+      dc.close && dc.close();
+      if (!buffer) { hideBeatChip(); return null; }
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+      // 预取路径传的是 null，拿不到时长；这里用解码出来的真实时长兜底
+      // （也是唯一能在下载完成后拦住小时级音频的地方）。
+      if (buffer.duration > BEAT_ANALYSIS_MAX_SEC) {
+        console.warn('[beat] 跳过超长音轨分析:', Math.round(buffer.duration), 's >', BEAT_ANALYSIS_MAX_SEC, 's');
+        hideBeatChip();
+        return null;
+      }
+      totalDuration = buffer.duration;
+      sr = buffer.sampleRate;
+    }
+
+    var musicTempoBeats = [];
+    var musicTempoGridStep = 0;
+    var musicTempoTask;
+    if (options.skipMusicTempo) musicTempoTask = Promise.resolve(null);
+    else if (segMono) musicTempoTask = analyzeMusicTempoFromMonoPcm(segMono, segMonoRate, token);
+    else musicTempoTask = analyzeMusicTempoInWorker(buffer, token);
+
+    // 分段路径已经把四条包络算好了，这里只补整轨路径
+    if (!energy) {
+      energy = await renderBandEnergy(38, 155);
+      if (token !== beatMapToken || !energy) { hideBeatChip(); return null; }
+      bodyEnergy = await renderBandEnergy(130, 420);
+      if (token !== beatMapToken || !bodyEnergy) { hideBeatChip(); return null; }
+      vocalEnergy = await renderBandEnergy(420, 2600);
+      if (token !== beatMapToken || !vocalEnergy) { hideBeatChip(); return null; }
+      snapEnergy = await renderBandEnergy(1800, 9000);
+      if (token !== beatMapToken || !snapEnergy) { hideBeatChip(); return null; }
+    }
     var nFrames = Math.min(energy.length, bodyEnergy.length, vocalEnergy.length, snapEnergy.length);
     function percentile(arr, p) {
       var copy = Array.prototype.slice.call(arr).sort(function(a,b){ return a-b; });
@@ -180,7 +323,7 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
       var stride = times.length > 720 ? 2 : 1;
       for (var si = 0; si < times.length; si += stride) {
         var t = times[si] + offset;
-        if (!isFinite(t) || t < 1.0 || t > buffer.duration - 0.40) continue;
+        if (!isFinite(t) || t < 1.0 || t > totalDuration - 0.40) continue;
         var slot = si % 4;
         var slotWeight = slot === 0 ? 1.22 : (slot === 2 ? 1.06 : 0.88);
         var point = bestSoftGrooveFrameNear(t, localRadius);
@@ -511,7 +654,7 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
         while (anchor - gridStep > 0.20) anchor -= gridStep;
         var gridBeats = [];
         var windowSec = Math.min(0.18, gridStep * 0.30);
-        for (var gt = anchor; gt < buffer.duration - 0.05; gt += gridStep) {
+        for (var gt = anchor; gt < totalDuration - 0.05; gt += gridStep) {
           var best = null;
           var bestDist = windowSec;
           for (var ci = 0; ci < beats.length; ci++) {
@@ -561,23 +704,23 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
     var musicTempoResult = await musicTempoTask;
     if (token !== beatMapToken) { hideBeatChip(); return null; }
     if (musicTempoResult && musicTempoResult.beats && musicTempoResult.beats.length) {
-      musicTempoBeats = normalizeMusicTempoBeats(musicTempoResult.beats || [], buffer.duration);
+      musicTempoBeats = normalizeMusicTempoBeats(musicTempoResult.beats || [], totalDuration);
       musicTempoGridStep = medianGap(musicTempoBeats, 0.36, 1.00);
       console.log('music-tempo worker:', musicTempoResult.tempo, 'bpm, beats:', musicTempoBeats.length, 'step:', musicTempoGridStep);
     }
 
     if (musicTempoBeats.length >= 4) {
-      var musicTempoPhaseOffset = estimateTempoPhaseOffset(musicTempoBeats, beats, musicTempoGridStep || gridStep, buffer.duration);
+      var musicTempoPhaseOffset = estimateTempoPhaseOffset(musicTempoBeats, beats, musicTempoGridStep || gridStep, totalDuration);
       if (musicTempoPhaseOffset) {
         musicTempoBeats = musicTempoBeats.map(function(t){ return t + musicTempoPhaseOffset; })
-          .filter(function(t){ return isFinite(t) && t >= 0.05 && t < buffer.duration - 0.05; });
+          .filter(function(t){ return isFinite(t) && t >= 0.05 && t < totalDuration - 0.05; });
         console.log('music-tempo phase correction:', musicTempoPhaseOffset.toFixed(3), 's');
       }
       if (analysisProfile.phaseScan) {
         var softGroovePhaseOffset = estimateSoftGrooveTempoOffset(musicTempoBeats, musicTempoGridStep || gridStep);
         if (softGroovePhaseOffset) {
           musicTempoBeats = musicTempoBeats.map(function(t){ return t + softGroovePhaseOffset; })
-            .filter(function(t){ return isFinite(t) && t >= 0.05 && t < buffer.duration - 0.05; });
+            .filter(function(t){ return isFinite(t) && t >= 0.05 && t < totalDuration - 0.05; });
           console.log('soft-groove phase correction:', softGroovePhaseOffset.toFixed(3), 's');
         }
       }
@@ -716,7 +859,7 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
       }
       if (tempoCameraBeats.length >= 4) {
         if (analysisProfile.sparseCamera) {
-          tempoCameraBeats = thinSoftGrooveCameraBeats(tempoCameraBeats, musicTempoGridStep || gridStep, buffer.duration);
+          tempoCameraBeats = thinSoftGrooveCameraBeats(tempoCameraBeats, musicTempoGridStep || gridStep, totalDuration);
         }
         cameraBeats = tempoCameraBeats;
         gridStep = musicTempoGridStep || gridStep;
@@ -754,14 +897,18 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
     var musicalProfile = null;
     if (options.skipMusicalProfile !== true) {
       try {
-        musicalProfile = await analyzeMusicalProfile(buffer, token);
+        if (segProfilePcm) {
+          musicalProfile = await analyzeMusicalProfileFromPcm(segProfilePcm, segProfileRate, totalDuration, token, segProfileMeta);
+        } else {
+          musicalProfile = await analyzeMusicalProfile(buffer, token);
+        }
       } catch (mpErr) {
         console.warn('musical profile failed:', mpErr && mpErr.message || mpErr);
         musicalProfile = null;
       }
       if (token !== beatMapToken) { hideBeatChip(); return null; }
     }
-    return { kicks: kicks, beats: beats, pulseBeats: pulseBeats, cameraBeats: cameraBeats, gridStep: gridStep, tempoSource: musicTempoBeats.length >= 4 ? 'music-tempo' : 'local', analysisProfile: analysisProfile.id || 'default', duration: buffer.duration, visualBeatCount: visualBeatCount, analyzedAt: Date.now(), musicalProfile: musicalProfile };
+    return { kicks: kicks, beats: beats, pulseBeats: pulseBeats, cameraBeats: cameraBeats, gridStep: gridStep, tempoSource: musicTempoBeats.length >= 4 ? 'music-tempo' : 'local', analysisProfile: analysisProfile.id || 'default', duration: totalDuration, visualBeatCount: visualBeatCount, analyzedAt: Date.now(), musicalProfile: musicalProfile };
   } catch (e) {
     console.warn('beat analysis failed:', e);
     hideBeatChip();
@@ -769,6 +916,229 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   } finally {
     beatMapBusy = false;
   }
+
+  // ===================== 长音轨分段解码 =====================
+  // 为什么要有它：整轨路径的峰值内存是线性的，55 分钟就是 5.3GB 量级
+  // （解码后 AudioBuffer 1.27GB + 每条频带的 OfflineAudioContext 渲染目标 0.63GB×4
+  //   + tempo 用的整轨 mono 0.63GB）。这些全都不计入 V8 堆，performance.memory
+  // 看不见，但直接把渲染进程往 commit 上限推 —— 崩溃dump里那 3.8GB 的私有分配区就是它。
+  //
+  // 做法：按 HTTP Range 一段一段拉，每段单独 decodeAudioData，只保留 10ms 帧能量包络
+  // 和两份降采样 PCM（tempo 用 22.05kHz mono、音高画像用 11.025kHz mono）。
+  // 任意时刻渲染进程里只有一段音频的 PCM（120s ≈ 46MB），整轨 PCM 从头到尾不存在。
+  //
+  // 返回 null 表示"这条路走不通"（服务端不支持 Range / 解不出 / 时长对不上），
+  // 调用方据此回退整轨路径 —— 宁可慢，不能没有节拍图。
+  async function decodeBeatsInputBySegments(audioUrl, plan, token, options) {
+    if (options.prefetch) showBeatChip('预热长音频节奏（分段）…');
+    else showBeatChip('正在分析长音频节奏（分段）…');
+
+    var bands = [[38, 155], [130, 420], [420, 2600], [1800, 9000]];
+    var envParts = [null, null, null, null];
+    var monoParts = [];
+    var profileParts = [];
+    var monoRate = 0;
+    var profileRate = 0;
+    var sampleRate = 0;
+    var coveredSec = 0;       // 时间轴上已经"吃掉"的秒数（按实际解码出来的时长推进）
+    var segments = 0;
+    var guard = 0;
+    var maxSegments = Math.ceil(plan.totalSec / BEAT_ANALYSIS_SEGMENT_SEC) + 4;
+
+    while (coveredSec < plan.totalSec - 1.0 && guard < maxSegments) {
+      guard++;
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+      var t0 = coveredSec;
+      var byteStart = Math.max(0, Math.floor(t0 * plan.bytesPerSec) - (segments === 0 ? 0 : BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES));
+      var byteEnd = Math.min(plan.contentLength - 1,
+        Math.ceil((t0 + BEAT_ANALYSIS_SEGMENT_SEC) * plan.bytesPerSec) + BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES);
+      if (byteEnd <= byteStart) break;
+
+      var segResp;
+      try {
+        segResp = await fetch(audioUrl, { headers: { Range: 'bytes=' + byteStart + '-' + byteEnd } });
+      } catch (_) { return null; }
+      // 服务端不支持 Range 时会给 200 + 整个 body：那正是要避免的整块下载，直接放弃分段
+      if (!segResp || segResp.status !== 206) { hideBeatChip(); return null; }
+      var segAb;
+      try { segAb = await segResp.arrayBuffer(); } catch (_) { return null; }
+      if (!segAb || !segAb.byteLength) { return null; }
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+
+      var segDc = new DecodeCtx();
+      var segBuf = await new Promise(function(resolve, reject){
+        segDc.decodeAudioData(segAb, resolve, reject);
+      }).catch(function(e){ console.warn('[beat] 分段解码失败:', e && e.message || e); return null; });
+      segAb = null;
+      try { segDc.close && segDc.close(); } catch (_) {}
+      if (!segBuf || !segBuf.length || !segBuf.sampleRate) { return null; }
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+      if (sampleRate === 0) sampleRate = segBuf.sampleRate;
+      else if (Math.abs(segBuf.sampleRate - sampleRate) > 1) { return null; }
+
+      var segWin = Math.floor(sampleRate * 0.010);
+      // 段首丢一小截：从任意字节偏移起解，解码器要先重同步，开头几十毫秒是垃圾。
+      // 不丢的话每个段边界都会出一个假 onset，直接被当成鼓点。
+      var trimFrames = segments === 0 ? 0 : Math.ceil(BEAT_ANALYSIS_SEGMENT_TRIM_SEC / 0.010);
+      for (var bi = 0; bi < bands.length; bi++) {
+        var part = await renderBandEnergyOn(segBuf, bands[bi][0], bands[bi][1]);
+        if (!part) { hideBeatChip(); return null; }
+        var kept = trimFrames > 0 && part.length > trimFrames + 8 ? part.subarray(trimFrames) : part;
+        if (!envParts[bi]) envParts[bi] = [];
+        envParts[bi].push(kept);
+        part = null;
+      }
+      // tempo 用的降采样 mono
+      var monoPart = downsampleMono(segBuf, BEAT_ANALYSIS_TEMPO_RATE);
+      if (!monoPart) { return null; }
+      monoParts.push(monoPart.pcm);
+      // 音高画像用的降采样 mono（~11.025kHz）
+      var profilePart = downsampleMono(segBuf, MUSICAL_PROFILE_SAMPLE_RATE);
+      if (!profilePart) { return null; }
+      profileParts.push(profilePart.pcm);
+      // downsampleMono 在「目标率高于源速率」时按源速率原样返回，所以实际速率
+      // 必须用它回给我的 rate，不能拿目标率常量硬顶 —— 顶了就是把错的采样率
+      // 传给 tempo worker / chroma FFT，拍速和音高映射全歪。
+      if (monoRate === 0) monoRate = monoPart.rate;
+      else if (Math.abs(monoPart.rate - monoRate) > 1) { return null; }
+      if (profileRate === 0) profileRate = profilePart.rate;
+      else if (Math.abs(profilePart.rate - profileRate) > 1) { return null; }
+
+      coveredSec += Math.max(0, segBuf.duration - (trimFrames * 0.010));
+      segments++;
+      segBuf = null;
+      await yieldToIdle(beatAnalysisYieldMs(options, 30, 160));
+      if (token !== beatMapToken) { hideBeatChip(); return null; }
+    }
+
+    if (!segments || coveredSec < 2.0 || !monoRate || !profileRate) { hideBeatChip(); return null; }
+
+    var energy = concatFloat32(envParts[0]);
+    var bodyEnergy = concatFloat32(envParts[1]);
+    var vocalEnergy = concatFloat32(envParts[2]);
+    var snapEnergy = concatFloat32(envParts[3]);
+    for (var ei = 0; ei < 4; ei++) envParts[ei] = null;
+    if (!energy || !bodyEnergy || !vocalEnergy || !snapEnergy) { hideBeatChip(); return null; }
+
+    var mono = concatFloat32(monoParts);
+    monoParts.length = 0;
+    var profilePcm = concatFloat32(profileParts);
+    profileParts.length = 0;
+
+    // 段尾 preroll 会让覆盖时长略超真实时长（900s 实测 910s）。超出去的那截
+    // 必须裁掉，否则 duration / 节拍网格会比音轨本身还长，视觉特效会跑到曲子外面。
+    var overSec = coveredSec - plan.totalSec;
+    if (overSec > 0.05) {
+      var drop = Math.min(Math.floor(overSec / 0.010), energy.length - 1000);
+      if (drop > 0) {
+        energy = energy.subarray(0, energy.length - drop);
+        bodyEnergy = bodyEnergy.subarray(0, bodyEnergy.length - drop);
+        vocalEnergy = vocalEnergy.subarray(0, vocalEnergy.length - drop);
+        snapEnergy = snapEnergy.subarray(0, snapEnergy.length - drop);
+        var keepMono = Math.max(0, mono.length - Math.round(drop * 0.010 * monoRate));
+        if (keepMono < mono.length) mono = mono.subarray(0, keepMono);
+        var keepProfile = Math.max(0, profilePcm.length - Math.round(drop * 0.010 * profileRate));
+        if (keepProfile < profilePcm.length) profilePcm = profilePcm.subarray(0, keepProfile);
+        coveredSec -= drop * 0.010;
+      }
+    }
+
+    var stats = {
+      segments: segments,
+      coveredSec: Math.round(coveredSec * 10) / 10,
+      requestedSec: Math.round(plan.totalSec * 10) / 10,
+      bytesPerSec: Math.round(plan.bytesPerSec),
+      frames: energy.length,
+      monoRate: monoRate,
+      profileRate: profileRate
+    };
+    console.log('[beat] 分段解码完成:', JSON.stringify(stats));
+
+    return {
+      energy: energy,
+      bodyEnergy: bodyEnergy,
+      vocalEnergy: vocalEnergy,
+      snapEnergy: snapEnergy,
+      duration: coveredSec,
+      sampleRate: sampleRate,
+      mono: mono,
+      monoRate: monoRate,
+      profilePcm: profilePcm,
+      profileRate: profileRate,
+      profileMeta: { srcRate: sampleRate, decim: Math.max(1, Math.round(sampleRate / profileRate)) },
+      stats: stats
+    };
+  }
+
+  // 盒式平均降采样 + 混 mono。targetRate 高于源速率时原样返回（不升采样）。
+  function downsampleMono(buf, targetRate) {
+    var srcRate = buf.sampleRate;
+    var channels = buf.numberOfChannels || 1;
+    var chData = [];
+    for (var c = 0; c < channels; c++) chData.push(buf.getChannelData(c));
+    if (targetRate >= srcRate) {
+      var monoFull = new Float32Array(buf.length);
+      var scaleFull = 1 / channels;
+      for (var i = 0; i < buf.length; i++) {
+        var acc = 0;
+        for (var ci = 0; ci < channels; ci++) acc += chData[ci][i];
+        monoFull[i] = acc * scaleFull;
+      }
+      return { pcm: monoFull, rate: srcRate };
+    }
+    var decim = Math.max(1, Math.round(srcRate / targetRate));
+    var outLen = Math.floor(buf.length / decim);
+    if (outLen < 1) return null;
+    var out = new Float32Array(outLen);
+    var scale = 1 / (decim * channels);
+    for (var o = 0; o < outLen; o++) {
+      var base = o * decim;
+      var sum = 0;
+      for (var k = 0; k < decim; k++) {
+        var pos = base + k;
+        for (var cj = 0; cj < channels; cj++) sum += chData[cj][pos];
+      }
+      out[o] = sum * scale;
+    }
+    return { pcm: out, rate: srcRate / decim };
+  }
+
+  // 边拷边释放：否则「所有分片 + 合并结果」同时在场，55 分钟的 mono 就是 582MB。
+  function concatFloat32(parts) {
+    if (!parts || !parts.length) return null;
+    if (parts.length === 1) return parts[0];
+    var total = 0;
+    for (var i = 0; i < parts.length; i++) total += parts[i].length;
+    var out = new Float32Array(total);
+    var at = 0;
+    for (var j = 0; j < parts.length; j++) { out.set(parts[j], at); at += parts[j].length; parts[j] = null; }
+    return out;
+  }
+}
+
+// 用 <audio> 元素探时长：只读元数据不播放，Chromium 只会拉开头一小段。
+// 时长元数据缺失（durationSec=0）但文件已经不小的时候必须走这一步，
+// 否则"时长未知 + 上百 MB"会绕过第一道闸，整轨下载+解码照样把渲染进程顶爆。
+function probeAudioDurationSec(audioUrl, token) {
+  return new Promise(function(resolve){
+    var settled = false;
+    var el = null;
+    function fin(v) {
+      if (settled) return;
+      settled = true;
+      try { if (el) { el.onloadedmetadata = null; el.onerror = null; el.src = ''; } } catch (_) {}
+      resolve(v > 0 && isFinite(v) ? v : 0);
+    }
+    try {
+      el = new Audio();
+      el.preload = 'metadata';
+      el.muted = true;
+      var timer = setTimeout(function(){ fin(0); }, 8000);
+      el.onloadedmetadata = function(){ clearTimeout(timer); fin(el.duration); };
+      el.onerror = function(){ clearTimeout(timer); fin(0); };
+      el.src = audioUrl;
+    } catch (_) { fin(0); }
+  });
 }
 
 // ===================== 音高 / 和声画像（musicalProfile） =====================
@@ -998,14 +1368,22 @@ function toNumberSafe(value) {
 
 async function analyzeMusicalProfile(buffer, token) {
   if (!buffer || !buffer.length || !buffer.sampleRate) return null;
+  var pcm = musicalProfileDownmix(buffer);
+  if (!pcm) return null;
+  return analyzeMusicalProfileFromPcm(pcm.pcm, pcm.rate, buffer.duration, token, {
+    srcRate: pcm.srcRate, decim: pcm.decim
+  });
+}
+
+// 把整轨 AudioBuffer 混成 mono 并盒式平均降采样到 ~11kHz。
+// chroma 只关心 1.6kHz 以下，直接抽取会混叠，先做块平均。
+// 不额外建整轨 mono 数组（4 分钟 44.1k 就是 42MB），边降采样边混音。
+function musicalProfileDownmix(buffer) {
   var srcRate = buffer.sampleRate;
   var channels = buffer.numberOfChannels || 1;
   var length = buffer.length;
   var channelData = [];
   for (var c = 0; c < channels; c++) channelData.push(buffer.getChannelData(c));
-
-  // 盒式平均降采样到 ~11kHz：chroma 只关心 1.6kHz 以下，直接抽取会混叠，先做块平均。
-  // 不额外建 mono 整轨数组（4 分钟 44.1k 就是 42MB），边降采样边混音。
   var decim = Math.max(1, Math.round(srcRate / MUSICAL_PROFILE_SAMPLE_RATE));
   var rate = srcRate / decim;
   var outLen = Math.floor(length / decim);
@@ -1021,6 +1399,19 @@ async function analyzeMusicalProfile(buffer, token) {
     }
     pcm[i] = acc * scale;
   }
+  return { pcm: pcm, rate: rate, srcRate: srcRate, decim: decim };
+}
+
+// 从降采样 mono PCM 出发算 chroma / key / 局部窗口。
+// 整轨路径喂 musicalProfileDownmix 的结果；分段路径喂逐段拼起来的同一规格 PCM。
+async function analyzeMusicalProfileFromPcm(pcm, rate, durationSec, token, meta) {
+  meta = meta || {};
+  var srcRate = meta.srcRate || rate;
+  var decim = meta.decim || 1;
+  // 显式声明循环变量：原先这些 for 依赖上面降采样循环里 var i 的提升，
+  // 把降采样拆去 musicalProfileDownmix 之后 i/bin 就没了，严格模式下直接 ReferenceError。
+  var i, bin;
+  if (!pcm || pcm.length < MUSICAL_PROFILE_FFT_SIZE * 2) return null;
 
   var table = musicalProfileFft(MUSICAL_PROFILE_FFT_SIZE);
   var n = table.n;
@@ -1107,13 +1498,13 @@ async function analyzeMusicalProfile(buffer, token) {
   var pitchClassProfile = musicalProfileNormalize(totalChroma);
   var key = musicalProfileEstimateKey(pitchClassProfile);
   var intervalProfile = musicalProfileIntervals(contour);
-  var quality = musicalProfileConfidence(key, pitchClassProfile, frameCount, buffer.duration);
+  var quality = musicalProfileConfidence(key, pitchClassProfile, frameCount, durationSec);
 
   // 局部窗口：cuefield 的 compareLocalMusicalWindows 需要 windows[{start,duration,confidence,noteCount,...}]，
   // 用来判断「切出点附近」的和声是否兼容，而不是整首歌平均。
   // 短音频（试听片段）要缩短窗口，否则 framesPerWindow 比总帧数还大，windows 恒空。
   var frameStepSec = hop / rate;
-  var windowSeconds = buffer.duration >= 48 ? MUSICAL_PROFILE_WINDOW_SEC : Math.max(3, buffer.duration / 4);
+  var windowSeconds = durationSec >= 48 ? MUSICAL_PROFILE_WINDOW_SEC : Math.max(3, durationSec / 4);
   var framesPerWindow = Math.max(8, Math.round(windowSeconds / frameStepSec));
   var windows = [];
   for (var w = 0; w < frameChromas.length && windows.length < MUSICAL_PROFILE_MAX_WINDOWS; w += framesPerWindow) {
@@ -1155,7 +1546,7 @@ async function analyzeMusicalProfile(buffer, token) {
   return {
     source: 'chroma-fft-v1',
     noteCount: contour.length,
-    noteDensity: musicalProfileRound(buffer.duration > 0 ? contour.length / buffer.duration : 0, 3),
+    noteDensity: musicalProfileRound(durationSec > 0 ? contour.length / durationSec : 0, 3),
     pitchClassProfile: pitchClassProfile,
     intervalProfile: intervalProfile,
     key: { root: key.root, mode: key.mode, name: key.name, confidence: key.confidence },

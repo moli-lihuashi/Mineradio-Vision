@@ -536,7 +536,7 @@ document.addEventListener('keydown', function(e){
     if (shelfManager && shelfManager.hasOpenContent()) { safeShelfCloseContent('escape-key'); return; }
     closeLoginModal(); closeUserModal(); toggleFxPanel(false); togglePlaylistPanel(false);
   }
-  else if (e.code === 'KeyL') { if (!immersiveMode) toggleLyricsPanel(); }
+  // L 键不再绑定：原「歌词显示」开关已整体移除，舞台歌词恒定显示（Alt+L 桌面歌词仍保留）。
   else if (e.code === 'KeyP') {
     if (!immersiveMode && diyPlayerMode) toggleFxPanel();
     else if (!immersiveMode) showToast('开启 DIY 玩家模式后可打开视觉控制台');

@@ -1,0 +1,517 @@
+'use strict';
+
+(function loadMineradioIndexModules() {
+  // cache-bust 策略：优先用 <html data-app-version="3.2.12"> 的版本号，生产态模块可长缓存。
+  // 开发态强制破缓存：URL 加 ?nocache 或 localStorage 设 mineradio_nocache=1。
+  var forceRefresh = (typeof window !== 'undefined' && window.location && window.location.search && window.location.search.indexOf('nocache') >= 0) ||
+                     (typeof localStorage !== 'undefined' && localStorage.getItem('mineradio_nocache') === '1');
+  var appVersion = (document.documentElement && document.documentElement.getAttribute('data-app-version')) || '';
+  var moduleCacheBust = forceRefresh ? String(Date.now()) : (appVersion || String(Date.now()));
+  // 版本未改时开发者常踩缓存：URL 带 hotfix=1 也强制破缓存
+  try {
+    if (typeof window !== 'undefined' && window.location && /(?:\?|&)hotfix=1\b/.test(window.location.search || '')) {
+      moduleCacheBust = String(Date.now());
+    }
+  } catch (_) {}
+
+  // row-layers：3.2.11 Step D 默开（完成 Hold/A/B/C 后）。一次性 force_3211 清掉历史 fail-open 写死的 '0'
+  // （fail-open 曾把 reveal 超时持久化到 localStorage，导致行层永久关闭、自定行数失效；现 fail-open 只锁会话）。
+  // ?lyricRows=0 / localStorage=0 / eco 可退 legacy；legacy 10+10c 始终加载。
+  function lyricRowLayersBootEnabled() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (localStorage.getItem('mineradio_lyric_row_layers_force_3211') !== '1') {
+          localStorage.setItem('mineradio_lyric_row_layers', '1');
+          localStorage.setItem('mineradio_lyric_row_layers_force_3211', '1');
+          localStorage.removeItem('mineradio_lyric_row_layers_force_3210');
+          localStorage.removeItem('mineradio_lyric_row_layers_force_326');
+          localStorage.removeItem('mineradio_lyric_row_layers_force_325');
+          localStorage.removeItem('mineradio_lyric_row_layers_force_322');
+        }
+        var stored = localStorage.getItem('mineradio_lyric_row_layers');
+        if (stored === '0' || stored === 'false') return false;
+        if (stored === '1' || stored === 'true') return true;
+      }
+    } catch (_) {}
+    try {
+      var q = (typeof window !== 'undefined' && window.location && window.location.search) || '';
+      if (q.indexOf('lyricRows=0') >= 0) return false;
+      if (q.indexOf('lyricRows=1') >= 0) return true;
+    } catch (_) {}
+    return true;
+  }
+  var enableLyricRowLayersBoot = lyricRowLayersBootEnabled();
+
+  // 主应用模块：按领域细拆后的加载顺序（classic 全局作用域）。
+  // 并行 fetch 缩短等待；合并为【单个】script 求值，保留跨文件 function 提升（分块求值会打断 hoisting）。
+  // 变量名 modulePaths 供 scripts/quick-check.js 的 parseCombinedIndexModules 解析。
+  const modulePaths = [
+    'js/modules/00-state/00-debug-gate.js',
+    'js/modules/00-state/12a-audio-login-globals.js',
+    'js/modules/00-state/12b-playlist-queue-globals.js',
+    'js/modules/00-state/12c-preference-diy-globals.js',
+    'js/modules/00-state/12d-fx-runtime-globals.js',
+    'js/modules/00-state/09-performance-probe.js',
+    'js/modules/00-state/10-frame-scheduler.js',
+    'js/modules/00-state/14-motion-system.js',
+    // scene
+    'js/modules/01-scene/00-renderer-quality.js',
+    'js/modules/01-scene/01-orbit-free-camera.js',
+    'js/modules/01-scene/02-beat-camera-runtime.js',
+    'js/modules/01-scene/03-focus-cinema-camera.js',
+    'js/modules/01-scene/04-bottom-controls-cursor.js',
+    'js/modules/01-scene/01-gpu-throttle.js',
+    // visual
+    'js/modules/02-visual/00a-pointer-interaction.js',
+    'js/modules/02-visual/00b-cover-texture.js',
+    'js/modules/02-visual/00c-particle-system.js',
+    'js/modules/02-visual/01-ripple-classic-float.js',
+    'js/modules/02-visual/02-sonic-backcover.js',
+    'js/modules/02-visual/03a-lyrics-state.js',
+    'js/modules/02-visual/03b-lyrics-color-utils.js',
+    'js/modules/02-visual/03c-lyrics-layout-settings.js',
+    'js/modules/02-visual/05-lyrics-fonts-texture.js',
+    'js/modules/02-visual/06-lyric-measure-colorlab.js',
+    'js/modules/02-visual/07-lyrics-palette-three.js',
+    // P1：legacy mask 始终在；row 栈可选；10c 适配器统一分发
+    'js/modules/02-visual/10-lyrics-mask-shaders.js',
+  ].concat(enableLyricRowLayersBoot ? [
+    'js/modules/02-visual/08-lyrics-display-modes.js',
+    'js/modules/02-visual/09-lyrics-payloads.js',
+    'js/modules/02-visual/10b-lyrics-mask-textures.js',
+    'js/modules/02-visual/11-lyrics-shaders.js',
+    'js/modules/02-visual/12-lyrics-row-layers.js',
+    'js/modules/02-visual/13-lyrics-mesh-build.js',
+  ] : []).concat([
+    'js/modules/02-visual/10c-lyrics-mask-adapter.js',
+    'js/modules/02-visual/14-stage-lyrics-rendering.js',
+  ]).concat(enableLyricRowLayersBoot ? [
+    'js/modules/02-visual/14b-stage-lyric-track.js',
+    // P2：resident ensure/trim + reveal-ready + warmup（在 14 之后覆盖 stub initialize）
+    'js/modules/02-visual/14c-stage-lyric-resident.js',
+    // Step A：demand-prewarm + noSyncBuild helpers
+    'js/modules/02-visual/14d-stage-lyric-prewarm.js',
+  ] : []).concat([
+    // beat
+    'js/modules/03-beat/00-ripples.js',
+    'js/modules/03-beat/05-cover-depth.js',
+    'js/modules/03-beat/00-tempo-worker-cache-prefetch.js',
+    'js/modules/03-beat/01-audio-beat-analysis.js',
+    'js/modules/03-beat/02-podcast-dj-analysis.js',
+    'js/modules/03-beat/03-beat-map-runtime.js',
+    'js/modules/03-beat/04-cover-loading-crop.js',
+    'js/modules/03-beat/06-sonic-audio-monitor.js',
+    'js/modules/03-beat/08-audio-worklet-bridge.js',
+    'js/modules/03-beat/09-wasapi-output-bridge.js',
+    // shelf
+    'js/modules/04-shelf/00a-shelf-layout-profile.js',
+    'js/modules/04-shelf/00b-shelf-hover-cue.js',
+    'js/modules/04-shelf/00c-shelf-manager.js',
+    'js/modules/04-shelf/02-rebuild-panel-sync.js',
+    'js/modules/04-shelf/03-content-list-manager.js',
+    'js/modules/04-shelf/05-card-interactions.js',
+    'js/modules/04-shelf/06-keyboard-camera-events.js',
+    // playback
+    'js/modules/05-playback/00a-api-quality.js',
+    'js/modules/05-playback/00b-mood-sleep-timer.js',
+    'js/modules/05-playback/00c-home-session.js',
+    'js/modules/05-playback/01-music-provider-registry.js',
+    'js/modules/05-playback/01-cover-listen-helpers.js',
+    'js/modules/05-playback/03-home-discover-weather.js',
+    'js/modules/05-playback/03a-home-dashboard.js',
+    'js/modules/05-playback/03b-home-insight.js',
+    'js/modules/05-playback/03c-home-hero-grid.js',
+    'js/modules/05-playback/03d-home-ai-playlist.js',
+    'js/modules/05-playback/04-home-empty-wallpaper.js',
+    'js/modules/05-playback/05-home-actions.js',
+    'js/modules/05-playback/05-home-track-detail.js',
+    'js/modules/05-playback/06a-lyric-display-mode.js',
+    'js/modules/05-playback/06b-startup-autoplay-timing.js',
+    'js/modules/05-playback/06c-account-actions.js',
+    'js/modules/05-playback/06d-morph-icons.js',
+    'js/modules/05-playback/07-search.js',
+    'js/modules/05-playback/08-audio-graph-controls.js',
+    'js/modules/05-playback/09a-queue-ops.js',
+    'js/modules/05-playback/13-playback-start-audio.js',
+    'js/modules/05-playback/11-provider-fallback.js',
+    'js/modules/05-playback/12-local-playlists.js',
+    'js/modules/05-playback/13-listening-today.js',
+    'js/modules/05-playback/15-pet-pixel-core.js',
+    'js/modules/05-playback/14-home-pet.js',
+    'js/modules/05-playback/09c-control-glass.js',
+    'js/modules/05-playback/09d-playback-stall-recovery.js',
+    'js/modules/05-playback/10-queue-content-fingerprint.js',
+    // lyrics / playlists
+    'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
+    'js/modules/06-lyrics/00-built-in-playlists.js',
+    'js/modules/06-lyrics/01-playlist-panel-shell.js',
+    'js/modules/06-lyrics/02-playlist-detail.js',
+    'js/modules/06-lyrics/03-podcast-playlist-loaders.js',
+    'js/modules/06-lyrics/04-progress-seek.js',
+    'js/modules/06-lyrics/05-upload-dragdrop.js',
+    // fx（面板绑定依赖，必须与 bindFxPanel 同批）
+    'js/modules/07-fx/00-panel-lazy-stubs.js',
+    'js/modules/07-fx/06-hotkeys.js',
+    'js/modules/07-fx/00-preset-archive-data.js',
+    'js/modules/07-fx/01-lyric-color-accent.js',
+    'js/modules/07-fx/04-preset-grid-uniforms.js',
+    'js/modules/07-fx/07-bindings-shelf-immersive.js',
+    'js/modules/07-fx/08-cache-storage-settings.js',
+    'js/modules/07-fx/11-system-memory-controls.js',
+    // account（boot 必需：登录态刷新 / toast / 引导）
+    'js/modules/08-account/01-login-modal-utils.js',
+    'js/modules/08-account/02-login-status.js',
+    'js/modules/08-account/04-user-modal-logout.js',
+    'js/modules/08-account/05-startup-idle-guide.js',
+    'js/modules/08-account/06-toast.js',
+    // shell：overlay 须在 splash-and-boot 之前（boot 会同步调用 applyDesktopLyricsState 等）
+    'js/modules/10-shell/00-gesture-resize-ui.js',
+    'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
+    'js/modules/10-shell/01-splash-and-boot.js',
+    'js/modules/10-shell/05-startup-bindings.js',
+    'js/modules/10-shell/06-break-reminder.js',
+    // folia 世界（与预设互斥的独立歌词世界；主循环会调 foliaWorldActive/foliaWorldTick）
+    'js/modules/12-folia/00-folia-state.js',
+    /* 自定义图片池：必须在背景/模式/面板之前（01d/01f 读 window.foliaMonetBackgroundImage，
+     * 面板读 foliaAssetGet 的同步快照；晚一步加载就会「有图也当没图」）。 */
+    'js/modules/12-folia/00b-folia-image-pool.js',
+    'js/modules/12-folia/01-folia-mode-registry.js',
+    /* 背景壳层：必须在模式注册之前注册进背景表（只在注册表里加条目，不碰 DOM） */
+    'js/modules/12-folia/01a-folia-bg-sora.js',
+    'js/modules/12-folia/01b-folia-bg-common.js',
+    'js/modules/12-folia/01c-folia-bg-latent.js',
+    'js/modules/12-folia/01d-folia-bg-monet.js',
+    'js/modules/12-folia/01e-folia-bg-noise-texture.js',
+    'js/modules/12-folia/01f-folia-bg-nomand.js',
+    'js/modules/12-folia/01g-folia-bg-url.js',
+    'js/modules/12-folia/10-folia-core-text.js',
+    'js/modules/12-folia/11-folia-core-hints.js',
+    'js/modules/12-folia/12-folia-core-motion.js',
+    'js/modules/12-folia/13-folia-core-glow-word.js',
+    'js/modules/12-folia/14-folia-core-subtitle.js',
+    'js/modules/12-folia/15-folia-core-sentence.js',
+    'js/modules/12-folia/16-folia-core-pretext.js',
+    'js/modules/12-folia/02-folia-mode-still.js',
+    'js/modules/12-folia/05-folia-mode-classic.js',
+    'js/modules/12-folia/06-folia-mode-partita.js',
+    'js/modules/12-folia/07-folia-mode-tilt.js',
+    'js/modules/12-folia/08-folia-mode-claddagh.js',
+    'js/modules/12-folia/09-folia-mode-cappella.js',
+    'js/modules/12-folia/09b-folia-mode-cadenza.js',
+    'js/modules/12-folia/0c-folia-mode-fume.js',
+    'js/modules/12-folia/0d-folia-mode-monet.js',
+    'js/modules/12-folia/0e-folia-mode-pendolo.js',
+    'js/modules/12-folia/0f-folia-mode-diorama.js',
+    'js/modules/12-folia/0g-folia-sonnet-mg.js',
+    'js/modules/12-folia/0g-folia-mode-sonnet.js',
+    'js/modules/12-folia/0h-folia-tempera-mg.js',
+    'js/modules/12-folia/0h-folia-mode-tempera.js',
+    'js/modules/12-folia/0h-folia-tempera-compositions.js',
+    /* 凝彩渲染层：按依赖顺序加载，每个文件都以 `window.foliaTemperaXxx` 取上游，
+     * 取不到就整块 return（不会把后续模块带崩），所以顺序必须是 上游 → 下游。 */
+    'js/modules/12-folia/0h-folia-tempera-motion.js',
+    'js/modules/12-folia/0h-folia-tempera-blocks.js',
+    'js/modules/12-folia/0h-folia-tempera-text.js',
+    'js/modules/12-folia/0h-folia-tempera-filters.js',
+    'js/modules/12-folia/0h-folia-tempera-layers.js',
+    'js/modules/12-folia/0h-folia-tempera-scene.js',
+    'js/modules/12-folia/0h-folia-tempera-frame.js',
+    'js/modules/12-folia/0h-folia-tempera-runtime.js',
+    /* 最后一个：注册模式（create/tick/destroy） */
+    'js/modules/12-folia/0i-folia-mode-tempera-stage.js',
+    /* 绘光渲染层：十层按依赖顺序加载（core → light → lineart → text → rigs → program →
+     * scene → frame → credits → runtime）。每个文件都以 `window.foliaLumiereXxx` 取上游，
+     * 取不到就整块 return（不会把后续模块带崩），所以顺序必须是 上游 → 下游。
+     * 图标桥（icons）必须先于 lineart：lineart 在**加载时**就把 foliaResolveLucideIcon
+     * 取进局部变量，晚一步加载就永远取不到。 */
+    'js/modules/12-folia/0j-folia-lumiere-icons.js',
+    'js/modules/12-folia/0j-folia-lumiere-core.js',
+    'js/modules/12-folia/0j-folia-lumiere-light.js',
+    'js/modules/12-folia/0j-folia-lumiere-lineart.js',
+    'js/modules/12-folia/0j-folia-lumiere-text.js',
+    'js/modules/12-folia/0j-folia-lumiere-rigs.js',
+    'js/modules/12-folia/0j-folia-lumiere-program.js',
+    'js/modules/12-folia/0j-folia-lumiere-scene.js',
+    'js/modules/12-folia/0j-folia-lumiere-frame.js',
+    'js/modules/12-folia/0j-folia-lumiere-credits.js',
+    'js/modules/12-folia/0j-folia-lumiere-runtime.js',
+    /* 最后一个：注册模式（create/tick/destroy） */
+    'js/modules/12-folia/0k-folia-mode-lumiere-stage.js',
+    /* 调参面板：0l0（模式调参存储内核）→ 0l（通用控件 + 背景/绘光面板）→ 0l1（歌词样式面板，
+     * 往 0l 的注册表里加条目）。三个都不能早于 00-folia-state，也不能晚于 04-folia-panel 的首次调用。 */
+    'js/modules/12-folia/0l0-folia-mode-tuning.js',
+    'js/modules/12-folia/0l-folia-tuning-panel.js',
+    'js/modules/12-folia/0l1-folia-mode-panels.js',
+    'js/modules/12-folia/03-folia-world-runtime.js',
+    'js/modules/12-folia/04-folia-panel.js',
+    'js/modules/11-main-loop.js'
+  ]);
+
+  // 第二波：boot 之后再注入（FX 扩展面板 / 登录弹窗流 / 预览 / 液态玻璃周边）
+  // 注意：勿把 bindFxPanel、登录态刷新、toast、hotkeys 放进这里。
+  const deferredModulePaths = [
+    'js/modules/07-fx/05a-fx-panel-inputs.js',
+    'js/modules/07-fx/05b-fx-panel-layout.js',
+    'js/modules/07-fx/05c-fx-particle-fire.js',
+    'js/modules/07-fx/09-lyric-shader-market.js',
+    'js/modules/07-fx/12-perf-dashboard.js',
+    'js/modules/08-account/00-update-preview.js',
+    'js/modules/08-account/02-qishui-login.js',
+    'js/modules/08-account/03-login-modal-flows.js',
+    'js/modules/08-account/08-login-pack-qr-sync.js',
+    'js/modules/08-account/07-dynamic-libs.js',
+    'js/modules/06-fx/01-liquidglass-config.js',
+    'js/modules/06-fx/02-wallpaper-engine-fns.js',
+    'js/modules/06-fx/03-liquidglass-perf.js',
+    'js/modules/06-fx/04-liquidglass-plugin-api.js',
+    'js/modules/06-fx/05-prismal-chrome.js',
+    'js/modules/07-playback/00-spotify-provider.js',
+    'js/modules/08-account/00-login-easter-egg.js'
+  ];
+
+  try {
+    if (document.documentElement) document.documentElement.classList.add('splash-active');
+    if (document.body) document.body.classList.add('splash-active');
+  } catch (_) {}
+
+  function moduleUrl(path) {
+    return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'v=' + moduleCacheBust;
+  }
+
+  function fetchModuleText(path) {
+    // 生产态（版本号 cache-bust）允许浏览器缓存；开发态（强制刷新）禁用缓存。
+    return fetch(moduleUrl(path), { credentials: 'same-origin', cache: forceRefresh ? 'no-cache' : 'default' }).then(function (res) {
+      if (!res.ok) throw new Error('Failed to load Mineradio module: ' + path + ' (' + res.status + ')');
+      return res.text();
+    });
+  }
+
+  function readModuleSync(path) {
+    var request = new XMLHttpRequest();
+    request.open('GET', moduleUrl(path), false);
+    request.send(null);
+    if ((request.status < 200 || request.status >= 300) && request.status !== 0) {
+      throw new Error('Failed to load Mineradio module: ' + path + ' (' + request.status + ')');
+    }
+    return request.responseText || '';
+  }
+
+  // 每模块前注入 sourceURL，DevTools Sources 可定位到原始模块文件而非合并后的大文件。
+  function wrapModuleText(path, text) {
+    return '//# sourceURL=mineradio-' + path + '\n' + text;
+  }
+
+  // 开屏进度：真实就绪只设 target；显示值按时间门禁 + 缓动推进，
+  // 避免本地缓存命中时瞬间 100%「像没加载」。
+  var splashLoadState = {
+    target: 0,
+    shown: 0,
+    label: '加载模块…',
+    startedAt: 0,
+    minFillMs: 1500,
+    raf: 0,
+    lastTs: 0,
+    done: false
+  };
+
+  function splashLoadEnsureStarted() {
+    if (!splashLoadState.startedAt) splashLoadState.startedAt = performance.now();
+  }
+
+  function splashLoadPaint() {
+    var pct = splashLoadState.shown;
+    var track = document.getElementById('splash-load-track');
+    var fill = document.getElementById('splash-load-fill');
+    var pctEl = document.getElementById('splash-load-pct');
+    var labelEl = document.getElementById('splash-load-label');
+    var done = pct >= 99.95 && splashLoadState.target >= 100;
+    if (fill) {
+      fill.style.width = (done ? 100 : pct).toFixed(2) + '%';
+      if (done) {
+        fill.setAttribute('data-done', '1');
+        fill.removeAttribute('data-active');
+      } else {
+        fill.removeAttribute('data-done');
+        if (pct > 0.5) fill.setAttribute('data-active', '1');
+        else fill.removeAttribute('data-active');
+      }
+    }
+    if (track) {
+      if (done) track.classList.add('is-done');
+      else track.classList.remove('is-done');
+    }
+    if (pctEl) pctEl.textContent = done ? '100' : String(Math.min(99, Math.round(pct)));
+    if (labelEl) labelEl.textContent = splashLoadState.label;
+    window.__mineradioBootLoadPct = pct;
+  }
+
+  function splashLoadStopLoop() {
+    if (splashLoadState.raf) {
+      try { cancelAnimationFrame(splashLoadState.raf); } catch (_) {}
+      splashLoadState.raf = 0;
+    }
+  }
+
+  function splashLoadTick(ts) {
+    splashLoadState.raf = 0;
+    var now = typeof ts === 'number' ? ts : performance.now();
+    var dt = splashLoadState.lastTs ? Math.min(64, now - splashLoadState.lastTs) : 16;
+    splashLoadState.lastTs = now;
+    splashLoadEnsureStarted();
+    var elapsed = now - splashLoadState.startedAt;
+    // 时间门禁：最短 minFillMs 内最多走到 100%，防止瞬时跳满
+    var timeGate = Math.min(100, (elapsed / splashLoadState.minFillMs) * 100);
+    var goal = Math.min(splashLoadState.target, timeGate);
+    // 缓动追赶 goal（约 1s 内跟上，且每秒至少前进一点，保证「有动作」）
+    var ease = 1 - Math.pow(0.001, dt / 1000);
+    var step = Math.max(0.04 * (dt / 16), ease * (goal - splashLoadState.shown));
+    if (splashLoadState.shown < goal) {
+      splashLoadState.shown = Math.min(goal, splashLoadState.shown + step);
+    } else if (splashLoadState.shown > goal) {
+      splashLoadState.shown = goal;
+    }
+    // 接近终点且 target 已 100 → 吸附
+    if (splashLoadState.target >= 100 && splashLoadState.shown > 99.2) {
+      splashLoadState.shown = 100;
+    }
+    splashLoadPaint();
+    var needMore = splashLoadState.shown < 99.99 || splashLoadState.target < 100 || elapsed < splashLoadState.minFillMs;
+    if (needMore && !splashLoadState.done) {
+      splashLoadState.raf = requestAnimationFrame(splashLoadTick);
+    } else {
+      splashLoadPaint();
+    }
+  }
+
+  function splashLoadStartLoop() {
+    splashLoadEnsureStarted();
+    if (!splashLoadState.raf) splashLoadState.raf = requestAnimationFrame(splashLoadTick);
+  }
+
+  /** 设置真实目标进度（0–100）与文案；显示值会平滑爬升 */
+  function setSplashLoadProgress(pct, label) {
+    try {
+      pct = Math.max(0, Math.min(100, Number(pct) || 0));
+      if (pct > splashLoadState.target) splashLoadState.target = pct;
+      if (label) splashLoadState.label = label;
+      splashLoadStartLoop();
+    } catch (_) {}
+  }
+
+  function markCoreModulesReady() {
+    window.__mineradioCoreModulesReady = true;
+    setSplashLoadProgress(100, '就绪');
+    // 等显示值爬到 100 再允许进入（与 splash 最短时长对齐）
+    var waitSnap = function () {
+      if (splashLoadState.shown >= 99.5 || performance.now() - (splashLoadState.startedAt || performance.now()) > splashLoadState.minFillMs + 400) {
+        splashLoadState.shown = 100;
+        splashLoadPaint();
+        splashLoadState.done = true;
+        splashLoadStopLoop();
+        try {
+          if (typeof window.tryMarkSplashReadyFromBoot === 'function') window.tryMarkSplashReadyFromBoot();
+        } catch (_) {}
+        return;
+      }
+      requestAnimationFrame(waitSnap);
+    };
+    requestAnimationFrame(waitSnap);
+  }
+
+  function injectCombined(texts) {
+    var script = document.createElement('script');
+    script.text = texts.join('\n') + '\n//# sourceURL=mineradio-index-modules.js\n';
+    var anchor = document.currentScript;
+    if (anchor && anchor.parentNode) {
+      anchor.parentNode.insertBefore(script, anchor.nextSibling);
+    } else {
+      (document.head || document.documentElement).appendChild(script);
+    }
+  }
+
+  function injectDeferredCombined(texts) {
+    var script = document.createElement('script');
+    script.text = texts.join('\n') + '\n//# sourceURL=mineradio-index-deferred-modules.js\n';
+    (document.head || document.documentElement).appendChild(script);
+    try {
+      if (typeof window.__onDeferredModulesReady === 'function') window.__onDeferredModulesReady();
+    } catch (e) {
+      console.warn('[MineradioLoader] deferred ready hook failed', e);
+    }
+  }
+
+  function loadDeferredModules() {
+    if (!deferredModulePaths || !deferredModulePaths.length) return;
+    if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
+      Promise.all(deferredModulePaths.map(function (path) {
+        return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
+      })).then(injectDeferredCombined).catch(function (err) {
+        console.warn('[MineradioLoader] deferred fetch failed, trying sync XHR', err);
+        try {
+          injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        } catch (fallbackErr) {
+          console.error('[MineradioLoader] deferred modules failed', fallbackErr || err);
+        }
+      });
+    } else {
+      try {
+        injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+      } catch (err) {
+        console.error('[MineradioLoader] deferred modules failed', err);
+      }
+    }
+  }
+
+  function showLoaderFailure(err) {
+    console.error('[MineradioLoader]', err);
+    try {
+      var fallback = document.createElement('div');
+      fallback.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#fff;font:14px/1.5 sans-serif;padding:24px;text-align:center;white-space:pre-wrap';
+      var detail = (err && (err.message || String(err))) || 'unknown';
+      fallback.textContent = '模块加载失败，请重启应用。\n' + detail;
+      document.documentElement.appendChild(fallback);
+    } catch (_) {}
+  }
+
+  // 优先并行 fetch；失败时回退同步 XHR。无论哪种路径都合并为单个 script，避免分块打断 function 提升。
+  if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
+    splashLoadState.startedAt = performance.now();
+    setSplashLoadProgress(1, '加载模块…');
+    var coreDone = 0;
+    var coreTotal = modulePaths.length || 1;
+    Promise.all(modulePaths.map(function (path) {
+      return fetchModuleText(path).then(function (text) {
+        coreDone += 1;
+        setSplashLoadProgress(6 + (coreDone / coreTotal) * 70, '加载模块 ' + coreDone + '/' + coreTotal);
+        return wrapModuleText(path, text);
+      });
+    })).then(function (texts) {
+      setSplashLoadProgress(78, '初始化…');
+      injectCombined(texts);
+      setSplashLoadProgress(88, '启动中…');
+      markCoreModulesReady();
+      loadDeferredModules();
+    }).catch(function (err) {
+      try {
+        setSplashLoadProgress(40, '回退加载…');
+        injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        setSplashLoadProgress(88, '启动中…');
+        markCoreModulesReady();
+        loadDeferredModules();
+      } catch (fallbackErr) {
+        showLoaderFailure(fallbackErr || err);
+      }
+    });
+  } else {
+    try {
+      splashLoadState.startedAt = performance.now();
+      setSplashLoadProgress(20, '加载模块…');
+      injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+      setSplashLoadProgress(88, '启动中…');
+      markCoreModulesReady();
+      loadDeferredModules();
+    } catch (err) {
+      showLoaderFailure(err);
+    }
+  }
+})();

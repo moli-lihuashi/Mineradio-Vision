@@ -47,6 +47,8 @@
   // 变量名 modulePaths 供 scripts/quick-check.js 的 parseCombinedIndexModules 解析。
   const modulePaths = [
     'js/modules/00-state/00-debug-gate.js',
+    // 带版本的存档读写：所有迁移入口都走它，必须排在读存档的模块之前
+    'js/modules/00-state/00-storage-migration.js',
     'js/modules/00-state/12a-audio-login-globals.js',
     'js/modules/00-state/12b-playlist-queue-globals.js',
     'js/modules/00-state/12c-preference-diy-globals.js',
@@ -54,6 +56,7 @@
     'js/modules/00-state/09-performance-probe.js',
     'js/modules/00-state/10-frame-scheduler.js',
     'js/modules/00-state/14-motion-system.js',
+    'js/modules/00-state/15-app-prompt.js',
     // scene
     'js/modules/01-scene/00-renderer-quality.js',
     'js/modules/01-scene/01-orbit-free-camera.js',
@@ -103,6 +106,7 @@
     'js/modules/03-beat/06-sonic-audio-monitor.js',
     'js/modules/03-beat/08-audio-worklet-bridge.js',
     'js/modules/03-beat/09-wasapi-output-bridge.js',
+    'js/modules/03-beat/10-beat-mem-watchdog.js',
     // shelf
     'js/modules/04-shelf/00a-shelf-layout-profile.js',
     'js/modules/04-shelf/00b-shelf-hover-cue.js',
@@ -129,16 +133,31 @@
     'js/modules/05-playback/06b-startup-autoplay-timing.js',
     'js/modules/05-playback/06c-account-actions.js',
     'js/modules/05-playback/06d-morph-icons.js',
+    'js/modules/05-playback/06e-heart-fx.js',
+    // 收藏演出（整屏场景：雪窗 / 鸟群），排在红心粒子之后：它依赖 06e 的色调与 z 序约定
+    'js/modules/05-playback/06f-heart-scene.js',
     'js/modules/05-playback/07-search.js',
+    // 播放高级设置（变速 / 输出设备 / 淡出与预载时长）：08 与 16 运行时读它的 getter，须排在前面
+    'js/modules/05-playback/17-playback-advanced.js',
     'js/modules/05-playback/08-audio-graph-controls.js',
     'js/modules/05-playback/09a-queue-ops.js',
     'js/modules/05-playback/13-playback-start-audio.js',
     'js/modules/05-playback/11-provider-fallback.js',
+    // 独立「无缝衔接」：曲末预载 + ended 后交接，与 Cuefield AutoMix 互斥且互不影响
+    'js/modules/05-playback/16-gapless-handoff.js',
+    // 歌曲过渡效果矩阵：编排 08 的淡变时长 + 01 的临时声像，依赖 16 的预载，须排在其后
+    'js/modules/05-playback/18-track-transition.js',
+    // 四套 Canvas 中央光效：18 的 syncUi 切完模式后调它渲染，须排在 18 之后
+    'js/modules/05-playback/19-track-transition-art.js',
     'js/modules/05-playback/12-local-playlists.js',
     'js/modules/05-playback/13-listening-today.js',
     'js/modules/05-playback/15-pet-pixel-core.js',
     'js/modules/05-playback/14-home-pet.js',
     'js/modules/05-playback/09c-control-glass.js',
+    // 媒体错误分类：09d 的 error 分支在运行时读它，排在 09d 之前
+    'js/modules/05-playback/09e-media-failure-classifier.js',
+    // 播放源版本指纹：09d 的换链预算读写它，同样排在 09d 之前
+    'js/modules/05-playback/09f-playback-source-revision.js',
     'js/modules/05-playback/09d-playback-stall-recovery.js',
     'js/modules/05-playback/10-queue-content-fingerprint.js',
     // lyrics / playlists
@@ -169,7 +188,83 @@
     'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
     'js/modules/10-shell/01-splash-and-boot.js',
     'js/modules/10-shell/05-startup-bindings.js',
+    'js/modules/10-shell/05-diagnostics.js',
     'js/modules/10-shell/06-break-reminder.js',
+    // folia 世界（与预设互斥的独立歌词世界；主循环会调 foliaWorldActive/foliaWorldTick）
+    'js/modules/12-folia/00-folia-state.js',
+    /* 自定义图片池：必须在背景/模式/面板之前（01d/01f 读 window.foliaMonetBackgroundImage，
+     * 面板读 foliaAssetGet 的同步快照；晚一步加载就会「有图也当没图」）。 */
+    'js/modules/12-folia/00b-folia-image-pool.js',
+    'js/modules/12-folia/01-folia-mode-registry.js',
+    /* 背景壳层：必须在模式注册之前注册进背景表（只在注册表里加条目，不碰 DOM） */
+    'js/modules/12-folia/01a-folia-bg-sora.js',
+    'js/modules/12-folia/01b-folia-bg-common.js',
+    'js/modules/12-folia/01c-folia-bg-latent.js',
+    'js/modules/12-folia/01d-folia-bg-monet.js',
+    'js/modules/12-folia/01e-folia-bg-noise-texture.js',
+    'js/modules/12-folia/01f-folia-bg-nomand.js',
+    'js/modules/12-folia/01g-folia-bg-url.js',
+    'js/modules/12-folia/10-folia-core-text.js',
+    'js/modules/12-folia/11-folia-core-hints.js',
+    'js/modules/12-folia/12-folia-core-motion.js',
+    'js/modules/12-folia/13-folia-core-glow-word.js',
+    'js/modules/12-folia/14-folia-core-subtitle.js',
+    'js/modules/12-folia/15-folia-core-sentence.js',
+    'js/modules/12-folia/16-folia-core-pretext.js',
+    'js/modules/12-folia/02-folia-mode-still.js',
+    'js/modules/12-folia/05-folia-mode-classic.js',
+    'js/modules/12-folia/06-folia-mode-partita.js',
+    'js/modules/12-folia/07-folia-mode-tilt.js',
+    'js/modules/12-folia/08-folia-mode-claddagh.js',
+    'js/modules/12-folia/09-folia-mode-cappella.js',
+    'js/modules/12-folia/09b-folia-mode-cadenza.js',
+    'js/modules/12-folia/0c-folia-mode-fume.js',
+    'js/modules/12-folia/0d-folia-mode-monet.js',
+    'js/modules/12-folia/0e-folia-mode-pendolo.js',
+    'js/modules/12-folia/0f-folia-mode-diorama.js',
+    'js/modules/12-folia/0g-folia-sonnet-mg.js',
+    'js/modules/12-folia/0g-folia-mode-sonnet.js',
+    'js/modules/12-folia/0h-folia-tempera-mg.js',
+    'js/modules/12-folia/0h-folia-mode-tempera.js',
+    'js/modules/12-folia/0h-folia-tempera-compositions.js',
+    /* 凝彩渲染层：按依赖顺序加载，每个文件都以 `window.foliaTemperaXxx` 取上游，
+     * 取不到就整块 return（不会把后续模块带崩），所以顺序必须是 上游 → 下游。 */
+    'js/modules/12-folia/0h-folia-tempera-motion.js',
+    'js/modules/12-folia/0h-folia-tempera-blocks.js',
+    'js/modules/12-folia/0h-folia-tempera-text.js',
+    'js/modules/12-folia/0h-folia-tempera-filters.js',
+    'js/modules/12-folia/0h-folia-tempera-layers.js',
+    'js/modules/12-folia/0h-folia-tempera-scene.js',
+    'js/modules/12-folia/0h-folia-tempera-frame.js',
+    'js/modules/12-folia/0h-folia-tempera-runtime.js',
+    /* 最后一个：注册模式（create/tick/destroy） */
+    'js/modules/12-folia/0i-folia-mode-tempera-stage.js',
+    /* 绘光渲染层：十层按依赖顺序加载（core → light → lineart → text → rigs → program →
+     * scene → frame → credits → runtime）。每个文件都以 `window.foliaLumiereXxx` 取上游，
+     * 取不到就整块 return（不会把后续模块带崩），所以顺序必须是 上游 → 下游。
+     * 图标桥（icons）必须先于 lineart：lineart 在**加载时**就把 foliaResolveLucideIcon
+     * 取进局部变量，晚一步加载就永远取不到。 */
+    'js/modules/12-folia/0j-folia-lumiere-icons.js',
+    'js/modules/12-folia/0j-folia-lumiere-core.js',
+    'js/modules/12-folia/0j-folia-lumiere-light.js',
+    'js/modules/12-folia/0j-folia-lumiere-lineart.js',
+    'js/modules/12-folia/0j-folia-lumiere-text.js',
+    'js/modules/12-folia/0j-folia-lumiere-rigs.js',
+    'js/modules/12-folia/0j-folia-lumiere-program.js',
+    'js/modules/12-folia/0j-folia-lumiere-scene.js',
+    'js/modules/12-folia/0j-folia-lumiere-frame.js',
+    'js/modules/12-folia/0j-folia-lumiere-credits.js',
+    'js/modules/12-folia/0j-folia-lumiere-runtime.js',
+    /* 最后一个：注册模式（create/tick/destroy） */
+    'js/modules/12-folia/0k-folia-mode-lumiere-stage.js',
+    /* 调参面板：0l0（模式调参存储内核）→ 0l（通用控件 + 背景/绘光面板）→ 0l1（歌词样式面板，
+     * 往 0l 的注册表里加条目）。三个都不能早于 00-folia-state，也不能晚于 04-folia-panel 的首次调用。 */
+    'js/modules/12-folia/0l0-folia-mode-tuning.js',
+    'js/modules/12-folia/0l-folia-tuning-panel.js',
+    'js/modules/12-folia/0l1-folia-mode-panels.js',
+    'js/modules/12-folia/03-folia-world-runtime.js',
+    'js/modules/12-folia/17-folia-mod-host.js',
+    'js/modules/12-folia/04-folia-panel.js',
     'js/modules/11-main-loop.js'
   ]);
 
@@ -179,6 +274,11 @@
     'js/modules/07-fx/05a-fx-panel-inputs.js',
     'js/modules/07-fx/05b-fx-panel-layout.js',
     'js/modules/07-fx/05c-fx-particle-fire.js',
+    'js/modules/07-fx/05d-heart-fx-panel.js',
+    // 顶栏「皮肤」弹层：第二个红心六格宿主，靠 05d 的 syncHeartFxGrid 渲染，须排在其后
+    'js/modules/07-fx/05e-skin-popover.js',
+    // 控制条底层频谱：皮肤弹层的第四格宿主 + #bottom-bar 内的独立 2D 画布
+    'js/modules/07-fx/05f-bar-spectrum.js',
     'js/modules/07-fx/09-lyric-shader-market.js',
     'js/modules/07-fx/12-perf-dashboard.js',
     'js/modules/08-account/00-update-preview.js',
@@ -191,6 +291,7 @@
     'js/modules/06-fx/03-liquidglass-perf.js',
     'js/modules/06-fx/04-liquidglass-plugin-api.js',
     'js/modules/06-fx/05-prismal-chrome.js',
+    'js/modules/06-fx/06-liquidglass-folia-css.js',
     'js/modules/07-playback/00-spotify-provider.js',
     'js/modules/08-account/00-login-easter-egg.js'
   ];
@@ -363,6 +464,15 @@
       if (typeof window.__onDeferredModulesReady === 'function') window.__onDeferredModulesReady();
     } catch (e) {
       console.warn('[MineradioLoader] deferred ready hook failed', e);
+    }
+    /* 登录态补刷：汽水 / Spotify 的 status 刷新函数就住在延迟波里，
+     * 主波 boot 时 bootstrapStartupLoginStatus() 的 typeof 守卫判它们「不存在」而跳过，
+     * 重启后就只认得出网易云 / QQ / 酷狗 —— 必须等本波落地再刷一次。
+     * 单独一个钩子，别覆盖 __onDeferredModulesReady（07-bindings 已占用）。 */
+    try {
+      if (typeof window.__onDeferredLoginStatusReady === 'function') window.__onDeferredLoginStatusReady();
+    } catch (e) {
+      console.warn('[MineradioLoader] deferred login status refresh failed', e);
     }
   }
 

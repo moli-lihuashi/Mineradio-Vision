@@ -73,12 +73,15 @@ test('kugou-api.js must pin the lite client identity constants', () => {
 
 test('kugouCloudlistRequest must present the lite identity to cloudlist', () => {
   const body = functionBody(kugouApiSource, 'kugouCloudlistRequest');
-  assert.match(body, /kugouWithCloudlistDevice\(opts\)/, 'must inject registered dfid');
+  // 2026-11-09 会话自愈重构：请求体挪进 issueOnce（自愈重试要重建 params/headers），
+  // 守卫语义不变 —— dfid 注入、cloudlist router、lite 身份三样都必须还在。
+  assert.match(body, /kugouWithCloudlistDevice\(local\)/, 'must inject registered dfid');
   assert.match(body, /opts\.router\s*=\s*'cloudlist\.service\.kugou\.com'/, 'must mark cloudlist router before ensure');
   assert.match(body, /appid: KUGOU_LITE_APPID/);
   assert.match(body, /clientver: KUGOU_LITE_CLIENTVER/);
   assert.match(body, /KUGOU_LITE_ANDROID_SALT/, 'must sign with the lite salt');
   assert.match(body, /KUGOU_LITE_GATEWAY_UA/, 'must present the lite User-Agent');
+  assert.match(body, /selfHealedKugouRequest/, 'must go through the self-healing wrapper (20028 recovery)');
 });
 
 test('kugouWithCloudlistDevice must always ensure dfid (no dead opts.router gate)', () => {

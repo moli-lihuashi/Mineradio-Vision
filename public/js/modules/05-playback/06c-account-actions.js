@@ -336,7 +336,7 @@ function refreshSearchResultActionStates() {
     btn.title = liked ? '取消红心' : '红心喜欢';
   });
 }
-async function toggleLikeSong(song) {
+async function toggleLikeSong(song, opts) {
   var provider = songAccountProvider(song);
   var adapter = songAccountAdapter(provider);
   if (!adapter || !adapter.like || !adapter.likeUrl) {
@@ -356,6 +356,13 @@ async function toggleLikeSong(song) {
   likedSongMap[stateKey] = next;
   if (provider === 'netease') likedSongMap[String(id)] = next;
   updateLikeButtons(song);
+  /* 红心动效：只有「点亮」才放庆祝，取消走一次下沉（见 heartFxFeedback）。
+     锚点只在主红心按钮（toggleLikeCurrent）传进来 —— 列表里 15px 的小红心一屏几十个，
+     每个都炸一圈粒子会把界面糊住，所以它们仍只做变色。 */
+  if (opts && opts.anchor) heartFxFeedback(opts.anchor, next);
+  /* 收藏演出：在粒子之后接一场整屏的（见 06f）。同样只认主红心 —— 列表里一屏几十颗小心
+     不该每次都糊满整个窗口；取消红心也不放，庆祝动作不该奖励「取消」。 */
+  if (opts && opts.anchor && next && typeof heartScenePlay === 'function') heartScenePlay();
   safeRenderQueuePanel('like-toggle-optimistic', { scrollCurrent: miniQueueOpen });
   refreshSearchResultActionStates();
   try {
@@ -371,6 +378,8 @@ async function toggleLikeSong(song) {
   } catch (err) {
     likedSongMap[stateKey] = !next;
     if (provider === 'netease') likedSongMap[String(id)] = !next;
+    /* 请求失败 = 刚点亮的心要被退回去，补一次下沉，别让动效「庆祝了一发假的」 */
+    if (opts && opts.anchor) heartFxDip(opts.anchor);
     var errorText = String(err && err.message || '');
     if (/LOGIN_REQUIRED|AUTH_REQUIRED/i.test(errorText)) showToast(adapter.label + '登录状态已失效，请重新登录');
     else showToast(errorText ? ('红心操作失败: ' + errorText) : '红心操作失败');
@@ -381,7 +390,7 @@ async function toggleLikeSong(song) {
     refreshSearchResultActionStates();
   }
 }
-function toggleLikeCurrent() { toggleLikeSong(currentCoverSong()); }
+function toggleLikeCurrent() { toggleLikeSong(currentCoverSong(), { anchor: document.getElementById('heart-btn') }); }
 function toggleLikeSearchResult(i) { if (playlist[i]) toggleLikeSong(playlist[i]); }
 function toggleLikeQueueIndex(i) { if (playQueue[i]) toggleLikeSong(playQueue[i]); }
 function toggleLikeDetailSong(song) { toggleLikeSong(song); }

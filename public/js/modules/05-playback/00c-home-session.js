@@ -535,23 +535,50 @@ function readPlaybackSession() {
   }
 }
 // 队列序列化缓存：内容指纹未变时复用上次结果，避免每 4.5s 全量序列化 120 首造成的写盘尖峰
-var _playbackSessionQueueCache = { fingerprint: '', json: '' };
-function playbackSessionQueueFingerprint() {
-  var parts = [];
-  var cap = Math.min(playQueue.length, 120);
-  for (var i = 0; i < cap; i++) parts.push(queueItemKey(playQueue[i]));
+var PLAYBACK_SESSION_QUEUE_LIMIT = 120;
+var _playbackSessionQueueCache = { fingerprint: '', json: '', start: 0 };
+// 持久化窗口：保留 120 首上限，但窗口必须以当前曲目为中心，
+// 否则播放第 151 首时窗口只覆盖前 120 首，currentIdx 越界后恢复就会落到别的歌上。
+function playbackSessionQueueWindow() {
+  var total = playQueue ? playQueue.length : 0;
+  if (!total) return { start: 0, songs: [] };
+  var limit = Math.min(total, PLAYBACK_SESSION_QUEUE_LIMIT);
+  var start = 0;
+  if (total > limit) {
+    var anchor = Number(currentIdx);
+    if (isFinite(anchor) && anchor >= 0) {
+      start = Math.floor(anchor - Math.floor(limit / 2));
+      if (start < 0) start = 0;
+      var maxStart = total - limit;
+      if (start > maxStart) start = maxStart;
+    }
+  }
+  return { start: start, songs: playQueue.slice(start, start + limit) };
+}
+function playbackSessionQueueFingerprint(win) {
+  var parts = [String(win.start)];
+  for (var i = 0; i < win.songs.length; i++) parts.push(queueItemKey(win.songs[i]));
   return parts.join('|');
 }
-function playbackSessionQueueJson() {
-  var fp = playbackSessionQueueFingerprint();
-  if (_playbackSessionQueueCache.fingerprint === fp && _playbackSessionQueueCache.json) {
-    return _playbackSessionQueueCache.json;
+// 返回 { start, json }：start 是窗口在完整队列中的起点，恢复时用它把绝对索引换算回窗口索引
+function playbackSessionQueuePayload() {
+  var win = playbackSessionQueueWindow();
+  var fp = playbackSessionQueueFingerprint(win);
+  if (
+    _playbackSessionQueueCache.fingerprint === fp
+    && _playbackSessionQueueCache.json
+    && _playbackSessionQueueCache.start === win.start
+  ) {
+    return { start: win.start, json: _playbackSessionQueueCache.json };
   }
+  var json = JSON.stringify(win.songs.map(serializeSongForSession).filter(Boolean));
   _playbackSessionQueueCache.fingerprint = fp;
-  _playbackSessionQueueCache.json = JSON.stringify(
-    playQueue.slice(0, 120).map(serializeSongForSession).filter(Boolean)
-  );
-  return _playbackSessionQueueCache.json;
+  _playbackSessionQueueCache.json = json;
+  _playbackSessionQueueCache.start = win.start;
+  return { start: win.start, json: json };
+}
+function playbackSessionQueueJson() {
+  return playbackSessionQueuePayload().json;
 }
 function savePlaybackSession(force) {
   if (!force) {
@@ -564,18 +591,55 @@ function savePlaybackSession(force) {
   var currentTime = audio && isFinite(audio.currentTime) ? Number(audio.currentTime) : 0;
   if (currentTime < 0.2 && !force) return;
   try {
+    var queuePayload = playbackSessionQueuePayload();
     var head = JSON.stringify({
-      version: 2,
+      version: 3,
       song: serializeSongForSession(song),
       currentIdx: currentIdx,
+      queueStart: queuePayload.start,
       currentTime: currentTime,
       duration: getPlaybackDurationSeconds() || normalizePlaybackDurationSeconds(song.duration || 0),
       playMode: playMode,
       visualPreset: typeof fx !== 'undefined' && fx ? fx.preset : 0,
       updatedAt: Date.now()
     });
-    localStorage.setItem(PLAYBACK_SESSION_STORE_KEY, head.slice(0, -1) + ',"queue":' + playbackSessionQueueJson() + '}');
+    localStorage.setItem(PLAYBACK_SESSION_STORE_KEY, head.slice(0, -1) + ',"queue":' + queuePayload.json + '}');
   } catch (e) {}
+}
+// 把快照里的队列 + 索引还原成「同一首歌」：
+//  - 新快照（有 queueStart）：queueStart + 窗口索引 = 绝对索引，直接换算
+//  - 历史快照（无 queueStart，或索引已越界）：优先按 session.song 的身份定位，
+//    找不到就以该曲目重建单曲队列——宁可丢队列，也不能恢复成另一首歌
+function restoreQueueFromSession(session) {
+  var song = session && session.song ? cloneSong(session.song) : null;
+  var songs = session && Array.isArray(session.queue) && session.queue.length
+    ? session.queue.map(cloneSong).filter(Boolean)
+    : [];
+  if (!song) return { queue: songs, idx: 0 };
+  if (!songs.length) return { queue: [song], idx: 0 };
+  function keyOf(item) {
+    try { return typeof queueItemKey === 'function' ? queueItemKey(item) : ''; } catch (_) { return ''; }
+  }
+  var targetKey = keyOf(song);
+  var rawIdx = Number(session.currentIdx);
+  var hasIdx = isFinite(rawIdx);
+  var rawStart = Number(session.queueStart);
+  var hasStart = session.queueStart != null && isFinite(rawStart) && rawStart >= 0;
+  if (hasStart) {
+    var windowIdx = (hasIdx ? Math.floor(rawIdx) : rawStart) - Math.floor(rawStart);
+    if (windowIdx >= 0 && windowIdx < songs.length && (!targetKey || keyOf(songs[windowIdx]) === targetKey)) {
+      return { queue: songs, idx: windowIdx };
+    }
+  }
+  if (hasIdx && rawIdx >= 0 && rawIdx < songs.length && (!targetKey || keyOf(songs[rawIdx]) === targetKey)) {
+    return { queue: songs, idx: Math.floor(rawIdx) };
+  }
+  if (targetKey) {
+    for (var i = 0; i < songs.length; i++) {
+      if (keyOf(songs[i]) === targetKey) return { queue: songs, idx: i };
+    }
+  }
+  return { queue: [song], idx: 0 };
 }
 async function applyPlaybackSession(session, opts) {
   opts = opts || {};
@@ -589,8 +653,9 @@ async function applyPlaybackSession(session, opts) {
       return false;
     }
   }
-  var queue = Array.isArray(session.queue) && session.queue.length ? session.queue.map(cloneSong) : [cloneSong(session.song)];
-  var idx = clampRange(Number(session.currentIdx) || 0, 0, queue.length - 1);
+  var restored = restoreQueueFromSession(session);
+  var queue = restored.queue;
+  var idx = restored.idx;
   playQueue = queue;
   currentIdx = idx;
   safeRenderQueuePanel('restore-session');

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "note": "Folium v1 模组清单。每个条目指向一个含 mod.json + client.mjs 的目录；enabled=false 可临时停用（不加载、不注册样式）。",
+  "mods": [
+    { "id": "visualizer-jump", "dir": "visualizer-jump", "enabled": true },
+    { "id": "nebbia", "dir": "nebbia", "enabled": true },
+    { "id": "hanabi", "dir": "hanabi", "enabled": true },
+    { "id": "machi", "dir": "machi", "enabled": true }
+  ]
+}

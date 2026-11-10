@@ -97,7 +97,10 @@ function fullscreenDiyAnchorElement() {
   return document.querySelector('#top-right .top-account-pill') || userBtn || document.getElementById('top-right');
 }
 function layoutFullscreenDiyZone() {
-  var width = innerWidth < 820 ? 104 : 128;
+  /* 这里是「整块悬停热区」的宽度，不是内容宽度：内容溢出时居中溢出（justify-content:center），
+     所以宽度只影响 pointer 命中判定和左右夹取。加了 T 恤按钮后内容宽多了 38px，
+     热区不跟着放宽的话，鼠标移到最左边那颗按钮上不会触发 peek，按钮就一直藏着。 */
+  var width = innerWidth < 820 ? 134 : 158;
   var height = innerWidth < 720 ? 48 : 52;
   var left = innerWidth - 510;
   var top = 24;
@@ -254,6 +257,17 @@ var beatAnalysisConfig = {
     }
   } catch (_) {}
 })();
+
+// 节拍分析时长归一化。song.duration 在不同来源里单位不一致（秒 / 毫秒），
+// 取不到就返回 0 表示"未知"——由 analyzeAudioBeats 里的闸门决定放行与否。
+// 播客路径早就这么做了（13-playback-start-audio.js 的 djDurationSec），
+// 但 MR / 预热 / cuefield 三条路径一直传 null，等于把"下载前拦超长音轨"这道闸废掉。
+function normalizeBeatDurationSec(value) {
+  var n = Number(value);
+  if (!isFinite(n) || n <= 0) return 0;
+  if (n > 10000) n = n / 1000; // 毫秒 → 秒
+  return n;
+}
 var beatCam = {
   nextIdx: 0,
   events: [],

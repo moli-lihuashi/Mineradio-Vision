@@ -850,7 +850,8 @@ function makeContentListManager() {
       safeRenderQueuePanel('content-play-row');
       safeShelfRebuild('content-play-row');
       forcePlaybackControlsInteractive();
-      playQueueAt(playIndex, { preserveHomeState: true }).catch(function(e){
+      // userPick：用户明确点了这一行。取不到音源时停在这一首并说明，不自动跳下一首。
+      playQueueAt(playIndex, { preserveHomeState: true, userPick: true }).catch(function(e){
         console.warn('[ContentPlayRow]', e);
       });
       // 关闭内容框

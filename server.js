@@ -20,6 +20,16 @@ function _kugouMod() {
         try { saveKugouAuth(Object.assign(kugouCookieObject(), { dfid })); } catch (_) {}
       });
     } catch (_) {}
+    /* 会话自愈落盘（参照 Folia kugouApiBridge 的 mergeResponseSession）：
+       上游会轮换 token，响应 Set-Cookie / body.data 里的新凭据必须合并回磁盘，
+       否则之后每个请求都带旧 token，概率性失败直到用户重新登录。 */
+    try {
+      _lazyMods.kugou.setKugouCookiePersistHook(function (nextCookie) {
+        // 只接受「当前仍是登录态」的合并结果，防止登出瞬间的空凭据覆盖磁盘
+        try { saveKugouCookie(nextCookie); } catch (_) {}
+        return kugouCookie;
+      });
+    } catch (_) {}
   }
   return _lazyMods.kugou;
 }
@@ -243,7 +253,7 @@ const {
 
 // beatmap 磁盘缓存（与更新系统无关，独立域）
 const beatmapCache = require("./server/lib/beatmap-cache")({ cacheDir: BEATMAP_CACHE_DIR });
-const { beatCacheRootInfo, readBeatMapCache, writeBeatMapCache } = beatmapCache;
+const { beatCacheRootInfo, readBeatMapCache, writeBeatMapCache, pruneBeatMapCache, beatMapCacheLimitBytes } = beatmapCache;
 let djAnalyzeBusy = false;
 const djAnalyzeQueue = [];
 // 汽水音频解密（worker / 缓存 / 并发闸门）已拆到 server/lib/qishui-audio.js，
@@ -273,6 +283,7 @@ applySystemCertificateAuthorities();
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'application/javascript',
+  '.mjs':  'application/javascript',
   '.css':  'text/css',
   '.json': 'application/json',
   '.png':  'image/png',
@@ -509,11 +520,19 @@ const setQQCookie = (value) => { qqCookie = value; };
 
 function staticCacheControlForPath(filePath) {
   const rel = String(filePath || '').replace(/\\/g, '/');
-  if (/\/public\/index\.html$/i.test(rel) || /\/index\.html$/i.test(rel)) {
+  if (/\/index\.html$/i.test(rel)) {
     return 'no-store, no-cache, must-revalidate';
   }
-  if (/\/(js\/modules|vendor|css|fonts|assets)\//i.test(rel) ||
-      /\.(?:js|css|woff2?|ttf|otf|png|jpe?g|gif|webp|svg|ico|mp4|webm|json)$/i.test(rel)) {
+  // 覆盖层页面（desktop-lyrics.html）里装着全部渲染逻辑，
+  // 曾经落到下面的 max-age=300：改完重启后 5 分钟内仍然拿缓存旧页面 →
+  // 「代码明明改了，界面一点没变」。HTML 一律走 revalidate。
+  if (/\.html?$/i.test(rel)) {
+    return 'no-cache';
+  }
+  // 注意 mjs：Folium 模组的 client.mjs 是 ESM，".mjs" 不以 ".js" 结尾，
+  // 曾落到下面的 max-age=300 —— 改模组后 5 分钟内仍加载旧 client.mjs。
+  if (/\/(js\/modules|vendor|css|fonts|assets|folia-mods)\//i.test(rel) ||
+      /\.(?:m?js|css|woff2?|ttf|otf|png|jpe?g|gif|webp|svg|ico|mp4|webm|json)$/i.test(rel)) {
     // 本地 localhost 服务，revalidate 零成本：文件变了 ETag 必变（size+mtime），
     // 彻底避免「版本号忘 bump → Chromium 缓存旧模块 → 白屏且重装无效」。
     // ?v= 保留用于穿透中间层缓存，不再承担新鲜度职责。
@@ -588,8 +607,13 @@ function readRequestBody(req) {
       if (settled) return;
       total += chunk.length;
       if (total > MAX_BYTES) {
-        req.destroy();
-        finish(() => reject(new Error('BODY_TOO_LARGE')));
+        // 不要直接 destroy 连接：那样客户端只能拿到「连接被重置」，
+        // 而 http-server 的统一兜底也无从写出 413 JSON。排空剩余请求体，
+        // 让调用方/顶层 catch 有机会返回规范响应。
+        const err = new Error('BODY_TOO_LARGE');
+        err.statusCode = 413;
+        finish(() => reject(err));
+        try { req.resume(); } catch (_) {}
         return;
       }
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -1386,6 +1410,7 @@ const {
   sortKugouCloudTracks,
   handleKugouUserPlaylists,
   handleKugouPlaylistTracks,
+  clearKugouPlaylistCache,
   kugouTrackercdnPlayUrl,
   kugouPlayableUrlFromResponse,
   getKugouLoginInfoFresh,
@@ -1905,7 +1930,7 @@ const routeCtx = {
   // ---- update / beatmap / cuefield ----
   fetchLatestUpdateInfo, localUpdateFallback,
   startUpdateDownloadJob, startUpdatePatchJob, publicUpdateJob, updateDownloadJobs,
-  beatCacheRootInfo, readBeatMapCache, writeBeatMapCache,
+  beatCacheRootInfo, readBeatMapCache, writeBeatMapCache, pruneBeatMapCache, beatMapCacheLimitBytes,
   planCuefieldTransitionFromCache, readCuefieldFeedbackStats, appendCuefieldFeedback,
   // ---- home / weather ----
   handleDiscoverHome, buildSceneRadio, buildWeatherRadio, fetchIpWeatherLocation,
@@ -1929,7 +1954,7 @@ const routeCtx = {
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,
   normalizeKugouCookieInput, saveKugouCookie,
   handleKugouSearch,
-  handleKugouUserPlaylists, handleKugouPlaylistTracks, handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
+  handleKugouUserPlaylists, handleKugouPlaylistTracks, clearKugouPlaylistCache, handleKugouSongUrl, handleKugouLyric, handleKugouGuessLike,
   handleKugouLikeCheck, handleKugouLikeToggle, handleKugouPlaylistAddSong,
   // ---- qishui ----
   handleQishuiStatus, saveQishuiAccessToken, getQishuiStatus, clearQishuiAccessToken,
@@ -1960,6 +1985,8 @@ const routeMatchers = [
   require('./server/routes/spotify')(routeCtx),
   require('./server/routes/audio')(routeCtx),
   require('./server/routes/ai')(routeCtx),
+  // 运行诊断（只读）：连接层记录 / 运行日志 / 构建溯源
+  require('./server/routes/debug')(routeCtx),
 ];
 
 // ---------- HTTP 分发：实现见 server/lib/http-server.js ----------
@@ -1975,7 +2002,31 @@ const httpServer = require("./server/lib/http-server")({
   getApiTokenAuto: () => API_TOKEN_AUTO,
   nativeDjAvailable,
 });
-const { server, startHttpServer } = httpServer;
+const { server } = httpServer;
+
+/* 节拍缓存只在超过上限时才删（pruneDirectory 先算总量，没超就一个文件都不动），
+   正常使用不会丢任何分析结果。启动 90 秒后再跑，别和冷启动的取链 / 首屏抢磁盘。
+   走 wrapper 而不是直接改 http-server：electron 主进程与 CLI 两个入口都收得到。 */
+function scheduleBeatMapCachePrune() {
+  if (typeof pruneBeatMapCache !== 'function') return;
+  const timer = setTimeout(() => {
+    Promise.resolve()
+      .then(() => pruneBeatMapCache())
+      .then((result) => {
+        if (!result || !result.ok || !result.removed) return;
+        console.log('[BeatMapCache] pruned ' + result.removed + ' files, '
+          + Math.round((result.bytesAfter || 0) / 1048576) + ' MiB left');
+      })
+      .catch((err) => console.warn('[BeatMapCache] prune failed:', err && (err.message || err)));
+  }, 90 * 1000);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+}
+
+function startHttpServer() {
+  const started = httpServer.startHttpServer();
+  scheduleBeatMapCachePrune();
+  return started;
+}
 
 if (require.main === module) {
   startHttpServer();

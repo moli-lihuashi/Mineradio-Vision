@@ -245,6 +245,9 @@ function homePetPickPhoto() {
   var input = document.getElementById('home-pet-photo-input');
   if (!input) {
     input = document.createElement('input');
+    // 必须回设 id：否则兜底条件每次都成立，点一次选照片就往 body 里
+    // 追加一个隐藏 input 和一份 change 监听器，反复操作会持续泄漏。
+    input.id = 'home-pet-photo-input';
     input.type = 'file';
     input.accept = 'image/*';
     input.style.display = 'none';

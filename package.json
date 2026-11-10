@@ -1,7 +1,7 @@
 {
   "name": "mineradio",
   "productName": "Mineradio",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "沉浸式音乐播放器，融合天气电台、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Mineradio",
   "main": "desktop/main.js",
@@ -63,7 +63,9 @@
       "!node_modules/{electron,electron-builder,electron-rebuild,app-builder-lib,app-builder-bin,rcedit}/**/*",
       "!node_modules/**/{test,tests,__tests__,example,examples,doc,docs}/**/*",
       "!node_modules/**/*.md",
-      "!node_modules/**/{.github,.git,.npm,.cache}/**/*"
+      "!node_modules/**/{.github,.git,.npm,.cache}/**/*",
+      "!public/wallpaper.html",
+      "!desktop/wallpaper-preload.js"
     ],
     "asar": false,
     "win": {
@@ -110,17 +112,17 @@
     }
   },
   "dependencies": {
-    "NeteaseCloudMusicApi": "^4.32.0",
     "music-metadata": "11.14.0",
+    "NeteaseCloudMusicApi": "^4.32.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "electron": "^42.4.1",
+    "electron": "^44.9.0",
     "electron-builder": "^26.15.3",
     "rcedit": "^5.0.2"
   },
   "overrides": {
-    "axios": "1.18.1",
+    "axios": "1.20.0",
     "body-parser": "1.20.6",
     "music-metadata": "11.14.0"
   }

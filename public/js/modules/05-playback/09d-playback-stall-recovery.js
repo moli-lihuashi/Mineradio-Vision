@@ -106,13 +106,28 @@ function resetPlaybackFreshUrlRecoveryBudget(song) {
   playbackResumeRecovery.freshUrlSongKey = playbackFreshUrlRecoverySongKey(song);
   playbackResumeRecovery.freshUrlAttemptCount = 0;
   playbackResumeRecovery.softRetryCount = 0;
+  /* 源指纹跟着预算一起归零，否则换歌后仍会用上一首的「源没变」去解释提示文案。 */
+  playbackResumeRecovery.lastSourceRevision = '';
+  playbackResumeRecovery.recoveryRevisionChanged = null;
 }
 
 function isSameAudioPlaybackTarget(media, src) {
   return !!(audio && media && audio === media && (audio.currentSrc || audio.src || '') === src);
 }
 
+/* 切歌进行中 / 还有目标排队：看门狗必须站住不动。
+ * 换源会给共享 audio 重新 load，这个过程中 readyState 天然是 0、看似「卡住」，
+ * 此时软重试再补一刀 media.load() 只会把还在飞的 play() 打断
+ * （AbortError: The play() request was interrupted by a new load request），
+ * 本来能播的曲目就这样被判成播放失败。 */
+function playbackTrackSwitchInProgress() {
+  if (typeof pendingTrackSwitch !== 'undefined' && pendingTrackSwitch) return true;
+  if (typeof trackSwitchDrain !== 'undefined' && trackSwitchDrain) return true;
+  return false;
+}
+
 function playbackStallRecoveryOwnerStillCurrent(media, src, token, recoverySerial) {
+  if (playbackTrackSwitchInProgress()) return false;
   if (!isSameAudioPlaybackTarget(media, src)) return false;
   if (token !== trackSwitchToken || recoverySerial !== playbackResumeRecovery.serial) return false;
   if (media.paused || media.ended || media.seeking) return false;
@@ -120,12 +135,17 @@ function playbackStallRecoveryOwnerStillCurrent(media, src, token, recoverySeria
 }
 
 async function softRetryStalledAudio(media, src, token, resumeAt) {
+  if (playbackTrackSwitchInProgress()) return false;
   if (!isSameAudioPlaybackTarget(media, src) || token !== trackSwitchToken) return false;
   var target = Math.max(0, Number(resumeAt) || (isFinite(media.currentTime) ? media.currentTime : 0));
   try {
     setPlaybackBufferingState(true, 'soft-retry');
     if (media.readyState >= 2) {
       try { media.currentTime = target; } catch (_) {}
+      await media.play();
+    } else if (!media.readyState && media.networkState === media.NETWORK_LOADING) {
+      /* 新源还在下载：再 load() 等于把请求推倒重来并打断在飞的 play()。
+         这里只补一次 play()，让它挂着等数据到位。 */
       await media.play();
     } else {
       media.load();
@@ -156,8 +176,18 @@ async function softRetryStalledAudio(media, src, token, resumeAt) {
   }
 }
 
+/* 源指纹（09f 缺席时返回空串，恢复主流程不受影响）。 */
+function playbackSourceRevisionOf(song) {
+  if (typeof buildPlaybackSourceRevision !== 'function') return '';
+  try {
+    var src = (audio && (audio.currentSrc || audio.src)) || '';
+    return buildPlaybackSourceRevision(song, src);
+  } catch (_) { return ''; }
+}
+
 async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
   opts = opts || {};
+  if (playbackTrackSwitchInProgress()) return false;
   if (!playQueue.length || currentIdx < 0 || currentIdx >= playQueue.length) return false;
   var song = playQueue[currentIdx];
   if (!canRefreshCurrentPlaybackUrlForResume(song)) return false;
@@ -167,7 +197,13 @@ async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
   if (playbackResumeRecovery.pending || now - (playbackResumeRecovery.lastAttemptAt || 0) < 1200) return false;
   if ((Number(playbackResumeRecovery.freshUrlAttemptCount) || 0) >= 1) {
     if (!opts.silent && typeof showSourceFallbackNotice === 'function') {
-      showSourceFallbackNotice('播放恢复已停止', '重新取链后仍无法播放，请手动换歌或切换音质。');
+      /* 上一次换链拿回来的还是同一个源：不是「重新取链也播不了」，而是根本没换到新链接，
+         再取一次也是同一枚签名 URL，该让用户换音质或换音源。 */
+      if (playbackResumeRecovery.recoveryRevisionChanged === false) {
+        showSourceFallbackNotice('播放恢复已停止', '这个音源没有可用的备用链接，请切换音质或换一个音源。');
+      } else {
+        showSourceFallbackNotice('播放恢复已停止', '重新取链后仍无法播放，请手动换歌或切换音质。');
+      }
     }
     return false;
   }
@@ -176,6 +212,11 @@ async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
   playbackResumeRecovery.lastAttemptAt = now;
   playbackResumeRecovery.lastReason = reason || 'resume-recovery';
   playbackResumeRecovery.serial++;
+  /* 换链前的源指纹，换完再算一次做对比：同一枚 URL 说明 CDN 没轮换签名，
+     「换了源还是不行」和「没换到源」是两种完全不同的结论，别混成一个提示。 */
+  var revisionBefore = playbackSourceRevisionOf(song);
+  playbackResumeRecovery.lastSourceRevision = revisionBefore;
+  playbackResumeRecovery.recoveryRevisionChanged = null;
   clearPlaybackResumeWatchdogs();
   var resumeAt = currentResumeSeconds(opts.resumeAt);
   try {
@@ -188,6 +229,10 @@ async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
       preserveHomeState: true,
       resumeRecovery: true
     });
+    if (typeof playbackSourceRevisionChanged === 'function') {
+      playbackResumeRecovery.recoveryRevisionChanged =
+        playbackSourceRevisionChanged(revisionBefore, playbackSourceRevisionOf(song));
+    }
     return recovered === true;
   } catch (recoveryErr) {
     console.warn('[PlaybackStallRecovery]', reason, recoveryErr);
@@ -202,6 +247,14 @@ async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
 function schedulePlaybackStallRecovery(reason, opts) {
   opts = opts || {};
   var media = opts.ownerMedia || audio;
+  /* 切歌 / 换源产生的 MEDIA_ERR_ABORTED 是「操作被中断」，不是播放失败。
+   * 旧行为给它安排看门狗，随后的软重试会去打断新一次起播的 play()。
+   * 分类器缺席时 typeof 兜底，保持原有恢复能力。 */
+  if (typeof mediaFailureBlocksStallRecovery === 'function' &&
+      mediaFailureBlocksStallRecovery(reason, media)) {
+    setPlaybackBufferingState(false, 'media-aborted');
+    return;
+  }
   if (!media || media !== audio || !media.src) return;
   if (opts.ownerToken != null && Number(opts.ownerToken) !== Number(trackSwitchToken)) return;
   var song = playQueue[currentIdx];
@@ -238,6 +291,9 @@ function schedulePlaybackStallRecovery(reason, opts) {
         if (await softRetryStalledAudio(media, src, token, current || startTime)) return;
       }
       if (delayMs < 3000 && media.readyState >= 2 && media.networkState !== media.NETWORK_NO_SOURCE) return;
+      /* 软重试期间用户又开始切歌了（它因此返回 false）：这里必须跟着退场。
+         否则会走下面的重新取链，把新一次起播的 play() 打断 —— 正是本轮要修的那个 AbortError。 */
+      if (playbackTrackSwitchInProgress()) return;
       if (!canRefreshCurrentPlaybackUrlForResume(song)) {
         if (!opts.silent && typeof showToast === 'function') showToast('网络缓冲异常，请稍后重试或拖动进度');
         setPlaybackBufferingState(false, 'no-refresh');

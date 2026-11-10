@@ -394,7 +394,15 @@ function bindPlaybackProgressEvents(audioEl) {
   });
   audioEl.addEventListener('timeupdate', function () {
     if (typeof tickCuefieldAutoMix === 'function') tickCuefieldAutoMix();
+    // 曲末提前淡出：这里只排程，实际执行由 setTimeout 落在 duration - fadeOut
+    if (typeof scheduleTrackEndFade === 'function') scheduleTrackEndFade(audioEl);
     if (typeof savePlaybackSession === 'function') savePlaybackSession(false);
+  });
+  // 起播 / 拖动进度 / 换源后，旧的曲末排程必须作废，否则会在错误的时间点淡出
+  ['play', 'seeked', 'emptied', 'loadedmetadata', 'durationchange', 'pause'].forEach(function (name) {
+    audioEl.addEventListener(name, function () {
+      if (typeof cancelTrackEndFade === 'function') cancelTrackEndFade();
+    });
   });
   audioEl.addEventListener('pause', function () {
     if (typeof savePlaybackSession === 'function') savePlaybackSession(true);

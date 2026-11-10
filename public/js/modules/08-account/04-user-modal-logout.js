@@ -82,12 +82,25 @@ async function exportActiveLoginSessionPack() {
     showToast('请在桌面版中导出登录包');
     return;
   }
-  var password = window.prompt('设置导出口令（换机导入时需要）');
+  // Electron 渲染进程的 window.prompt 会直接抛错（prompt() is not supported.），
+  // 必须走应用内异步输入弹窗；取消 / 空口令 / 两次不一致都直接放弃导出。
+  var password = null;
+  try {
+    if (typeof promptPasswordWithConfirm !== 'function') {
+      showToast('当前版本不支持口令输入');
+      return;
+    }
+    password = await promptPasswordWithConfirm({
+      title: '设置导出口令',
+      message: '换机导入登录包时需要输入同一口令',
+      placeholder: '导出口令'
+    });
+  } catch (e) {
+    console.warn('[LoginPackExport] password prompt failed:', e);
+    showToast('口令输入失败');
+    return;
+  }
   if (password == null) return;
-  if (!String(password).trim()) { showToast('口令不能为空'); return; }
-  var confirmPassword = window.prompt('再输入一次口令确认');
-  if (confirmPassword == null) return;
-  if (String(password) !== String(confirmPassword)) { showToast('两次口令不一致'); return; }
   try {
     var result = await api.exportLoginSessionPack({
       password: String(password),
@@ -109,9 +122,23 @@ async function importLoginSessionPack() {
     showToast('请在桌面版中导入登录包');
     return;
   }
-  var password = window.prompt('输入登录包口令');
+  var password = null;
+  try {
+    if (typeof promptPasswordOnce !== 'function') {
+      showToast('当前版本不支持口令输入');
+      return;
+    }
+    password = await promptPasswordOnce({
+      title: '输入登录包口令',
+      message: '请输入导出该登录包时设置的口令',
+      placeholder: '登录包口令'
+    });
+  } catch (e) {
+    console.warn('[LoginPackImport] password prompt failed:', e);
+    showToast('口令输入失败');
+    return;
+  }
   if (password == null) return;
-  if (!String(password).trim()) { showToast('口令不能为空'); return; }
   try {
     var result = await api.importLoginSessionPack({ password: String(password) });
     if (result && result.cancelled) return;

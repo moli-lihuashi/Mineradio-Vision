@@ -35,6 +35,53 @@ module.exports = function createKugouService(deps) {
 
   const https = require('https');
 
+  /* 上游抖动的兜底：短 TTL 命中直接返回；上游失败时回落到「上一次成功」。
+     旧行为是直连上游、失败就把错误抛给路由 → 500 → 渲染层 Promise.all 整体失败，
+     面板从「加载中」直接变空白。实测 /api/kugou/user/playlists 在 153ms~25s 之间跳。 */
+  function createKugouFallbackCache(maxEntries) {
+    const store = new Map();
+    return {
+      get(key, ttlMs) {
+        const hit = store.get(key);
+        if (!hit) return null;
+        if (typeof ttlMs === 'number' && Date.now() - hit.at > ttlMs) return null;
+        return hit.value;
+      },
+      set(key, value) {
+        store.set(key, { at: Date.now(), value });
+        if (store.size > maxEntries) {
+          const oldest = [...store.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+          if (oldest) store.delete(oldest[0]);
+        }
+        return value;
+      },
+      clear() { store.clear(); },
+    };
+  }
+  const kugouUserPlaylistsCache = createKugouFallbackCache(4);
+  const kugouPlaylistTracksCache = createKugouFallbackCache(24);
+  const KUGOU_USER_PLAYLISTS_TTL_MS = 45 * 1000;
+  const KUGOU_PLAYLIST_TRACKS_TTL_MS = 90 * 1000;
+
+  /* 登录态探测也是上游往返：面板每次打开都会问一次。
+     60s 内复用，失败时退回上一次成功值（而不是让整个歌单接口 500）。 */
+  let kugouLoginApiCache = { at: 0, cookie: '', value: null };
+  async function getKugouLoginInfoFromApiCached(cookie) {
+    if (!cookie) return null;
+    const now = Date.now();
+    if (kugouLoginApiCache.value && kugouLoginApiCache.cookie === cookie && now - kugouLoginApiCache.at < 60 * 1000) {
+      return kugouLoginApiCache.value;
+    }
+    try {
+      const value = await getKugouLoginInfoFromApi(cookie);
+      if (value) kugouLoginApiCache = { at: now, cookie, value };
+      return value;
+    } catch (err) {
+      if (kugouLoginApiCache.value && kugouLoginApiCache.cookie === cookie) return kugouLoginApiCache.value;
+      throw err;
+    }
+  }
+
   async function handleKugouLoginQrKey() {
     const device = saveKugouAuth(kugouCookieObject());
     const qrcodeText = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=' + KUGOU_ID.APPID + '&';
@@ -282,39 +329,64 @@ module.exports = function createKugouService(deps) {
   async function handleKugouUserPlaylists() {
     const info = await getKugouLoginInfoFresh();
     if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'kugou', playlists: [] };
-    const data = await kugouCloudlistRequest('/v7/get_all_list', {
-      total_ver: 979,
-      type: 2,
-      page: 1,
-      pagesize: 200,
-      userid: info.userId,
-      token: kugouCookieToken(),
-    }, {
-      total_ver: 979,
-      type: 2,
-      page: 1,
-      pagesize: 200,
-      userid: Number(info.userId) || info.userId,
-      token: kugouCookieToken(),
-    });
-    const rawLists = asArrayDeep(data, ['lists', 'list', 'info', 'data', 'listinfo', 'collection_list', 'playlist']);
-    const nested = data && data.data && typeof data.data === 'object' ? asArrayDeep(data.data, ['lists', 'list', 'info', 'listinfo', 'collection_list', 'playlist']) : [];
-    const merged = rawLists.length ? rawLists : nested;
-    const seen = new Set();
-    const playlists = merged.map(mapKugouPlaylist).filter(pl => {
-      if (!pl.id || seen.has(pl.id)) return false;
-      seen.add(pl.id);
-      return true;
-    });
-    return { ...info, loggedIn: true, provider: 'kugou', userId: info.userId, playlists, rawStatus: data && (data.status || data.errcode || data.error_code) };
+    const cacheKey = 'playlists:' + info.userId;
+    const cached = kugouUserPlaylistsCache.get(cacheKey, KUGOU_USER_PLAYLISTS_TTL_MS);
+    if (cached) return cached;
+    try {
+      const data = await kugouCloudlistRequest('/v7/get_all_list', {
+        total_ver: 979,
+        type: 2,
+        page: 1,
+        pagesize: 200,
+        userid: info.userId,
+        token: kugouCookieToken(),
+      }, {
+        total_ver: 979,
+        type: 2,
+        page: 1,
+        pagesize: 200,
+        userid: Number(info.userId) || info.userId,
+        token: kugouCookieToken(),
+      });
+      const rawLists = asArrayDeep(data, ['lists', 'list', 'info', 'data', 'listinfo', 'collection_list', 'playlist']);
+      const nested = data && data.data && typeof data.data === 'object' ? asArrayDeep(data.data, ['lists', 'list', 'info', 'listinfo', 'collection_list', 'playlist']) : [];
+      const merged = rawLists.length ? rawLists : nested;
+      const seen = new Set();
+      const playlists = merged.map(mapKugouPlaylist).filter(pl => {
+        if (!pl.id || seen.has(pl.id)) return false;
+        seen.add(pl.id);
+        return true;
+      });
+      return kugouUserPlaylistsCache.set(cacheKey, { ...info, loggedIn: true, provider: 'kugou', userId: info.userId, playlists, rawStatus: data && (data.status || data.errcode || data.error_code) });
+    } catch (err) {
+      const stale = kugouUserPlaylistsCache.get(cacheKey);
+      if (stale) {
+        console.warn('[KugouUserPlaylists] upstream failed, serving cached list:', err && err.message);
+        return { ...stale, stale: true, staleReason: 'upstream-error' };
+      }
+      throw err;
+    }
   }
   async function handleKugouPlaylistTracks(id) {
-    const info = getKugouLoginInfo();
-    if (!info.loggedIn) return { loggedIn: false, provider: 'kugou', tracks: [] };
+    let info = getKugouLoginInfo();
     const pid = String(id || '').trim();
+    /* 同步登录态可能落后于磁盘上的 cookie（刚启动 / 刚切账号）：
+       直接拿它会得到 loggedIn:false + 空曲目，界面就变成「0 首 / 暂无可播放歌曲」。
+       所以未登录时补一次带 60s 缓存的 fresh 探测再判，避免把「还没就绪」当成「没歌」。 */
+    if (!info.loggedIn) {
+      try { info = await getKugouLoginInfoFresh(); } catch (_) {}
+    }
+    if (!info.loggedIn) {
+      return { loggedIn: false, provider: 'kugou', error: 'KUGOU_AUTH_REQUIRED', retryable: true, tracks: [] };
+    }
     if (!pid) return { loggedIn: true, provider: 'kugou', error: 'Missing Kugou playlist id', tracks: [] };
+    const cacheKey = 'tracks:' + (info.userId || 'anon') + ':' + pid;
+    const cached = kugouPlaylistTracksCache.get(cacheKey, KUGOU_PLAYLIST_TRACKS_TTL_MS);
+    if (cached) return cached;
     let detail = null;
     let rawTracks = [];
+    let upstreamExpected = 0;   // 上游自己报的曲目总数（0 且取到 0 首 = 真的空歌单）
+    let upstreamFailed = false; // 主通道挂掉、走了兜底（此时空结果一律视为可疑）
     try {
       const pageSize = 200;
       let page = 1;
@@ -329,23 +401,60 @@ module.exports = function createKugouService(deps) {
         const pageTracks = asArrayDeep(detail, ['songs', 'songlist', 'list', 'info', 'files', 'data']);
         rawTracks = rawTracks.concat(pageTracks);
         total = Number(detail && detail.data && (detail.data.count || detail.data.total)) || rawTracks.length;
+        upstreamExpected = total;
         if (!pageTracks.length || rawTracks.length >= total) break;
         page++;
       } while (page <= 10);
     } catch (err) {
-      detail = await kugouGatewayRequest('/pubsongs/v2/get_other_list_file_nofilt', {
-        params: { id: pid, global_collection_id: pid, page: 1, pagesize: 500, area_code: 1, plat: 1, type: 1, mode: 1, personal_switch: 1, extend_fields: 'abtags,hot_cmt,popularization' },
-        headers: { 'x-router': 'pubsongscdn.kugou.com' },
-      });
-      rawTracks = asArrayDeep(detail, ['songs', 'songlist', 'list', 'info', 'files', 'data']);
+      /* 后面的页失败不该把前面已经拿到的页丢掉（大歌单最容易在这里翻车）。 */
+      if (!rawTracks.length) {
+        const stale = kugouPlaylistTracksCache.get(cacheKey);
+        if (stale) {
+          console.warn('[KugouPlaylistTracks] upstream failed, serving cached tracks:', err && err.message);
+          return { ...stale, stale: true, staleReason: 'upstream-error' };
+        }
+        upstreamFailed = true;
+        try {
+          detail = await kugouGatewayRequest('/pubsongs/v2/get_other_list_file_nofilt', {
+            params: { id: pid, global_collection_id: pid, page: 1, pagesize: 500, area_code: 1, plat: 1, type: 1, mode: 1, personal_switch: 1, extend_fields: 'abtags,hot_cmt,popularization' },
+            headers: { 'x-router': 'pubsongscdn.kugou.com' },
+          });
+          rawTracks = asArrayDeep(detail, ['songs', 'songlist', 'list', 'info', 'files', 'data']);
+        } catch (fallbackErr) {
+          console.warn('[KugouPlaylistTracks] both paths failed:', err && err.message, fallbackErr && fallbackErr.message);
+          /* 两条路都挂：把原始错误抛给路由（500），前端据此显示「重试」而不是「暂无歌曲」。 */
+          throw err;
+        }
+      } else {
+        console.warn('[KugouPlaylistTracks] page failed, keeping', rawTracks.length, 'tracks:', err && err.message);
+      }
     }
     const tracks = sortKugouCloudTracks(rawTracks).map(mapKugouTrack).filter(s => s.name && (s.hash || s.id));
-    return {
+    const playlistMeta = { provider: 'kugou', id: pid, name: '', trackCount: tracks.length };
+    if (!tracks.length) {
+      /* 「0 首」有两种来源，界面必须能区分：
+         - 上游自己报 count=0 且一首都没给 = 这个歌单真的是空的 → 正常空结果；
+         - 上游说有 N 首却解析不出曲目、或主通道挂了走兜底还是空 → 这次没拿到，
+           带 retryable 让渲染层给「重试」而不是「暂无可播放歌曲」。
+         两种情况都不进缓存：一次抖动不该让用户接下来 90s 反复看到「0 首」。 */
+      if (upstreamExpected > 0 || upstreamFailed) {
+        return {
+          loggedIn: true,
+          provider: 'kugou',
+          error: 'KUGOU_PLAYLIST_EMPTY',
+          retryable: true,
+          playlist: playlistMeta,
+          tracks: [],
+        };
+      }
+      return { loggedIn: true, provider: 'kugou', playlist: playlistMeta, tracks: [] };
+    }
+    return kugouPlaylistTracksCache.set(cacheKey, {
       loggedIn: true,
       provider: 'kugou',
-      playlist: { provider: 'kugou', id: pid, name: '', trackCount: tracks.length },
+      playlist: playlistMeta,
       tracks,
-    };
+    });
   }
   async function kugouTrackercdnPlayUrl(hash, options) {
     options = options || {};
@@ -379,6 +488,10 @@ module.exports = function createKugouService(deps) {
         'User-Agent': KUGOU_ID.ANDROID_UA,
         Cookie: kugouCloudlistCookieHeader(obj),
       },
+      /* 取址是「点了播放就得等」的前台路径：CDN 一旦不响应，
+         12s + 重试 1 次 = 24s 的静默等待比直接失败更糟。
+         短超时 + 超时不重试（见 http-request.js）让用户最多等 6s。 */
+      timeoutMs: 6000,
     });
     const cleanText = String(text || '')
       .replace('<!--KG_TAG_RES_START-->', '')
@@ -396,7 +509,7 @@ module.exports = function createKugouService(deps) {
   async function getKugouLoginInfoFresh() {
     if (getKugouCookie()) {
       try {
-        const apiInfo = await getKugouLoginInfoFromApi(getKugouCookie());
+        const apiInfo = await getKugouLoginInfoFromApiCached(getKugouCookie());
         if (apiInfo && apiInfo.loggedIn) {
           return Object.assign({}, apiInfo, {
             playbackKeyReady: apiInfo.playbackReady !== false,
@@ -475,6 +588,12 @@ module.exports = function createKugouService(deps) {
     };
   }
 
+  /* 歌单内容变了（加歌/删歌/收藏）时要主动作废，否则用户最长会看到 90s 前的旧列表。 */
+  function clearKugouPlaylistCache() {
+    kugouUserPlaylistsCache.clear();
+    kugouPlaylistTracksCache.clear();
+  }
+
   return {
     handleKugouLoginQrKey,
     kugouRegisterDevice,
@@ -488,6 +607,7 @@ module.exports = function createKugouService(deps) {
     sortKugouCloudTracks,
     handleKugouUserPlaylists,
     handleKugouPlaylistTracks,
+    clearKugouPlaylistCache,
     kugouTrackercdnPlayUrl,
     kugouPlayableUrlFromResponse,
     getKugouLoginInfoFresh,

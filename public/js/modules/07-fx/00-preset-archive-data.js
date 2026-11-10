@@ -149,6 +149,13 @@ function normalizeFxArchiveSnapshot(raw) {
     liquidGlassBrightness: archiveNumber(raw, 'liquidGlassBrightness', fxDefaults.liquidGlassBrightness, -0.5, 0.5),
     liquidGlassBevel: archiveNumber(raw, 'liquidGlassBevel', fxDefaults.liquidGlassBevel, 0, 60),
     liquidGlassSaturation: archiveNumber(raw, 'liquidGlassSaturation', fxDefaults.liquidGlassSaturation, 0, 1),
+    liquidGlassSpecular: archiveNumber(raw, 'liquidGlassSpecular', fxDefaults.liquidGlassSpecular, 0, 1),
+    liquidGlassFresnel: archiveNumber(raw, 'liquidGlassFresnel', fxDefaults.liquidGlassFresnel, 0, 2),
+    liquidGlassShadow: archiveNumber(raw, 'liquidGlassShadow', fxDefaults.liquidGlassShadow, 0, 1),
+    liquidGlassShadowSpread: archiveNumber(raw, 'liquidGlassShadowSpread', fxDefaults.liquidGlassShadowSpread, 0, 60),
+    liquidGlassTint: archiveNumber(raw, 'liquidGlassTint', fxDefaults.liquidGlassTint, 0, 1),
+    liquidGlassDistortion: archiveNumber(raw, 'liquidGlassDistortion', fxDefaults.liquidGlassDistortion, 0, 1),
+    liquidGlassBevelMode: archiveNumber(raw, 'liquidGlassBevelMode', fxDefaults.liquidGlassBevelMode, 0, 1),
     backgroundColorCustom: raw.backgroundColorMode === 'custom' || !!raw.backgroundColorCustom,
     floatLayer: !!raw.floatLayer,
     cinema: raw.cinema !== false,
@@ -162,9 +169,11 @@ function normalizeFxArchiveSnapshot(raw) {
     lyricVerticalFloat: !!raw.lyricVerticalFloat,
     lyricPauseHold: !!raw.lyricPauseHold,
     desktopLyrics: !!raw.desktopLyrics,
-    desktopLyricsSize: archiveNumber(raw, 'desktopLyricsSize', fxDefaults.desktopLyricsSize, 0.72, 1.55),
+    desktopLyricsSize: archiveNumber(raw, 'desktopLyricsSize', fxDefaults.desktopLyricsSize, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX),
     desktopLyricsOpacity: archiveNumber(raw, 'desktopLyricsOpacity', fxDefaults.desktopLyricsOpacity, 0.28, 1),
-    desktopLyricsY: archiveNumber(raw, 'desktopLyricsY', fxDefaults.desktopLyricsY, 0.08, 0.92),
+    desktopLyricsLines: normalizeDesktopLyricsLineCount(Object.prototype.hasOwnProperty.call(raw, 'desktopLyricsLines') ? raw.desktopLyricsLines : fxDefaults.desktopLyricsLines),
+    desktopLyricsTilt: archiveNumber(raw, 'desktopLyricsTilt', fxDefaults.desktopLyricsTilt, DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
+    desktopLyricsMotion: normalizeDesktopLyricsMotion(raw.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
     desktopLyricsClickThrough: raw.desktopLyricsClickThrough === true,
     desktopLyricsCinema: raw.desktopLyricsCinema !== false,
     desktopLyricsHighlight: raw.desktopLyricsHighlight === true,
@@ -174,7 +183,7 @@ function normalizeFxArchiveSnapshot(raw) {
     foregroundFpsMode: normalizeForegroundFpsMode(raw.foregroundFpsMode),
     gpuThrottleMode: normalizeGpuThrottleMode(raw.gpuThrottleMode),
     liveBackgroundKeep: normalizePerformanceBackgroundMode(raw.performanceBackground, raw.liveBackgroundKeep === true) === 'keep',
-    particleLyrics: raw.particleLyrics !== false,
+    particleLyrics: true, // 「歌词显示」开关已删除：旧存档里的 false 一律按恒定显示处理
     backCover: !!raw.backCover,
     shelf: archiveMode(raw, 'shelf', /^(off|side|stage)$/, fxDefaults.shelf),
     shelfCameraMode: archiveMode(raw, 'shelfCameraMode', /^(dynamic|static)$/, fxDefaults.shelfCameraMode),
@@ -281,8 +290,9 @@ function applyFxArchiveSnapshot(snapshot) {
   setPreset(targetPreset, { silent: true, preserveCamera: false, skipTransition: false, noSave: true, commitPlaybackPreset: true });
   applyCoverParticleResolution(fx.coverResolution, { reload: true });
   if (fx.floatLayer) createFloatLayer(); else destroyFloatLayer();
+  // 经典预设仍用内置歌词（内部互斥，不是用户开关）；其余情况恒定显示舞台歌词。
   if (isClassicPresetActive()) setParticleLyricsSilently(false);
-  else setParticleLyricsSilently(fx.particleLyrics);
+  else setParticleLyricsSilently(true);
   if (fx.backCover) createBackCoverLayer(); else destroyBackCoverLayer();
   if (fx.aiDepth) {
     aiDepthFailUntil = 0;

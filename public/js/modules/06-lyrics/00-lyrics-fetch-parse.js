@@ -664,45 +664,13 @@ function renderLyrics() {
   if (typeof handoffStageLyricsForNewTrack === 'function' && handoffStageLyricsForNewTrack()) return;
   clearStageLyrics();
 }
-function toggleLyricsPanel(force) {
-  if (classicPlayer.active) {
-    if (force === true || (force == null && !fx.particleLyrics)) {
-      showToast('经典预设已使用内置歌词');
-      updatePlayerQuickMenuUi();
-      return;
-    }
-    if (force === false || (force == null && fx.particleLyrics)) {
-      setParticleLyricsSilently(false);
-      if (force == null) showToast('歌词已关闭');
-      return;
-    }
-  }
-  if (force === false) fx.particleLyrics = false;
-  else if (force === true) fx.particleLyrics = true;
-  else fx.particleLyrics = !fx.particleLyrics;
-  if (fx.particleLyrics) {
-    createLyricsParticles();
-    showToast('歌词已开启');
-  } else {
-    clearStageLyrics();
-    showToast('歌词已关闭');
-  }
-  lyricsVisible = fx.particleLyrics;
-  updatePlayerQuickMenuUi();
-}
-function toggleLyricsFromQuickMenu() {
-  toggleLyricsPanel();
-}
+/* 「歌词显示」开关功能已整体移除（2026-11-08）：舞台歌词恒定显示，不再提供
+ * 快捷菜单开关、L 键与对应的状态同步。fx.particleLyrics 仍保留给经典预设、
+ * 沉浸模式等内部互斥逻辑（setParticleLyricsSilently），并由预设恢复强制为 true，
+ * 确保旧存档里的 false 不会再让歌词消失。 */
 function updatePlayerQuickMenuUi() {
-  var lyricsToggle = document.getElementById('quick-menu-lyrics-toggle');
   var timerActive = !!(sleepTimer && (sleepTimer.active || sleepTimer.pendingStop));
   var menuOpen = document.body.classList.contains('player-quick-menu-open');
-  if (lyricsToggle) {
-    var lyricsUiOn = !classicPlayer.active && !!fx.particleLyrics;
-    lyricsToggle.classList.toggle('on', lyricsUiOn);
-    lyricsToggle.classList.toggle('disabled', !!classicPlayer.active);
-    lyricsToggle.title = classicPlayer.active ? '经典预设已使用内置歌词' : '歌词显示';
-  }
   ['player-quick-menu-btn', 'player-quick-menu-btn-fs'].forEach(function(id){
     var menuBtn = document.getElementById(id);
     if (!menuBtn) return;

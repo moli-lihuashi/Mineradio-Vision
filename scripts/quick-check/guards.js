@@ -925,8 +925,10 @@ function checkLyricScrollPerformanceGuard() {
   if (!/function stageLyricTextLoadInfo/.test(stageText) || !/function stageLyricPreferLightweightTrack/.test(stageText) || !/function stageLyricShouldSkipFullTrackWarmup/.test(stageText) || !/stageLyricPreferLightweightTrack\(\)\) return false;[\s\S]{0,120}return false;/.test(stageText) || !/if \(stageLyricShouldSkipFullTrackWarmup\(reason\)\) return false;/.test(stageText)) {
     fail('dense lyrics must use lightweight first paint only, then allow full-track warmup for steady scrolling');
   }
-  if (!/requestStageLyricWarmup\('toggleLyricsPanel'/.test(lyricText) || !/scheduleStageLyricPrewarm\('toggleLyricsPanel', 48\)/.test(lyricText) || !/scheduleStageLyricFullTrackWarmup\('track-ready', 220\)/.test(lyricText)) {
-    fail('manual lyric toggle must defer initial rendering and prewarm instead of building the full lyric mesh on the click frame');
+  // 「歌词显示」手动开关已整体删除，原 toggleLyricsPanel 的 warmup/prewarm 断言随之撤掉；
+  // 但 track-ready 的全曲预热仍要保留（与手动开关无关）。
+  if (!/scheduleStageLyricFullTrackWarmup\('track-ready', 220\)/.test(lyricText)) {
+    fail('lyrics must still schedule full-track warmup when a track is ready');
   }
   if (!/requestStageLyricWarmup\('setParticleLyricsSilently'/.test(fxBindText) || !/scheduleStageLyricPrewarm\('setParticleLyricsSilently', 48\)/.test(fxBindText) || !/scheduleStageLyricFullTrackWarmup\('track-ready', 220\)/.test(fxBindText)) {
     fail('silent lyric activation must also use the warmup/prewarm path');
@@ -2643,9 +2645,10 @@ function checkCuefieldAutoMixGuard() {
   if (!/allowWeak:\s*true/.test(integrationText)) fail('automix must allow weak-tier plans: weak is the norm on real tracks, not an error');
   if (!/minWeakScore:\s*0?\.\d+/.test(integrationText)) fail('automix must pin an explicit minWeakScore next to allowWeak (0.58 default is too loose)');
 
-  // 5b) 开关状态必须真的显示出来。上游 18 找的是 #cuefield-automix-btn（我们 index.html 没有这个 id），
-  //     照抄会让 updateCuefieldAutoMixUi() 直接 return —— CSS 的 .on / .cuefield-automix-ready 全成死代码，
-  //     用户开了也看不出（实测过：存档 pref='1' 但界面还写着「实验功能 · 默认关闭」）。
+  // 5b) 05-cuefield/* 源码保持原样，仍以 #quick-menu-automix-toggle 同步开关 UI。
+  //     该按钮已从顶层收编进「歌曲过渡」面板底部，id 不变、功能仍可达；
+  //     这里守的是「源码不许改回上游的 #cuefield-automix-btn」，
+  //     以及存档恢复后仍会刷一次状态（无按钮的旧布局由 18 的 retireLegacyCuefieldSwitch 兜底）。
   if (!/getElementById\('quick-menu-automix-toggle'\)/.test(integrationText)) {
     fail('automix UI must target #quick-menu-automix-toggle; #cuefield-automix-btn does not exist in this repo');
   }

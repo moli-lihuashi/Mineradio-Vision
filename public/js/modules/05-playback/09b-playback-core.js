@@ -444,7 +444,7 @@ async function playQueueAt(idx, opts) {
         if (fbErr != null) return fbErr;
       } catch (_) {}
     }
-    if (!isPlaybackRecursionError(err) && token === trackSwitchToken && !opts.manual && playQueue.length > 1) {
+    if (!isPlaybackRecursionError(err) && token === trackSwitchToken && !opts.manual && !opts.userPick && playQueue.length > 1) {
       skipFailedQueueItem(idx, token, '当前歌曲加载失败，正在尝试队列里的下一首。');
       return;
     }
@@ -454,7 +454,7 @@ async function playQueueAt(idx, opts) {
     console.error('Play setup failed:', { phase: playPhase, error: setupErr }, setupErr);
     hideLoading();
     forcePlaybackControlsInteractive();
-    if (!isPlaybackRecursionError(setupErr) && typeof token !== 'undefined' && token === trackSwitchToken && !opts.manual && playQueue.length > 1) {
+    if (!isPlaybackRecursionError(setupErr) && typeof token !== 'undefined' && token === trackSwitchToken && !opts.manual && !opts.userPick && playQueue.length > 1) {
       skipFailedQueueItem(idx, token, '当前歌曲切换失败，正在尝试队列里的下一首。');
       return;
     }

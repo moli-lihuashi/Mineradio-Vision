@@ -112,6 +112,8 @@ public static class MineradioDesktopWallpaperNative {
   [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
   [DllImport("user32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+  [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SetParent(IntPtr child, IntPtr parent);
   [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr GetParent(IntPtr child);
   [DllImport("user32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindow(IntPtr hWnd);
@@ -122,8 +124,18 @@ public static class MineradioDesktopWallpaperNative {
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern IntPtr SetWindowLong32(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder value, int maxCount);
+  public static string GetClassNameText(IntPtr hWnd) {
+    if (hWnd == IntPtr.Zero) return "";
+    var sb = new System.Text.StringBuilder(256);
+    GetClassName(hWnd, sb, sb.Capacity);
+    return sb.ToString();
+  }
   [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+  /* Win11 22H2+ 会给顶层窗口画 8px 圆角。挂进 WorkerW 之后窗口变成桌面的子窗口，
+   * 但这一位不跟 SetParent 走，四角照样被切掉露出下面的系统壁纸 —— 壁纸模式里必须显式关掉。 */
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
   public static IntPtr FindWindowByClass(string className) { return FindWindow(className, null); }
   public static IntPtr FindWindowExByClass(IntPtr parent, IntPtr childAfter, string className) { return FindWindowEx(parent, childAfter, className, null); }
   public static IntPtr GetWindowLongPtr(IntPtr hWnd, int index) { return IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, index) : GetWindowLong32(hWnd, index); }
@@ -136,27 +148,106 @@ try { $previousDpiContext = [MineradioDesktopWallpaperNative]::SetThreadDpiAware
 $progman = [MineradioDesktopWallpaperNative]::FindWindowByClass("Progman")
 if ($progman -eq [IntPtr]::Zero) { throw "WALLPAPER_PROGMAN_NOT_FOUND" }
 $sendResult = [IntPtr]::Zero
+# 0x052C：请求 Progman 生成承载壁纸的 WorkerW。
+# Windows 10 用 (0, 0)；Windows 11 24H2 期望 (0xD, 0x1)。两个都发，消息本身幂等。
 [MineradioDesktopWallpaperNative]::SendMessageTimeout($progman, 0x052C, [IntPtr]::Zero, [IntPtr]::Zero, 0, 1000, [ref]$sendResult) | Out-Null
+[MineradioDesktopWallpaperNative]::SendMessageTimeout($progman, 0x052C, [IntPtr]::new([Int64]0xD), [IntPtr]::new([Int64]0x1), 0, 1000, [ref]$sendResult) | Out-Null
 $script:workerw = [IntPtr]::Zero
+$script:hostKind = ""
+$script:defView = [IntPtr]::Zero
+# 参考屏幕尺寸：Progman 的 GetWindowRect 在某些系统上返回 0x0，直接问系统更可靠。
+$refW = [MineradioDesktopWallpaperNative]::GetSystemMetrics(0)
+$refH = [MineradioDesktopWallpaperNative]::GetSystemMetrics(1)
+if ($refW -le 0 -or $refH -le 0) {
+  $progRect = New-Object MineradioDesktopWallpaperNative+RECT
+  [MineradioDesktopWallpaperNative]::GetWindowRect($progman, [ref]$progRect) | Out-Null
+  $refW = $progRect.Right - $progRect.Left
+  $refH = $progRect.Bottom - $progRect.Top
+}
+if ($refW -le 0 -or $refH -le 0) { throw "WALLPAPER_SCREEN_METRICS_INVALID" }
+# 候选宿主必须「可见 + 不含图标层 + 接近全屏」。
+# 这条校验不能省：Progman 底下常常还挂着 explorer 自己的小 WorkerW（实测有 202x56 的），
+# 挂错就会把整个画面压成一条碎片，看起来就是「没反应」。
+function Test-WallpaperHost($h) {
+  if ($h -eq [IntPtr]::Zero) { return $false }
+  if (-not [MineradioDesktopWallpaperNative]::IsWindowVisible($h)) { return $false }
+  if ([MineradioDesktopWallpaperNative]::FindWindowExByClass($h, [IntPtr]::Zero, "SHELLDLL_DefView") -ne [IntPtr]::Zero) { return $false }
+  $r = New-Object MineradioDesktopWallpaperNative+RECT
+  if (-not [MineradioDesktopWallpaperNative]::GetWindowRect($h, [ref]$r)) { return $false }
+  $w = $r.Right - $r.Left
+  $hh = $r.Bottom - $r.Top
+  return ($w -ge ($refW * 0.8) -and $hh -ge ($refH * 0.8))
+}
 $callback = [MineradioDesktopWallpaperNative+EnumWindowsProc]{
   param([IntPtr]$top, [IntPtr]$state)
   $shellView = [MineradioDesktopWallpaperNative]::FindWindowExByClass($top, [IntPtr]::Zero, "SHELLDLL_DefView")
   if ($shellView -ne [IntPtr]::Zero) {
+    $script:defView = $shellView
     $candidate = [MineradioDesktopWallpaperNative]::FindWindowExByClass([IntPtr]::Zero, $top, "WorkerW")
     if ($candidate -ne [IntPtr]::Zero) { $script:workerw = $candidate }
   }
   return $true
 }
+# 首选（Win10 / Win11 传统结构）：图标宿主是顶层窗口，壁纸层是 z 序紧随其后的 WorkerW 兄弟。
+# 这条路径在本机实测命中真正的全屏壁纸层，所以排在前面。
 [MineradioDesktopWallpaperNative]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
-if ($script:workerw -eq [IntPtr]::Zero) { throw "WALLPAPER_WORKERW_NOT_FOUND" }
+if (Test-WallpaperHost $script:workerw) { $script:hostKind = "workerw-sibling" } else { $script:workerw = [IntPtr]::Zero }
+# 次选（部分 24H2 结构）：WorkerW 变成 Progman 的子窗口。必须过全屏校验，
+# 否则会命中 explorer 的 202x56 内部小窗口。
+if ($script:workerw -eq [IntPtr]::Zero) {
+  $progmanChild = [MineradioDesktopWallpaperNative]::FindWindowExByClass($progman, [IntPtr]::Zero, "WorkerW")
+  if (Test-WallpaperHost $progmanChild) {
+    $script:workerw = $progmanChild
+    $script:hostKind = "workerw-progman-child"
+  }
+}
+# 再退一步：扫所有顶层 WorkerW，取全屏、可见、不含图标层里 z 序最靠后的（最底层 = 壁纸层）。
+if ($script:workerw -eq [IntPtr]::Zero) {
+  $script:bottomMost = [IntPtr]::Zero
+  $bottomCallback = [MineradioDesktopWallpaperNative+EnumWindowsProc]{
+    param([IntPtr]$top, [IntPtr]$state)
+    if ([MineradioDesktopWallpaperNative]::GetClassNameText($top) -eq "WorkerW") {
+      if (Test-WallpaperHost $top) { $script:bottomMost = $top }
+    }
+    return $true
+  }
+  [MineradioDesktopWallpaperNative]::EnumWindows($bottomCallback, [IntPtr]::Zero) | Out-Null
+  if ($script:bottomMost -ne [IntPtr]::Zero) {
+    $script:workerw = $script:bottomMost
+    $script:hostKind = "workerw-bottom-most"
+  }
+}
+# 兜底：直接挂 Progman，再把窗口压到 SHELLDLL_DefView 之后（z 序更下层）。
+if ($script:workerw -eq [IntPtr]::Zero) {
+  $script:workerw = $progman
+  $script:hostKind = "progman-fallback"
+}
+
 $target = [IntPtr]::new([Int64]${hwnd})
 if (-not [MineradioDesktopWallpaperNative]::IsWindow($target)) { throw "WALLPAPER_TARGET_NOT_FOUND" }
 $GWL_STYLE = -16
+$GWL_EXSTYLE = -20
 $WS_POPUP = [Int64]0x80000000
 $WS_CHILD = [Int64]0x40000000
+$WS_EX_LAYERED = [Int64]0x00080000
+# Chromium 的 transparent 窗口靠 WS_EX_LAYERED 做分层合成；跨进程 SetParent 到 WorkerW 后
+# 这套分层机制失效，画面完全不刷新（实测：挂上去桌面什么都看不到）。
+# 挂载期间临时去掉分层，让窗口走普通重定向渲染；detach 时按 exStyleBefore 还原。
+$exStyleBefore = [MineradioDesktopWallpaperNative]::GetWindowLongPtr($target, $GWL_EXSTYLE).ToInt64()
+if (($exStyleBefore -band $WS_EX_LAYERED) -ne 0) {
+  $exStyleStripped = $exStyleBefore -band (-bnot $WS_EX_LAYERED)
+  [MineradioDesktopWallpaperNative]::SetWindowLongPtr($target, $GWL_EXSTYLE, [IntPtr]::new([Int64]$exStyleStripped)) | Out-Null
+}
 $style = [MineradioDesktopWallpaperNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
 $childStyle = ($style -band (-bnot $WS_POPUP)) -bor $WS_CHILD
 [MineradioDesktopWallpaperNative]::SetWindowLongPtr($target, $GWL_STYLE, [IntPtr]::new([Int64]$childStyle)) | Out-Null
+# 圆角：DWM 的 DONOTROUND(1) 针对 DWMWA_WINDOW_CORNER_PREFERENCE(33)。
+# 挂进 WorkerW 之后窗口变成桌面的子窗口，但 Win11 的圆角属性不跟 SetParent 走，
+# 四角照样被切成圆的、露出下面的系统壁纸 —— 这是「壁纸看着像一块圆角卡片」的根因之一。
+# （不去剥 WS_THICKFRAME：那是另一个坑，Electron 的 setResizable 会把它加回来，收益也不大。）
+$dwmCorner = 1
+$dwmCornerResult = -1
+try { $dwmCornerResult = [MineradioDesktopWallpaperNative]::DwmSetWindowAttribute($target, 33, [ref]$dwmCorner, 4) } catch { }
 $verifiedStyle = [MineradioDesktopWallpaperNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
 if (($verifiedStyle -band $WS_CHILD) -eq 0 -or ($verifiedStyle -band $WS_POPUP) -ne 0) { throw "WALLPAPER_CHILD_STYLE_FAILED" }
 [MineradioDesktopWallpaperNative]::SetParent($target, $script:workerw) | Out-Null
@@ -166,7 +257,14 @@ $origin = New-Object MineradioDesktopWallpaperNative+POINT
 $origin.X = ${x}
 $origin.Y = ${y}
 if (-not [MineradioDesktopWallpaperNative]::ScreenToClient($script:workerw, [ref]$origin)) { throw "WALLPAPER_WORKERW_BOUNDS_FAILED" }
-$positioned = [MineradioDesktopWallpaperNative]::SetWindowPos($target, [IntPtr]::new([Int64]1), $origin.X, $origin.Y, ${width}, ${height}, 0x0030)
+# 兜底模式下窗口和 SHELLDLL_DefView 是同级兄弟：必须显式排在 DefView 之后（更下层），
+# 否则会把桌面图标盖住。WorkerW 模式下放进宿主底部即可。
+$insertAfter = [IntPtr]::new([Int64]1)
+if ($script:hostKind -eq "progman-fallback") {
+  $fallbackView = [MineradioDesktopWallpaperNative]::FindWindowExByClass($progman, [IntPtr]::Zero, "SHELLDLL_DefView")
+  if ($fallbackView -ne [IntPtr]::Zero) { $insertAfter = $fallbackView }
+}
+$positioned = [MineradioDesktopWallpaperNative]::SetWindowPos($target, $insertAfter, $origin.X, $origin.Y, ${width}, ${height}, 0x0030)
 if (-not $positioned) { throw "WALLPAPER_WORKERW_POSITION_FAILED" }
 $className = New-Object System.Text.StringBuilder 128
 [MineradioDesktopWallpaperNative]::GetClassName($script:workerw, $className, $className.Capacity) | Out-Null
@@ -175,6 +273,11 @@ $className = New-Object System.Text.StringBuilder 128
   targetWindowId = $target.ToInt64().ToString()
   parentWindowId = $parent.ToInt64().ToString()
   parentClassName = $className.ToString()
+  hostKind = $script:hostKind
+  exStyleBefore = $exStyleBefore.ToString()
+  # DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE) 的 HRESULT：0 = 已关掉圆角。
+  # 老系统（Win10 / 早期 Win11）没有这个属性，返回非 0，属预期，不影响壁纸。
+  dwmCorner = $dwmCornerResult
   x = ${x}
   y = ${y}
   width = ${width}

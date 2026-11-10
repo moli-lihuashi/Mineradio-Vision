@@ -51,6 +51,14 @@ function desktopWindowDetachScript(input = {}) {
   const y = Math.round(Number(input.y) || 0);
   const width = Math.max(1, Math.round(Number(input.width) || 1));
   const height = Math.max(1, Math.round(Number(input.height) || 1));
+  /* 挂载时被临时去掉的 WS_EX_LAYERED（透明窗口的分层合成）要在这里还原，
+     否则退出壁纸模式后主窗口会一直是矩形不透明（玻璃圆角消失）。 */
+  const exStyleBefore = String(input.exStyleBefore == null ? '' : input.exStyleBefore).trim();
+  if (exStyleBefore && !/^\d+$/.test(exStyleBefore)) throw new Error('FULL_DESKTOP_EXSTYLE_INVALID');
+  /* 挂载时剥掉的 WS_THICKFRAME / WS_CAPTION / WS_BORDER 同理：不还原的话退出后主窗口
+     变成不可缩放的无边框窗口（Electron 的 resizable 依赖 thick frame）。 */
+  const styleBefore = String(input.styleBefore == null ? '' : input.styleBefore).trim();
+  if (styleBefore && !/^\d+$/.test(styleBefore)) throw new Error('FULL_DESKTOP_STYLE_INVALID');
   return `
 $ErrorActionPreference = "Stop"
 if (-not ("MineradioFullDesktopNative" -as [type])) {
@@ -69,6 +77,7 @@ public static class MineradioFullDesktopNative {
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern IntPtr SetWindowLong32(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
   public static IntPtr GetWindowLongPtr(IntPtr hWnd, int index) { return IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, index) : GetWindowLong32(hWnd, index); }
   public static IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value) { return IntPtr.Size == 8 ? SetWindowLongPtr64(hWnd, index, value) : SetWindowLong32(hWnd, index, value); }
 }
@@ -84,14 +93,31 @@ try {
   $WS_POPUP = [Int64]0x80000000
   $WS_CHILD = [Int64]0x40000000
   $style = [MineradioFullDesktopNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
-  $topLevelStyle = ($style -band (-bnot $WS_CHILD)) -bor $WS_POPUP
+  # 顶层 style 只要去掉 WS_CHILD 即可。注意 Electron 的 frameless 窗口**没有 WS_POPUP 位**
+  # （实测 0x04040000 = WS_CLIPCHILDREN|WS_THICKFRAME），所以不能要求「必须有 WS_POPUP」，
+  # 也不能硬塞一个进去 —— 写回挂载前的快照反而更准。
+  $styleBefore = "${styleBefore}"
+  if ($styleBefore -ne "") { $topLevelStyle = [Int64]$styleBefore }
+  else { $topLevelStyle = ($style -band (-bnot $WS_CHILD)) -bor $WS_POPUP }
   [MineradioFullDesktopNative]::SetWindowLongPtr($target, $GWL_STYLE, [IntPtr]::new([Int64]$topLevelStyle)) | Out-Null
+  # DWM 圆角恢复默认（挂载时设成 DONOTROUND；不还原的话回到窗口模式四角是直的）
+  $dwmCorner = 0
+  try { [MineradioFullDesktopNative]::DwmSetWindowAttribute($target, 33, [ref]$dwmCorner, 4) | Out-Null } catch { }
   $verifiedStyle = [MineradioFullDesktopNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
-  if (($verifiedStyle -band $WS_CHILD) -ne 0 -or ($verifiedStyle -band $WS_POPUP) -eq 0) { throw "FULL_DESKTOP_TOPLEVEL_STYLE_FAILED" }
+  # 校验只要求「不再是 WS_CHILD」。WS_POPUP 不能作要求：Electron 的 frameless 窗口本来就没有这一位
+  # （实测 style=0x04040000 = WS_CLIPCHILDREN|WS_THICKFRAME），按老判据每次退出壁纸模式都会失败。
+  if (($verifiedStyle -band $WS_CHILD) -ne 0) { throw "FULL_DESKTOP_TOPLEVEL_STYLE_FAILED" }
+  if ($styleBefore -eq "" -and ($verifiedStyle -band $WS_POPUP) -eq 0) { throw "FULL_DESKTOP_TOPLEVEL_STYLE_FAILED" }
   # SetParent(NULL) temporarily reports the desktop HWND while WS_CHILD is
   # still set. Validate the parent only after converting to WS_POPUP.
   $parent = [MineradioFullDesktopNative]::GetParent($target)
   if ($parent -ne [IntPtr]::Zero) { throw "FULL_DESKTOP_DETACH_FAILED" }
+  # 还原挂载期间被去掉的 WS_EX_LAYERED（透明窗口的分层合成），glass 圆角才会回来。
+  $restoreExStyle = "${exStyleBefore}"
+  if ($restoreExStyle -ne "") {
+    $GWL_EXSTYLE = -20
+    [MineradioFullDesktopNative]::SetWindowLongPtr($target, $GWL_EXSTYLE, [IntPtr]::new([Int64]$restoreExStyle)) | Out-Null
+  }
   if (-not [MineradioFullDesktopNative]::SetWindowPos($target, [IntPtr]::Zero, ${x}, ${y}, ${width}, ${height}, 0x0030)) { throw "FULL_DESKTOP_POSITION_FAILED" }
   $rect = New-Object MineradioFullDesktopNative+RECT
   if (-not [MineradioFullDesktopNative]::GetWindowRect($target, [ref]$rect)) { throw "FULL_DESKTOP_BOUNDS_ACK_FAILED" }
@@ -151,6 +177,7 @@ public static class MineradioDesktopCoexistNative {
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern IntPtr SetWindowLong32(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
   public static IntPtr GetWindowLongPtr(IntPtr hWnd, int index) { return IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, index) : GetWindowLong32(hWnd, index); }
   public static IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value) { return IntPtr.Size == 8 ? SetWindowLongPtr64(hWnd, index, value) : SetWindowLong32(hWnd, index, value); }
   public static bool FindDesktopIconHost(out IntPtr host, out IntPtr defView, out IntPtr listView, out string hostClass) {
@@ -200,6 +227,9 @@ try {
   $style = [MineradioDesktopCoexistNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
   $childStyle = ($style -band (-bnot $WS_POPUP)) -bor $WS_CHILD
   [MineradioDesktopCoexistNative]::SetWindowLongPtr($target, $GWL_STYLE, [IntPtr]::new([Int64]$childStyle)) | Out-Null
+  # 与 passive 挂载一致：关掉 Win11 的 DWM 圆角，否则壁纸四角是圆的、露出下面的系统壁纸。
+  $dwmCorner = 1
+  try { [MineradioDesktopCoexistNative]::DwmSetWindowAttribute($target, 33, [ref]$dwmCorner, 4) | Out-Null } catch { }
   [MineradioDesktopCoexistNative]::SetParent($target, $defView) | Out-Null
   $verifiedStyle = [MineradioDesktopCoexistNative]::GetWindowLongPtr($target, $GWL_STYLE).ToInt64()
   if (($verifiedStyle -band $WS_CHILD) -eq 0 -or ($verifiedStyle -band $WS_POPUP) -ne 0) { throw "FULL_DESKTOP_ICON_HOST_STYLE_FAILED" }
@@ -229,6 +259,7 @@ try {
     desktopViewWindowId = $defView.ToInt64().ToString()
     desktopListWindowId = $listView.ToInt64().ToString()
     style = $verifiedStyle.ToString()
+    styleBefore = $style.ToString()
     child = $true
     popup = $false
     actualBounds = [pscustomobject]@{ x = $rect.Left; y = $rect.Top; width = $actualWidth; height = $actualHeight }
@@ -1378,6 +1409,12 @@ class FullDesktopModeRuntime {
     }
     this.attachment = {
       kind: 'passive-workerw',
+      // workerw-progman-child（Win11 24H2）/ workerw-sibling（Win10 及更早）/ progman-fallback（兜底）
+      hostKind: String(result.hostKind || ''),
+      // 挂载时被临时去掉的 WS_EX_LAYERED 原值，detach 时要还原（否则玻璃圆角消失）
+      exStyleBefore: String(result.exStyleBefore || ''),
+      // 挂载前的完整 GWL_STYLE（WS_THICKFRAME 等被剥掉），detach 时原样写回
+      styleBefore: String(result.styleBefore || ''),
       targetWindowId: String(result.targetWindowId || ''),
       parentWindowId: String(result.parentWindowId || ''),
       parentClassName: String(result.parentClassName || ''),
@@ -1413,6 +1450,8 @@ class FullDesktopModeRuntime {
       topLevelHostWindowId: String(result.topLevelHostWindowId || ''),
       desktopViewWindowId: String(result.desktopViewWindowId || ''),
       desktopListWindowId: String(result.desktopListWindowId || ''),
+      // 挂载前的 GWL_STYLE 快照：detach 按原样写回（比「去 WS_CHILD 加 WS_POPUP」更准）
+      styleBefore: String(result.styleBefore || ''),
       displayId: display.displayId,
       bounds: { ...display.bounds },
       physicalBounds: { ...display.physicalBounds },
@@ -1430,6 +1469,8 @@ class FullDesktopModeRuntime {
       y: bounds.y,
       width: bounds.width,
       height: bounds.height,
+      exStyleBefore: (this.attachment && this.attachment.exStyleBefore) || '',
+      styleBefore: (this.attachment && this.attachment.styleBefore) || '',
     });
     if (!result || result.ok !== true
       || (Object.prototype.hasOwnProperty.call(result, 'parentWindowId') && String(result.parentWindowId) !== '0')

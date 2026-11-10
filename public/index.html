@@ -13,13 +13,16 @@
      （2026-10-17 回归教训，实证探针：缺 http: 时 http 封面被拦、加上后 0 违规）。本窗口 Origin 自身是 http://127.0.0.1，无混合内容问题。
      改这条策略前必须同步验证：手势（vendor/mediapipe）、AI 封面深度（vendor/transformers + HF 权重）、
      Google Fonts、酷狗 http 封面直链、Wallpaper Engine 媒体（mineradio-wallpaper: scheme）。 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http: mineradio-wallpaper:; media-src 'self' data: blob: https: http: mineradio-wallpaper:; connect-src 'self' https://huggingface.co https://*.huggingface.co https://fonts.googleapis.com https://fonts.gstatic.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http: mineradio-wallpaper:; media-src 'self' data: blob: https: http: mineradio-wallpaper:; connect-src 'self' https://huggingface.co https://*.huggingface.co https://fonts.googleapis.com https://fonts.gstatic.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src https: http:">
+<!-- frame-src https: http: → Folia 背景「嵌入（url）」需要 iframe 加载用户提供的 http(s) 网页；
+     项目自身不嵌任何 frame，原有功能不受影响；iframe 侧另有 sandbox="allow-scripts" 锁内嵌页。 -->
 <title>Mineradio</title>
 <meta name="referrer" content="no-referrer">
 <!-- Google Fonts 不可阻塞启动：离线/墙/超时会卡住 DOMContentLoaded ~30s，表现为进程在但几乎 0 CPU、长时间黑屏 -->
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" media="print" onload="this.media='all'">
 <script src="vendor/three.r128.min.js"></script>
+<script src="vendor/folia/pixi/pixi.min.js"></script>
 <script src="vendor/music-tempo.min.js"></script>
 <script src="vendor/gsap.min.js"></script>
 <script src="vendor/morphicons/morphicons.global.js" defer></script>
@@ -40,6 +43,7 @@
 <script src="js/modules/02-home/05-home-weather-panel.js"></script>
 <script src="js/modules/02-home/06-home-hover-lift.js"></script>
 <script src="js/modules/04-mood/00-mood-audio.js"></script>
+<script src="js/modules/04-mood/01-audio-tuning.js"></script>
 <script src="js/modules/05-cuefield/00-cuefield-automix-core.js"></script>
 <script src="js/modules/05-cuefield/01-cuefield-timeline-executor.js"></script>
 <script src="js/modules/05-cuefield/01a-cuefield-bridge-engine.js"></script>
@@ -60,6 +64,7 @@ try {
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/12-folia/folia-world.css?v=0.1.0-skeleton">
 <link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/06-fx/glass.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/06-lyrics/lyrics.css?v=3.0.0-modular">
@@ -69,6 +74,10 @@ try {
 <link rel="stylesheet" href="css/10-shell/shell.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/05-playback/home-insight.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/07-fx/lyric-shader-market.css?v=3.0.0-modular">
+<!-- 必须最后加载：它要接管 glass.css / fx-glass.css 对 #fx-panel 的 !important 覆盖 -->
+<link rel="stylesheet" href="css/07-fx/fx-liquid-glass.css?v=1.0.0-cssglass">
+<!-- Folia 世界的玻璃回退：必须晚于 fx-glass.css，才能压住 .lg-active 的 backdrop-filter:none -->
+<link rel="stylesheet" href="css/06-fx/glass-folia.css?v=1.0.0-foliacss">
 </head>
 <body>
 <div id="wallpaper-engine-layer" aria-hidden="true">
@@ -92,6 +101,9 @@ try {
         <path class="update-arrow" d="M8.7 10.7 12 7.4l3.3 3.3"></path>
       </svg>
     </button>
+    <button id="skin-btn" class="skin-btn" type="button" onclick="toggleSkinPopover(event)" title="皮肤" aria-label="皮肤" aria-expanded="false" aria-haspopup="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
+    </button>
     <button id="player-quick-menu-btn" type="button" class="player-quick-menu-trigger" onclick="togglePlayerQuickMenu(event)" title="播放选项" aria-label="播放选项" aria-expanded="false" aria-haspopup="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>
     </button>
@@ -109,6 +121,9 @@ try {
   </div>
 </div>
 <div id="fullscreen-diy-zone" aria-hidden="true">
+  <button id="skin-btn-fs" class="skin-btn" type="button" onclick="toggleSkinPopover(event)" title="皮肤" aria-label="皮肤" aria-expanded="false" aria-haspopup="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
+  </button>
   <button id="player-quick-menu-btn-fs" type="button" class="player-quick-menu-trigger" onclick="togglePlayerQuickMenu(event)" title="播放选项" aria-label="播放选项" aria-expanded="false" aria-haspopup="true">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>
   </button>
@@ -315,8 +330,10 @@ try {
 </div>
 
 <div id="player-quick-menu-popover" class="player-quick-menu-popover" onclick="event.stopPropagation()">
-  <button type="button" id="quick-menu-lyrics-toggle" class="quick-menu-toggle" onclick="toggleLyricsFromQuickMenu()"><span>歌词显示</span><span class="dot"></span></button>
-  <button type="button" id="quick-menu-automix-toggle" class="quick-menu-toggle" onclick="toggleCuefieldAutoMix()" aria-pressed="false"><span>Cuefield AutoMix<small id="quick-menu-automix-status">实验功能 · 默认关闭</small></span><span class="dot"></span></button>
+  <!-- 顶部两个歌词开关已移除：
+       · 「歌词显示」是功能级删除（开关、L 键、状态同步一并撤掉），舞台歌词恒定显示；
+       · 桌面歌词只删这里的重复按钮，功能仍在视觉控制台 #t-desktopLyrics 与 Alt+L / Ctrl+Alt+L 热键。
+       过渡能力收编在下方「歌曲过渡」面板，Cuefield 入口在其底部。 -->
   <div class="quick-menu-divider"></div>
   <div class="quick-menu-section-title">淡入淡出</div>
   <div class="fade-control-row">
@@ -329,6 +346,185 @@ try {
     <input id="fade-out-slider" type="range" min="0" max="3" step="0.05" value="0.42" aria-label="音乐淡出秒数">
     <span id="fade-out-value">0.42s</span>
   </div>
+  <div class="quick-menu-divider"></div>
+  <details id="audio-tuning-fold" class="audio-tuning-fold">
+    <summary><span>音效调音</span><small id="audio-tuning-summary">平坦 · 响度+0.0dB</small></summary>
+    <div class="audio-tuning-body">
+      <button type="button" id="audio-tuning-eq-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningEq()" aria-pressed="true"><span>10 段均衡 / 前级</span><span class="dot"></span></button>
+      <button type="button" id="audio-tuning-replaygain-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningReplayGain()" aria-pressed="true" title="有 ReplayGain 标签时直接用标签；在线音源改用起播后的短窗响度自适应"><span>响度对齐</span><span class="dot"></span></button>
+      <button type="button" id="audio-tuning-anticlick-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningAntiClick()" aria-pressed="true" title="换源、跳转时 8ms 淡出 / 12ms 淡入，消除硬切爆音"><span>换源防爆音</span><span class="dot"></span></button>
+      <div id="audio-tuning-presets" class="audio-tuning-presets">
+        <button type="button" data-preset="flat" class="active">平坦</button>
+        <button type="button" data-preset="pop">流行</button>
+        <button type="button" data-preset="rock">摇滚</button>
+        <button type="button" data-preset="vocal">人声</button>
+      </div>
+      <div id="audio-tuning-eq-rows"></div>
+      <div class="at-control-row">
+        <label for="at-preamp">前级</label>
+        <input id="at-preamp" type="range" min="-12" max="12" step="0.5" value="0" aria-label="前级增益分贝">
+        <span id="at-preamp-v">+0.0dB</span>
+      </div>
+      <div class="at-control-row">
+        <label for="at-balance">平衡</label>
+        <input id="at-balance" type="range" min="-100" max="100" step="1" value="0" aria-label="左右声道平衡">
+        <span id="at-balance-v">中</span>
+      </div>
+      <div class="audio-tuning-hint">31Hz–16kHz · ±12dB · 响度补偿上限 ±6dB</div>
+    </div>
+  </details>
+  <div class="quick-menu-divider"></div>
+  <details id="playback-advanced-fold" class="playback-advanced-fold">
+    <summary><span>播放高级</span><small id="playback-advanced-summary">1.00x · 保持音调</small></summary>
+    <div class="playback-advanced-body">
+      <div class="pa-section-title">变速不变调</div>
+      <div class="at-control-row">
+        <label for="playback-speed-range">速度</label>
+        <input id="playback-speed-range" type="range" min="0.5" max="2" step="0.05" value="1" aria-label="播放速度倍率">
+        <span id="playback-speed-value">1.00x</span>
+      </div>
+      <div id="playback-speed-presets" class="playback-speed-presets">
+        <button type="button" data-rate="0.75">0.75x</button>
+        <button type="button" data-rate="1" class="active">1.0x</button>
+        <button type="button" data-rate="1.25">1.25x</button>
+        <button type="button" data-rate="1.5">1.5x</button>
+      </div>
+      <button type="button" id="playback-preserve-pitch-toggle" class="quick-menu-toggle on" aria-pressed="true" title="开启时变速不变调；关闭后速度变化会带着音调一起升降"><span>保持音调</span><span class="dot"></span></button>
+
+      <div class="pa-section-title">曲末淡出与无缝预载</div>
+      <div class="at-control-row">
+        <label for="playback-lookahead-range">曲末</label>
+        <input id="playback-lookahead-range" type="range" min="0.5" max="6" step="0.1" value="1.8" aria-label="曲末提前淡出排程窗口秒数">
+        <span id="playback-lookahead-value">1.8s</span>
+      </div>
+      <div class="at-control-row">
+        <label for="playback-lead-range">预载</label>
+        <input id="playback-lead-range" type="range" min="5" max="60" step="1" value="18" aria-label="无缝衔接提前预载秒数">
+        <span id="playback-lead-value">18s</span>
+      </div>
+
+      <div class="pa-section-title">输出设备</div>
+      <select id="playback-output-device" aria-label="音频输出设备"></select>
+      <div class="playback-output-actions">
+        <button type="button" id="playback-output-pick">选择设备…</button>
+        <button type="button" id="playback-output-default">跟随系统</button>
+      </div>
+      <div id="playback-output-status" class="pa-status">跟随系统默认设备</div>
+      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出不经过 Web Audio。</div>
+    </div>
+  </details>
+  <div class="quick-menu-divider"></div>
+  <details id="track-transition-fold" class="track-transition-fold tt-off">
+    <summary><span>歌曲过渡</span><small id="track-transition-summary">待开启 · 无缝过渡</small></summary>
+    <div class="track-transition-body">
+      <!-- 每种模式一张 Canvas：19-track-transition-art.js 收编了四份独立 HTML 的
+           逐像素算法（高斯光晕 / 点阵摩尔纹 / 磨砂噪点 / 弧形接缝），
+           切模式只换 active，不重建 DOM，也不加载任何图片或网络资源。 -->
+      <div id="track-transition-scene" class="tt-scene" data-mode="seamless">
+        <!-- index.html「交晖」：两枚椭圆交叠，统一紫白 → 混音过渡 -->
+        <canvas class="tt-scene-art" id="track-transition-art-mix" data-scene="mix" aria-hidden="true"></canvas>
+        <!-- golden-rings.html「光环」：两环相接 → 渐进过渡 -->
+        <canvas class="tt-scene-art" id="track-transition-art-gradual" data-scene="gradual" aria-hidden="true"></canvas>
+        <!-- golden-divider.html「光缝」：竖向接缝 → 无缝过渡 -->
+        <canvas class="tt-scene-art active" id="track-transition-art-seamless" data-scene="seamless" aria-hidden="true"></canvas>
+        <!-- golden-band.html「光带」：上下弧线 → 立体声转场 -->
+        <canvas class="tt-scene-art" id="track-transition-art-stereo" data-scene="stereo" aria-hidden="true"></canvas>
+      </div>
+
+      <div class="tt-caption-row">
+        <span id="track-transition-desc">过滤曲尾空白，声音不间断（开启后生效）</span>
+        <button type="button" id="track-transition-reset" class="tt-reset" onclick="resetTrackTransitionParams()" title="把当前模式的两个参数恢复默认" aria-label="恢复默认参数">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>
+        </button>
+        <button type="button" id="track-transition-preview" class="tt-preview" onclick="previewTrackTransition()" title="用合成音试听当前过渡效果，不影响正在播放的歌曲" aria-label="试听歌曲过渡">▶</button>
+      </div>
+
+      <!-- 参数行：四组静态 DOM，18 按选中模式显隐并回填数值。
+           全部真实作用于 08 的淡变 / 声像 getter，不是装饰性滑块。 -->
+      <div id="track-transition-params" class="tt-params">
+        <div class="tt-param-group is-hidden" id="tt-group-mix" data-param-mode="mix">
+          <div class="tt-param-row">
+            <label for="tt-p-mix-durationSec">过渡时长</label>
+            <input id="tt-p-mix-durationSec" type="range" min="0.4" max="8" step="0.1" value="2.4" oninput="setTrackTransitionParam('mix','durationSec',this.value)" aria-label="混音过渡时长秒数">
+            <span id="tt-p-mix-durationSec-v">2.4s</span>
+          </div>
+          <div class="tt-choice-row">
+            <span>淡变曲线</span>
+            <div class="tt-choice">
+              <button type="button" id="tt-p-mix-curve-equal-power" class="active" onclick="setTrackTransitionParam('mix','curve','equal-power')" aria-pressed="true">等功率</button>
+              <button type="button" id="tt-p-mix-curve-linear" onclick="setTrackTransitionParam('mix','curve','linear')" aria-pressed="false">线性</button>
+            </div>
+          </div>
+          <div class="tt-param-note">淡出与淡入按 2400 / 1100ms 的基准比例同步缩放</div>
+        </div>
+        <div class="tt-param-group is-hidden" id="tt-group-gradual" data-param-mode="gradual">
+          <div class="tt-param-row">
+            <label for="tt-p-gradual-durationSec">渐进时长</label>
+            <input id="tt-p-gradual-durationSec" type="range" min="0" max="12" step="0.5" value="0" oninput="setTrackTransitionParam('gradual','durationSec',this.value)" aria-label="渐进过渡时长秒数">
+            <span id="tt-p-gradual-durationSec-v">跟随设置</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-gradual-inRatio">淡入比例</label>
+            <input id="tt-p-gradual-inRatio" type="range" min="20" max="100" step="5" value="80" oninput="setTrackTransitionParam('gradual','inRatio',this.value)" aria-label="新曲淡入占渐进时长比例">
+            <span id="tt-p-gradual-inRatio-v">80%</span>
+          </div>
+          <div class="tt-param-note">0 表示跟随上方「淡入淡出」里你自己设的时长</div>
+        </div>
+        <div class="tt-param-group" id="tt-group-seamless" data-param-mode="seamless">
+          <div class="tt-param-row">
+            <label for="tt-p-seamless-tailMs">曲尾收尾</label>
+            <input id="tt-p-seamless-tailMs" type="range" min="0" max="1500" step="50" value="0" oninput="setTrackTransitionParam('seamless','tailMs',this.value)" aria-label="曲末收尾淡出毫秒">
+            <span id="tt-p-seamless-tailMs-v">0ms</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-seamless-headMs">新曲微淡入</label>
+            <input id="tt-p-seamless-headMs" type="range" min="0" max="300" step="10" value="0" oninput="setTrackTransitionParam('seamless','headMs',this.value)" aria-label="新曲起播微淡入毫秒">
+            <span id="tt-p-seamless-headMs-v">0ms</span>
+          </div>
+          <div class="tt-param-note">两项都为 0 时是纯曲末交接；调大可盖住 MP3 尾帧与硬切爆音</div>
+        </div>
+        <div class="tt-param-group is-hidden" id="tt-group-stereo" data-param-mode="stereo">
+          <div class="tt-param-row">
+            <label for="tt-p-stereo-durationSec">转场时长</label>
+            <input id="tt-p-stereo-durationSec" type="range" min="0.5" max="6" step="0.1" value="2.2" oninput="setTrackTransitionParam('stereo','durationSec',this.value)" aria-label="立体声转场时长秒数">
+            <span id="tt-p-stereo-durationSec-v">2.2s</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-stereo-panPct">声像幅度</label>
+            <input id="tt-p-stereo-panPct" type="range" min="0" max="100" step="5" value="85" oninput="setTrackTransitionParam('stereo','panPct',this.value)" aria-label="左右声道扫动幅度百分比">
+            <span id="tt-p-stereo-panPct-v">85%</span>
+          </div>
+          <div class="tt-param-note">当前曲扫向一侧、新曲从另一侧扫回你设定的 balance</div>
+        </div>
+      </div>
+      <div id="track-transition-caption" class="tt-caption">曲尾 0ms · 新曲 0ms</div>
+
+      <div id="track-transition-cards" class="tt-cards">
+        <button type="button" id="track-transition-card-mix" class="tt-card" data-mode="mix" onclick="selectTrackTransitionMode('mix')" aria-pressed="false" title="长等功率淡出 / 淡入，两段能量接成一片">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="9" cy="12" r="5.6"/><circle cx="15" cy="12" r="5.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
+          <span class="tt-label">混音过渡</span><small>能量不断层</small>
+        </button>
+        <button type="button" id="track-transition-card-gradual" class="tt-card" data-mode="gradual" onclick="selectTrackTransitionMode('gradual')" aria-pressed="false" title="曲末淡出 + 新曲淡入，时长可调">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.5 5 10.5 12 3.5 19Z"/><path d="M20.5 5 13.5 12 20.5 19Z"/><path d="M12 5v14" opacity=".55"/></svg>
+          <span class="tt-label">渐进过渡</span><small>柔和淡变</small>
+        </button>
+        <button type="button" id="track-transition-card-seamless" class="tt-card" data-mode="seamless" onclick="selectTrackTransitionMode('seamless')" aria-pressed="false" title="预载下一首，曲末立刻交接，曲尾 / 新曲淡入可调">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M11 7.5a4.5 4.5 0 0 0 0 9"/><path d="M13 7.5a4.5 4.5 0 0 1 0 9"/><path d="M9.5 12h5"/></svg>
+          <span class="tt-label">无缝过渡</span><small>零重叠</small>
+        </button>
+        <button type="button" id="track-transition-card-stereo" class="tt-card" data-mode="stereo" onclick="selectTrackTransitionMode('stereo')" aria-pressed="false" title="左右声道渐变衔接，沉浸式转场">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M3.5 10v4M7.2 7v10M10.9 8.5v7M14.6 8.5v7M18.3 7v10M22 10v4" opacity=".95"/></svg>
+          <span class="tt-label">立体声转场</span><small>沉浸式</small>
+        </button>
+      </div>
+      <button type="button" id="track-transition-toggle" class="quick-menu-toggle" onclick="toggleTrackTransition()" aria-pressed="false" title="开启后按所选风格与参数编排曲末交接；关闭时既有播放行为完全不变"><span>启用歌曲过渡<small>曲末交接 · 全程不重叠</small></span><span class="dot"></span></button>
+      <div id="track-transition-status" class="tt-status">关闭 · 不影响现有播放</div>
+      <div class="tt-legacy-row">
+        <button type="button" id="quick-menu-automix-toggle" class="quick-menu-toggle tt-legacy-toggle" onclick="toggleCuefieldAutoMix()" aria-pressed="false" title="Cuefield 是独立第二音源的双轨提前混音，与上面的「混音过渡」不是同一套实现；开启时歌曲过渡会暂时让路"><span>实验 · Cuefield 双轨混音<small id="quick-menu-automix-status">默认关闭</small></span><span class="dot"></span></button>
+      </div>
+      <div class="audio-tuning-hint">四种过渡各自有独立光效、图标与可调参数；试听会用当前参数合成两段音，真实切歌始终串行、不会叠音。参数语义对齐开源 Gapless-5 的淡入/淡出分离与等功率曲线、Tone.js CrossFade 的混合比；浏览器 &lt;audio&gt; 无法裁编码延迟，故不提供酷狗那种负值「歌曲间隔」。下方「Cuefield 双轨混音」是另一套提前叠入的实验功能，与「混音过渡」不同。</div>
+    </div>
+  </details>
   <div class="quick-menu-divider"></div>
   <div class="quick-menu-section-title">定时关闭</div>
   <div id="sleep-timer-remain" class="sleep-timer-remain">未开启</div>
@@ -356,13 +552,41 @@ try {
   <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
 </div>
 
+<!-- 皮肤弹层（T 恤按钮）：和「播放选项」是兄弟弹层，同一层级、同一套玻璃材质、互斥打开。
+     红心动效六格是现在的唯一入口（视觉控制台「外观」页那组已删除），
+     由 07-fx/05d 统一渲染，这里只管外壳。 -->
+<div id="skin-popover" class="skin-popover" role="dialog" aria-label="皮肤" onclick="event.stopPropagation()">
+  <div class="skin-popover-head">
+    <strong>皮肤</strong>
+    <small>点亮红心时的呈现方式</small>
+  </div>
+  <div class="heart-fx-grid" id="skin-heart-fx-grid"></div>
+  <div class="skin-section">
+    <div class="skin-section-head">
+      <strong>收藏演出</strong>
+      <small>点亮红心时，整屏演一场</small>
+    </div>
+    <div class="scene-fx-grid" id="skin-scene-fx-grid"></div>
+  </div>
+  <!-- 控制条底层频谱：四格（三套样式 + 关闭），由 07-fx/05f 渲染 -->
+  <div class="skin-section">
+    <div class="skin-section-head">
+      <strong>控制条频谱</strong>
+      <small>贴在控制条底沿，随音乐起伏</small>
+    </div>
+    <div class="bar-spectrum-grid" id="skin-bar-spectrum-grid"></div>
+  </div>
+  <div class="skin-popover-foot">点一格立即生效：红心格里就地放一遍，演出一格放满整屏，频谱一格贴在控制条底沿</div>
+</div>
+
 <button id="fx-fab" title="视觉控制台" onclick="toggleFxPanelPin(event)">
   <svg width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M4 7h8"/><path d="M16 7h4"/><circle cx="14" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>
 </button>
 <button id="fx-fab-hide-btn" type="button" onclick="toggleFxFabAutoHide(event)" title="自动隐藏视觉控制台">‹</button>
 
-<!-- 控制台 (右侧贴边自动显示, 无关闭按钮) -->
-<div id="fx-panel">
+<!-- 控制台 (右侧贴边自动显示, 无关闭按钮)
+     fx-css-glass = 纯 CSS 液态玻璃开关；去掉即回到 WebGL 玻璃路径 -->
+<div id="fx-panel" class="fx-css-glass">
   <div class="fx-scroll">
   <div class="fx-head">
     <div><div class="fx-title">视觉控制台</div><div class="fx-sub">MINERADIO VISUALS · 鼠标移开自动隐藏</div></div>
@@ -375,6 +599,43 @@ try {
 
   <div class="fx-section-label">视觉预设</div>
   <div class="preset-grid" id="preset-grid"></div>
+
+  <div class="fx-fold" id="fx-folia-fold">
+    <div class="fx-fold-head" onclick="toggleFoliaWorldFold()">
+      <span class="fx-fold-title"><strong>Folia 世界</strong><small>独立歌词世界 · 与预设互斥</small></span><span class="arrow">▶</span>
+    </div>
+    <div class="fx-fold-body">
+      <div class="fx-folia-switch-row">
+        <span class="fx-folia-switch-label">开启 Folia 世界</span>
+        <button class="fx-folia-switch" id="fx-folia-world-toggle" type="button" aria-pressed="false" onclick="foliaWorldToggle()" title="开启后画面交给 Folia，原有预设与 3D 歌词暂停">
+          <span class="fx-folia-switch-knob"></span>
+        </button>
+      </div>
+      <div class="fx-folia-hint" id="fx-folia-hint">开启后，画面交给 Folia，原有预设与 3D 歌词暂停。</div>
+      <div class="fx-folia-error" id="fx-folia-error" hidden></div>
+      <div class="fx-folia-lists" id="fx-folia-lists" hidden>
+        <div class="fx-section-label">歌词样式</div>
+        <div class="fx-folia-mode-grid" id="fx-folia-mode-grid"></div>
+        <div class="fx-section-label">背景</div>
+        <div class="fx-folia-bg-grid" id="fx-folia-bg-grid"></div>
+        <!-- 参数设置默认折叠：标题行本身就是开关，点开才铺 5 组滑杆/药丸（面板由 0l 填充）
+             注意：这一层**不能**带 fx-folia-tuning-fold 类 —— 那是面板里「可展开效果组」的类名，
+             带上后 `.fx-folia-tuning-fold.open` 会顺着后代选择器把每组展开体一起点亮。 -->
+        <div class="fx-fold" id="fx-folia-tuning-fold">
+          <div class="fx-fold-head" onclick="toggleFoliaTuningFold()">
+            <span class="fx-fold-title">
+              <strong id="fx-folia-tuning-title">参数设置</strong>
+              <small id="fx-folia-tuning-sub">当前样式没有可调项</small>
+            </span>
+            <span class="arrow">▶</span>
+          </div>
+          <div class="fx-fold-body">
+            <div class="fx-folia-tuning" id="fx-folia-tuning" hidden></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="fx-fold" id="fx-sonic-fold">
     <div class="fx-fold-head" onclick="document.getElementById('fx-sonic-fold').classList.toggle('open')">
       <span class="fx-fold-title"><strong>音域回响</strong><small>Wallpaper Engine 律动参数</small></span><span class="arrow">▶</span>
@@ -614,18 +875,40 @@ try {
     <div class="fx-color-row-label">Wallpaper Engine<small id="wallpaper-engine-value">未启用 · 原背景保留</small></div>
     <div class="wallpaper-engine-actions">
       <button class="fx-mini-btn" id="wallpaper-engine-pick-btn" type="button" onclick="openWallpaperEngineLibrary()">浏览</button>
-      <button class="fx-mini-btn ghost" id="wallpaper-engine-restore-btn" type="button" onclick="restoreWallpaperEngineBackground()" style="display:none">恢复</button>
+      <button class="fx-mini-btn ghost" id="wallpaper-engine-restore-btn" type="button" onclick="restoreOriginalBackgroundAfterWallpaperEngine()" style="display:none">恢复</button>
     </div>
   </div>
   <div class="fx-slider"><label>背景透明度</label><input id="fx-bgopacity" type="range" min="0" max="1" step="0.01"><output></output></div>
   <div class="fx-slider"><label>控制台玻璃色差</label><input id="fx-glassaberration" type="range" min="0" max="140" step="1"><output></output></div>
+
   <div class="fx-section-label">液态玻璃</div>
   <div class="fx-slider"><label>玻璃模糊</label><input id="fx-liquidglassblur" type="range" min="0" max="1" step="0.01"><output></output></div>
   <div class="fx-slider"><label>亮度调节</label><input id="fx-liquidglassbrightness" type="range" min="-0.5" max="0.5" step="0.01"><output></output></div>
   <div class="fx-slider"><label>磨砂饱和</label><input id="fx-liquidglasssaturation" type="range" min="0" max="1" step="0.01"><output></output></div>
+  <div class="fx-slider"><label>折射强度</label><input id="fx-liquidglassrefraction" type="range" min="0" max="2" step="0.01"><output></output></div>
+  <div class="fx-slider"><label>边缘色散</label><input id="fx-liquidglassaberration" type="range" min="0" max="0.5" step="0.01"><output></output></div>
+  <div class="fx-slider"><label>边缘高光</label><input id="fx-liquidglasshighlight" type="range" min="0" max="1" step="0.01"><output></output></div>
+  <div class="fx-slider"><label>玻璃厚度</label><input id="fx-liquidglassbevel" type="range" min="0" max="60" step="1"><output></output></div>
+  <div class="fx-fold" id="fx-liquidglass-advanced-fold">
+    <div class="fx-fold-head" onclick="document.getElementById('fx-liquidglass-advanced-fold').classList.toggle('open')">
+      <span class="fx-fold-title"><strong>液态玻璃高级参数</strong></span><span class="arrow">▶</span>
+    </div>
+    <div class="fx-fold-body">
+      <div class="fx-slider"><label>镜面高光</label><input id="fx-liquidglassspecular" type="range" min="0" max="1" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>边缘菲涅尔</label><input id="fx-liquidglassfresnel" type="range" min="0" max="2" step="0.05"><output></output></div>
+      <div class="fx-slider"><label>投影浓度</label><input id="fx-liquidglassshadow" type="range" min="0" max="1" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>投影扩散</label><input id="fx-liquidglassshadowspread" type="range" min="0" max="60" step="1"><output></output></div>
+      <div class="fx-slider"><label>主题染色</label><input id="fx-liquidglasstint" type="range" min="0" max="1" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>微畸变</label><input id="fx-liquidglassdistortion" type="range" min="0" max="1" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>双界面折射</label><input id="fx-liquidglassbevelmode" type="range" min="0" max="1" step="1"><output></output></div>
+    </div>
+  </div>
+  <div class="fx-folia-glass-hint" id="fx-folia-glass-hint" hidden>
+    Folia 世界用的是 CSS 玻璃：只有「玻璃模糊 / 磨砂饱和 / 亮度调节」生效，折射、色散、菲涅尔、双界面折射在这个模式下不参与渲染。
+  </div>
   <div class="fx-fold fx-fold-nested-parent" id="fx-plugin-market-fold">
     <div class="fx-fold-head" onclick="togglePluginMarketFold()">
-      <span class="fx-fold-title"><strong>插件市场</strong><small>玻璃插件 + 歌词着色器</small></span><span class="arrow">▶</span>
+      <span class="fx-fold-title"><strong>插件市场</strong><small>玻璃插件</small></span><span class="arrow">▶</span>
     </div>
     <div class="fx-fold-body">
       <div class="fx-fold" id="fx-liquidglass-plugin-fold">
@@ -637,18 +920,6 @@ try {
           <div id="liquidglass-plugin-list" class="liquidglass-plugin-list" style="display:flex;flex-direction:column;gap:8px"></div>
           <div style="margin-top:8px;font-size:10.5px;color:rgba(255,255,255,.38);line-height:1.45">
             把 `.js` 放到桌面版用户目录 `plugins/liquidglass/`，重启后出现在此列表。开启后才会应用插件预设。
-          </div>
-        </div>
-      </div>
-
-      <div class="fx-fold" id="fx-lyric-shader-fold">
-        <div class="fx-fold-head" onclick="document.getElementById('fx-lyric-shader-fold').classList.toggle('open'); if(typeof renderLyricShaderMarketPanel==='function') renderLyricShaderMarketPanel();">
-          <span class="fx-fold-title"><strong>着色器市场</strong><small>歌词视觉着色器</small></span><span class="arrow">▶</span>
-        </div>
-        <div class="fx-fold-body">
-          <div id="lyric-shader-market-panel"></div>
-          <div style="margin-top:8px;font-size:10.5px;color:rgba(255,255,255,.38);line-height:1.45">
-            把 `.json` 着色器包放到用户目录 `plugins/lyric-shaders/`，重启后出现在此列表。
           </div>
         </div>
       </div>
@@ -702,6 +973,7 @@ try {
         <button type="button" data-mode="custom" onclick="setLyricDisplayMode('custom')">自定</button>
       </div>
       <div class="fx-slider"><label>显示行数</label><input id="fx-lyriccustomlines" type="range" min="1" max="10" step="1"><output></output></div>
+      <div class="fx-inline-note" id="fx-lyric-rows-eco-hint" hidden style="margin:-2px 0 10px;font-size:10.5px;line-height:1.5;color:rgba(255,196,120,.88)">当前画质是「低」：舞台歌词最多显示 3 行。到「高级 → 画质档位」调到「中」或以上即可恢复自定行数。</div>
       <div class="fx-section-label">双语翻译</div>
       <div class="fx-seg lyric-translation-mode-seg" id="lyric-translation-mode-seg">
         <button type="button" data-translation="off" onclick="setLyricTranslationMode('off')">关闭</button>
@@ -790,31 +1062,50 @@ try {
         <div class="fx-toggle" id="t-lyricCameraLock" onclick="toggleFx('lyricCameraLock')"><span>歌词镜头绑定</span><span class="dot"></span></div>
         <div class="fx-toggle" id="t-bloom" onclick="toggleFx('bloom')"><span>粒子溢光</span><span class="dot"></span></div>
         <div class="fx-toggle" id="t-edge" onclick="toggleFx('edge')"><span>轮廓高亮</span><span class="dot"></span></div>
-        <div class="fx-toggle" id="t-desktopLyrics" onclick="toggleFx('desktopLyrics')" title="全屏幕置顶歌词"><span>桌面歌词</span><span class="dot"></span></div>
-        <div class="fx-toggle" id="t-desktopLyricsClickThrough" onclick="toggleFx('desktopLyricsClickThrough')" title="锁定后防误触；鼠标移到桌面歌词上按中键可锁定/解锁"><span>桌面歌词锁定</span><span class="dot"></span></div>
-        <div class="fx-toggle" id="t-desktopLyricsCinema" onclick="toggleFx('desktopLyricsCinema')" title="桌面歌词绑定鼓点电影震动，基础漂浮始终保留"><span>桌面歌词电影震动</span><span class="dot"></span></div>
-        <div class="fx-toggle" id="t-desktopLyricsHighlight" onclick="toggleFx('desktopLyricsHighlight')" title="桌面歌词按播放进度高亮"><span>桌面歌词高亮跟随</span><span class="dot"></span></div>
-        <div class="fx-toggle dev-locked" id="t-wallpaperMode" onclick="toggleFx('wallpaperMode')" title="开发中，暂不可用"><span>壁纸模式<em class="fx-dev-badge">开发中</em></span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-desktopLyrics" onclick="toggleFx('desktopLyrics')" title="在桌面上置顶显示歌词（快捷键 Alt+L），打开后可调整大小 / 行数 / 动效"><span>桌面歌词</span><span class="dot"></span></div>
+        <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsClickThrough" onclick="toggleFx('desktopLyricsClickThrough')" title="锁定后防误触；鼠标移到桌面歌词上按中键可锁定/解锁"><span>桌面歌词锁定</span><span class="dot"></span></div>
+        <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsCinema" onclick="toggleFx('desktopLyricsCinema')" title="桌面歌词绑定鼓点电影震动，基础漂浮始终保留"><span>桌面歌词电影震动</span><span class="dot"></span></div>
+        <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsHighlight" onclick="toggleFx('desktopLyricsHighlight')" title="桌面歌词按播放进度高亮"><span>桌面歌词高亮跟随</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-wallpaperMode" onclick="toggleFx('wallpaperMode')" title="把完整 Mineradio 放到 Windows 桌面当壁纸；退出请点托盘图标（左键直接切回窗口）"><span>壁纸模式</span><span class="dot"></span></div>
       </div>
-      <div class="fx-section-label">桌面 / 壁纸</div>
-      <div class="fx-slider"><label>桌面歌词大小</label><input id="fx-desktoplyricssize" type="range" min="0.72" max="1.55" step="0.01"><output></output></div>
-      <div class="fx-slider"><label>桌面歌词透明</label><input id="fx-desktoplyricsopacity" type="range" min="0.28" max="1" step="0.01"><output></output></div>
-      <div class="fx-slider"><label>桌面歌词高度</label><input id="fx-desktoplyricsy" type="range" min="0.08" max="0.92" step="0.01"><output></output></div>
-      <div class="fx-section-label">桌面帧数</div>
-      <div class="fx-seg" id="desktop-lyrics-fps-seg">
-        <button data-desktop-lyrics-fps="24">24</button>
-        <button data-desktop-lyrics-fps="30">30</button>
-        <button data-desktop-lyrics-fps="60">60</button>
-        <button data-desktop-lyrics-fps="120">120</button>
-        <button data-desktop-lyrics-fps="0">无上限</button>
+      <div class="fx-dl-hint" id="fx-desktop-lyrics-hint">打开「桌面歌词」后，这里会出现大小 / 透明度 / 行数 / 动效 / 倾斜等设置</div>
+      <div class="fx-dl-settings" id="fx-desktop-lyrics-settings">
+        <div class="fx-section-label">桌面歌词</div>
+        <div class="fx-slider"><label>桌面歌词大小</label><input id="fx-desktoplyricssize" type="range" min="0.45" max="1.55" step="0.01"><output></output></div>
+        <div class="fx-slider"><label>桌面歌词透明</label><input id="fx-desktoplyricsopacity" type="range" min="0.28" max="1" step="0.01"><output></output></div>
+        <div class="fx-section-label">桌面歌词行数</div>
+        <div class="fx-seg" id="desktop-lyrics-lines-seg">
+          <button data-desktop-lyrics-lines="1">单行</button>
+          <button data-desktop-lyrics-lines="3">3 行</button>
+          <button data-desktop-lyrics-lines="5">5 行</button>
+          <button data-desktop-lyrics-lines="7">7 行</button>
+          <button data-desktop-lyrics-lines="10">10 行</button>
+        </div>
+        <div class="fx-section-label">桌面歌词换行动效</div>
+        <div class="fx-seg" id="desktop-lyrics-motion-seg">
+          <button data-desktop-lyrics-motion="slide">上浮</button>
+          <button data-desktop-lyrics-motion="flip">3D 翻转</button>
+          <button data-desktop-lyrics-motion="float">呼吸</button>
+          <button data-desktop-lyrics-motion="none">静止</button>
+        </div>
+        <div class="fx-slider"><label>桌面歌词倾斜</label><input id="fx-desktoplyricstilt" type="range" min="-35" max="35" step="1"><output></output></div>
+        <div class="fx-section-label">桌面歌词帧率</div>
+        <div class="fx-seg" id="desktop-lyrics-fps-seg">
+          <button data-desktop-lyrics-fps="24">24</button>
+          <button data-desktop-lyrics-fps="30">30</button>
+          <button data-desktop-lyrics-fps="60">60</button>
+          <button data-desktop-lyrics-fps="120">120</button>
+          <button data-desktop-lyrics-fps="0">无上限</button>
+        </div>
       </div>
-      <div class="fx-section-label" hidden>壁纸帧数</div>
+      <div class="fx-section-label" id="wallpaper-settings-label" hidden>壁纸模式</div>
+      <div class="fx-section-label" id="wallpaper-fps-label" hidden>壁纸帧数</div>
       <div class="fx-seg" id="wallpaper-fps-seg" hidden>
         <button data-wallpaper-fps="24">24</button>
         <button data-wallpaper-fps="30">30</button>
         <button data-wallpaper-fps="60">60</button>
       </div>
-      <div class="fx-slider dev-locked"><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35" max="1" step="0.01" disabled><output></output></div>
+      <div class="fx-slider"><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35" max="1" step="0.01"><output></output></div>
     </div>
   </div>
 
@@ -1053,8 +1344,48 @@ try {
 <!-- AI 深度加载角标 -->
 <div id="ai-depth-chip"><div class="mini-spin"></div><span id="ai-depth-text">AI 深度估计…</span></div>
 
+<!-- 陀螺花加载动画：defs（滤镜 / 遮罩 / 渐变）只放一份，三朵花共用（来源 Uiverse.io by andrew-manzyk，按角标尺寸缩放） -->
+<svg id="pegtop-defs" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="pegtop-shine"><feGaussianBlur stdDeviation="3"></feGaussianBlur></filter>
+    <mask id="pegtop-mask">
+      <path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="white"></path>
+    </mask>
+    <radialGradient id="pegtop-gradient-1" cx="50" cy="66" fx="50" fy="66" r="30" gradientTransform="translate(0 35) scale(1 0.5)" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="black" stop-opacity="0.3"></stop>
+      <stop offset="50%" stop-color="black" stop-opacity="0.1"></stop>
+      <stop offset="100%" stop-color="black" stop-opacity="0"></stop>
+    </radialGradient>
+    <radialGradient id="pegtop-gradient-2" cx="55" cy="20" fx="55" fy="20" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"></stop>
+      <stop offset="50%" stop-color="white" stop-opacity="0.1"></stop>
+      <stop offset="100%" stop-color="white" stop-opacity="0"></stop>
+    </radialGradient>
+    <radialGradient id="pegtop-gradient-3" cx="85" cy="50" fx="85" fy="50" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"></stop>
+      <stop offset="50%" stop-color="white" stop-opacity="0.1"></stop>
+      <stop offset="100%" stop-color="white" stop-opacity="0"></stop>
+    </radialGradient>
+    <radialGradient id="pegtop-gradient-4" cx="50" cy="58" fx="50" fy="58" r="60" gradientTransform="translate(0 47) scale(1 0.2)" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"></stop>
+      <stop offset="50%" stop-color="white" stop-opacity="0.1"></stop>
+      <stop offset="100%" stop-color="white" stop-opacity="0"></stop>
+    </radialGradient>
+    <linearGradient id="pegtop-gradient-5" x1="50" y1="90" x2="50" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="black" stop-opacity="0.2"></stop>
+      <stop offset="40%" stop-color="black" stop-opacity="0"></stop>
+    </linearGradient>
+  </defs>
+</svg>
 <!-- 节拍分析角标 -->
-<div id="beat-chip"><div class="mini-spin"></div><span id="beat-text">分析节奏…</span></div>
+<div id="beat-chip">
+  <div class="pegtop-loader" aria-hidden="true">
+    <svg class="pegtop pegtop-one" viewBox="0 0 100 100"><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="currentColor"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-1)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="none" stroke="white" opacity="0.3" stroke-width="3" filter="url(#pegtop-shine)" mask="url(#pegtop-mask)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-2)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-3)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-4)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-5)"></path></svg>
+    <svg class="pegtop pegtop-two" viewBox="0 0 100 100"><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="currentColor"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-1)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="none" stroke="white" opacity="0.3" stroke-width="3" filter="url(#pegtop-shine)" mask="url(#pegtop-mask)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-2)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-3)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-4)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-5)"></path></svg>
+    <svg class="pegtop pegtop-three" viewBox="0 0 100 100"><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="currentColor"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-1)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="none" stroke="white" opacity="0.3" stroke-width="3" filter="url(#pegtop-shine)" mask="url(#pegtop-mask)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-2)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-3)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-4)"></path><path d="M63,37c-6.7-4-4-27-13-27s-6.3,23-13,27-27,4-27,13,20.3,9,27,13,4,27,13,27,6.3-23,13-27,27-4,27-13-20.3-9-27-13Z" fill="url(#pegtop-gradient-5)"></path></svg>
+  </div>
+  <span id="beat-text">分析节奏…</span>
+</div>
 
 <!-- 舞台歌词 (大字 3D, 由 JS 动态填充) -->
 <div id="stage-lyrics"></div>
@@ -1656,6 +1987,35 @@ try {
         <small class="wallpaper-engine-details-note">每次载入自动应用静音值（音量 0 / 静音开启 / 音频关闭）；Scene 包只处理缓存副本，原文件不变。其他视觉设置仍由 Wallpaper Engine 管理。</small>
       </section>
     </div>
+  </div>
+</div>
+
+<!-- 壁纸模式控制器（完整桌面模式）：附着到桌面后没有窗口边框、任务栏里也点不到，
+     右上角留一个常驻把手（平时半透明，靠近才展开），退出 / 图标显隐 / 软件锁都在这里 -->
+<div id="desktop-mode-control-dock" class="desktop-mode-control-dock" role="group" aria-label="壁纸模式控制器">
+  <button id="desktop-mode-control-handle" class="desktop-mode-control-handle" type="button"
+          aria-controls="desktop-mode-control-panel" aria-expanded="false"
+          title="壁纸模式控制器（Esc 退出壁纸模式）">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+      <rect x="3.2" y="4.6" width="17.6" height="12.6" rx="1.6"/>
+      <path d="M3.2 8.2h17.6"/>
+      <circle cx="5.7" cy="6.5" r=".75" fill="currentColor" stroke="none"/>
+    </svg>
+  </button>
+  <div id="desktop-mode-control-panel" class="desktop-mode-control-panel" aria-hidden="true" inert>
+    <div class="desktop-mode-control-heading">壁纸模式</div>
+    <button id="desktop-software-lock-toggle" class="desktop-mode-control-btn" type="button" role="switch" aria-checked="false">
+      <span class="desktop-mode-control-label">锁定软件操作</span>
+      <small id="desktop-software-lock-state" class="desktop-mode-control-state">软件可正常操作</small>
+    </button>
+    <button id="desktop-icons-visible-toggle" class="desktop-mode-control-btn" type="button" role="switch" aria-checked="true">
+      <span class="desktop-mode-control-label">桌面图标</span>
+      <small id="desktop-icons-visible-state" class="desktop-mode-control-state">图标已显示</small>
+    </button>
+    <button id="desktop-exit-wallpaper-toggle" class="desktop-mode-control-btn desktop-mode-control-exit" type="button">
+      <span class="desktop-mode-control-label">退出壁纸模式</span>
+      <small class="desktop-mode-control-state">Esc</small>
+    </button>
   </div>
 </div>
 

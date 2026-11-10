@@ -1,3 +1,10 @@
+/* 本文件与 07-lyrics-palette-three.js 共用同一全局作用域（index-loader 合并求值），
+ * 且在它之后加载，会覆盖 07 里 21 个同名顶层函数（uiAccentHex /
+ * setStageLyricPalette / lyricTextPaletteFromHsl / ...）。这是有意的，见下方
+ * setStageLyricPalette 的「生效版」注释。
+ * 已知代价：07 版那些函数的 opts 参数（补间 durationMs、avgChroma /
+ * maxChroma / colorfulRatio 配色证据）在运行期全部被丢弃。若要恢复 07 行为，
+ * 必须先统一这两份实现并做歌词配色 / 渐变的视觉回归，不要只删这里的重复定义。 */
 function uiAccentHex(fallback) {
   return normalizeHexColor((fx && fx.uiAccentColor) || fallback || '#00f5d4', fallback || '#00f5d4');
 }

@@ -82,6 +82,11 @@
 .pl-detail-count{margin-left:auto;color:rgba(255,255,255,.38);font-size:10.5px;white-space:nowrap}
 .pl-detail-progress{height:28px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.34);font-size:10.5px}
 .pl-detail-load-more{width:100%;height:42px;margin:10px 0 14px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:760}
+/* 详情加载失败：必须和「歌单真的没歌」区分开，并给出可点的重试入口 */
+.pl-detail-empty{display:flex;flex-direction:column;align-items:center;gap:7px;padding:18px 10px 16px;text-align:center}
+.pl-detail-empty-title{font-size:12px;font-weight:760;color:rgba(255,255,255,.78)}
+.pl-detail-empty-hint{font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.36);max-width:240px}
+.pl-detail-retry-btn{height:28px;min-width:92px;padding:0 14px;margin-top:2px;flex:0 0 auto}
 .pl-detail-row img{width:34px;height:34px;border-radius:7px;object-fit:cover;background:rgba(255,255,255,.06);flex:0 0 auto}
 .pl-detail-row-title{font-size:11.5px;font-weight:650;color:rgba(255,255,255,.86);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pl-detail-row-artist{display:inline-flex;max-width:100%;border:0;background:transparent;color:rgba(var(--fc-accent-rgb),.68);font:500 10.5px var(--font-sans);padding:0;margin-top:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

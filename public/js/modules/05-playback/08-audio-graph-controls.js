@@ -45,6 +45,21 @@ function initAudio() {
   beatAnalyser.fftSize = BEAT_FFT_SIZE;
   beatAnalyser.smoothingTimeConstant = 0.10;
   var audioTap = moodExit || source;
+  /* 独立调音链（10 段 EQ / 前级增益 / 响度对齐 / 声道平衡 / 防爆音）：
+     插在 moodExit 与 gainNode 之间，只接管自己的节点，绝不写 gainNode。
+     gainNode 上挂着音量、播放/暂停淡变、曲末淡出与 Cuefield A deck 淡出。 */
+  if (typeof Mineradio !== 'undefined' && Mineradio.audioTuning && Mineradio.audioTuning.install) {
+    try {
+      audioTap = Mineradio.audioTuning.install(audioCtx, audioTap) || audioTap;
+      Mineradio.audioTuning.bindMedia(audio);
+    } catch (e) {
+      console.warn('[AudioTuning] install skipped:', e);
+    }
+  }
+  // 音频图（重新）建好后重挂变速：load() 会把 playbackRate 恢复成 defaultPlaybackRate
+  if (typeof Mineradio !== 'undefined' && Mineradio.playbackAdvanced && Mineradio.playbackAdvanced.bindMedia) {
+    try { Mineradio.playbackAdvanced.bindMedia(audio); } catch (e) {}
+  }
   // 播放链路与分析旁路分离：Analyser 不串在出声路径上，Worklet 生效后可降载/断开主频谱
   audioTap.connect(gainNode);
   gainNode.connect(audioCtx.destination);
@@ -217,6 +232,7 @@ function holdAudioOutputGain(now) {
 function setAudioOutputGainImmediate(value) {
   value = normalizeAudioFadeTarget(value);
   clearAudioFadeTimers();
+  cancelAudioOutputCurve();
   if (gainNode && audioCtx) {
     var now = audioCtx.currentTime || 0;
     gainNode.gain.cancelScheduledValues(now);
@@ -225,28 +241,119 @@ function setAudioOutputGainImmediate(value) {
     audio.volume = value;
   }
 }
-function rampAudioOutputGain(value, durationMs) {
+/* ──────────────────────────────────────────────────────────────────────────
+ * 淡变基础层
+ * 借鉴的是设计点（显式包络曲线 / 曲末提前触发），实现完全是我们自己的 Web Audio。
+ *
+ * 历史缺陷 1：Cuefield 双 deck 交叉淡入里有 5 处 writeAudioOutputGain(...) 调用，
+ *   但这个函数从未定义 → A deck（当前曲）在过渡时完全不淡出，只有 B deck 淡入，
+ *   两首歌满音量叠加、浑浊爆音，结束时旧曲也不会归零。这里补上统一写入口。
+ * 历史缺陷 2：旧 linearRampToValueAtTime 靠 cancelAndHoldAtTime 隐式推断起点，
+ *   与 applyVolumeToAudio() 留下的永久 setTargetAtTime 叠加时起点算错、曲线被拉回，
+ *   表现就是「暂停/播放没有淡入淡出」。改成显式 setValueCurveAtTime 采样级排程。
+ * ────────────────────────────────────────────────────────────────────────── */
+var audioFadeCurveActive = false;
+var audioFadeCurveToken = 0;
+var audioFadeCurveTimer = 0;
+
+function cancelAudioOutputCurve() {
+  audioFadeCurveToken++;
+  audioFadeCurveActive = false;
+  if (audioFadeCurveTimer) { clearTimeout(audioFadeCurveTimer); audioFadeCurveTimer = 0; }
+  if (gainNode && audioCtx && gainNode.gain) {
+    try { gainNode.gain.cancelScheduledValues(audioCtx.currentTime || 0); } catch (_) {}
+  }
+}
+
+/* 立即把输出增益钉到 value。Cuefield 的 A deck 会逐帧调用，所以只在
+   「有曲线在飞」时才清一次排程，其余情况直接写 .value，避免每帧堆事件。 */
+function writeAudioOutputGain(value) {
+  value = normalizeAudioFadeTarget(value);
+  if (audioFadeCurveActive) cancelAudioOutputCurve();
+  if (gainNode && audioCtx && gainNode.gain) {
+    try { gainNode.gain.value = value; } catch (_) {}
+  } else if (audio) {
+    audio.volume = value;
+  }
+  return value;
+}
+
+/* 等功率感知曲线 sin(pi/2 * t)：淡入快起慢收、淡出快降慢收，两端平滑，
+   交叉淡入时不会出现线性幅度 ramp 的中间音量凹陷。curve[0]=from, [last]=to。 */
+function buildAudioFadeCurve(from, to, kind) {
+  var frames = 96;
+  var curve = new Float32Array(frames);
+  var delta = to - from;
+  for (var i = 0; i < frames; i++) {
+    var t = i / (frames - 1);
+    var shape = kind === 'linear' ? t : Math.sin(t * Math.PI * 0.5);
+    curve[i] = from + delta * shape;
+  }
+  curve[frames - 1] = to;
+  return curve;
+}
+
+function audioFadeCurveAvailable() {
+  return !!(gainNode && audioCtx && gainNode.gain
+    && typeof gainNode.gain.setValueCurveAtTime === 'function'
+    && typeof Float32Array !== 'undefined');
+}
+
+function rampAudioOutputGain(value, durationMs, opts) {
   value = normalizeAudioFadeTarget(value);
   durationMs = Math.max(0, Number(durationMs) || 0);
   clearAudioFadeTimers();
   var serial = audioFadeSerial;
+  var from = currentAudioOutputGain();   // 清排程之前先取显式起点快照
+  cancelAudioOutputCurve();
+  /* 歌曲过渡编排器（18）的曲线形状：只在「交接淡变」的两次调用上生效
+   * （opts.transition = true），暂停 / 播放淡变仍走原来的等功率曲线。
+   * 用 typeof 包住，编排器缺席或老沙箱切片没注入时安静回退。 */
+  var curveKind = opts && opts.curve;
+  if (!curveKind && opts && opts.transition && typeof transitionDirector === 'function') {
+    var curveDirector = transitionDirector();
+    if (curveDirector && typeof curveDirector.getFadeCurve === 'function') {
+      try { curveKind = curveDirector.getFadeCurve(); } catch (_) {}
+    }
+  }
   if (gainNode && audioCtx) {
     var now = audioCtx.currentTime || 0;
-    holdAudioOutputGain(now);
-    if (durationMs <= 0) {
-      gainNode.gain.setValueAtTime(value, now);
-      return;
+    if (durationMs <= 0) { writeAudioOutputGain(value); return; }
+    var seconds = durationMs / 1000;
+    if (audioFadeCurveAvailable()) {
+      try {
+        gainNode.gain.setValueCurveAtTime(
+          buildAudioFadeCurve(from, value, curveKind), now, seconds);
+        audioFadeCurveActive = true;
+        var token = audioFadeCurveToken;
+        audioFadeCurveTimer = setTimeout(function () {
+          audioFadeCurveTimer = 0;
+          if (token !== audioFadeCurveToken) return;
+          audioFadeCurveActive = false;
+          writeAudioOutputGain(value);   // 曲线结束后钉在终值
+        }, durationMs + 40);
+        return;
+      } catch (_) {
+        cancelAudioOutputCurve();
+      }
     }
-    gainNode.gain.linearRampToValueAtTime(value, now + durationMs / 1000);
+    // 浏览器不支持 setValueCurveAtTime 时回退到显式锚点 + 线性 ramp
+    try {
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(from, now);
+      gainNode.gain.linearRampToValueAtTime(value, now + seconds);
+      return;
+    } catch (_) {}
+    writeAudioOutputGain(value);
     return;
   }
   if (!audio) return;
-  var from = currentAudioOutputGain();
+  // 无 WebAudio 图时的 rAF 兜底（保留原有语义）
   var started = performance.now();
   function tickAudioFade(nowMs) {
     if (serial !== audioFadeSerial || !audio) return;
     var t = durationMs ? clampRange((nowMs - started) / durationMs, 0, 1) : 1;
-    var eased = 1 - Math.pow(1 - t, 3);
+    var eased = Math.sin(t * Math.PI * 0.5);
     audio.volume = from + (value - from) * eased;
     if (t < 1) audioElementFadeFrame = requestAnimationFrame(tickAudioFade);
     else audioElementFadeFrame = 0;
@@ -259,18 +366,21 @@ function preparePlaybackFadeIn() {
 }
 function startPlaybackFadeIn() {
   audioFadeSerial++;
+  transitionNotify('onTrackStart');
   if (targetVolume <= 0.001) {
     setAudioOutputGainImmediate(0);
     return;
   }
-  rampAudioOutputGain(targetVolume, AUDIO_FADE_IN_MS);
+  rampAudioOutputGain(targetVolume, transitionFadeInMs(), { transition: true });
 }
 function restorePlaybackGain() {
   audioFadeSerial++;
+  transitionNotify('onTrackStart');
   setAudioOutputGainImmediate(targetVolume);
 }
 function fadeOutAndPauseAudio() {
   if (!audio || audio.paused) return Promise.resolve(false);
+  cancelTrackEndFade();
   var serial = ++audioFadeSerial;
   rampAudioOutputGain(0, AUDIO_FADE_OUT_MS);
   return new Promise(function(resolve) {
@@ -285,6 +395,122 @@ function fadeOutAndPauseAudio() {
       resolve(true);
     }, AUDIO_FADE_OUT_MS + 80);
   });
+}
+
+/* ── 曲末提前淡出（对标酷狗 DSPManager::SetFadeOutStartTime）──────────────
+   timeupdate 只负责「排程」，真正执行由 setTimeout 落在 duration - fadeOut，
+   避免 4Hz 轮询带来的 ±250ms 误差。已有 B deck 交叉淡入接管时不重复做。
+   注意：这是「柔和的切歌」而非采样级 gapless，浏览器 <audio> 黑盒解码
+   无法裁 encoder delay / padding，真 gapless 需要 decodeAudioData 架构改造。 */
+var TRACK_END_FADE_LOOKAHEAD_SEC = 1.8;
+
+/* ── 歌曲过渡编排器（18-track-transition.js）的可选钩子 ──────────────────
+   编排器未加载 / 未启用时一律返回用户原设置，下面各调用点的行为与改造前
+   完全一致。这里只决定「淡变时长」和「要不要做曲末淡出」，
+   真正写 gainNode.gain 的仍然只有 rampAudioOutputGain 一处——
+   绝不在这里开第二条写增益的路径。 */
+function transitionDirector() {
+  return (typeof Mineradio !== 'undefined' && Mineradio.trackTransition)
+    ? Mineradio.trackTransition : null;
+}
+function transitionFadeInMs() {
+  var d = transitionDirector();
+  if (d && typeof d.getFadeInMs === 'function') {
+    var raw = d.getFadeInMs();
+    var v = Number(raw);
+    if (raw != null && isFinite(v) && v >= 0) return v;
+  }
+  return AUDIO_FADE_IN_MS;
+}
+function transitionFadeOutMs() {
+  var d = transitionDirector();
+  if (d && typeof d.getFadeOutMs === 'function') {
+    var raw = d.getFadeOutMs();
+    var v = Number(raw);
+    if (raw != null && isFinite(v) && v >= 0) return v;
+  }
+  return AUDIO_FADE_OUT_MS;
+}
+function transitionSkipTrackEndFade() {
+  var d = transitionDirector();
+  return !!(d && typeof d.shouldSkipTrackEndFade === 'function' && d.shouldSkipTrackEndFade());
+}
+function transitionNotify(name) {
+  var d = transitionDirector();
+  if (d && typeof d[name] === 'function') { try { d[name](); } catch (_) {} }
+}
+
+/* 变速后 audio.currentTime / duration 仍是「歌曲秒」，而 setTimeout 用的是墙钟毫秒。
+   曲末淡出必须把剩余媒体秒换算成墙钟秒，否则 1.5x 时淡出会迟到大半秒。 */
+function playbackWallRate() {
+  if (typeof Mineradio !== 'undefined' && Mineradio.playbackAdvanced
+      && typeof Mineradio.playbackAdvanced.getRate === 'function') {
+    var r = Number(Mineradio.playbackAdvanced.getRate());
+    if (isFinite(r) && r > 0) return r;
+  }
+  return 1;
+}
+function trackEndFadeLookaheadSec() {
+  var base = TRACK_END_FADE_LOOKAHEAD_SEC;
+  if (typeof Mineradio !== 'undefined' && Mineradio.playbackAdvanced
+      && typeof Mineradio.playbackAdvanced.getLookaheadSec === 'function') {
+    var v = Number(Mineradio.playbackAdvanced.getLookaheadSec());
+    if (isFinite(v) && v > 0) base = v;
+  }
+  /* 混音 / 立体声过渡的曲末淡出长达 2.2~2.4s，若窗口还停在 1.8s，
+     scheduleTrackEndFade 的「wallRemain <= fadeSec + lookahead」判断
+     会把整段淡出挡掉，所以编排器可以按需把窗口放大。 */
+  var d = transitionDirector();
+  if (d && typeof d.getExtraLookaheadSec === 'function') {
+    var extra = Number(d.getExtraLookaheadSec());
+    if (isFinite(extra) && extra > base) base = extra;
+  }
+  return base;
+}
+
+var trackEndFadeToken = 0;
+var trackEndFadeTimer = 0;
+var trackEndFadeScheduled = false;
+
+function cancelTrackEndFade() {
+  trackEndFadeToken++;
+  trackEndFadeScheduled = false;
+  if (trackEndFadeTimer) { clearTimeout(trackEndFadeTimer); trackEndFadeTimer = 0; }
+}
+
+function trackEndFadeTakenOver() {
+  if (typeof cuefieldAutoMixExecuting !== 'undefined' && cuefieldAutoMixExecuting) return true;
+  if (typeof playbackTransitionHasAudibleNextDeck === 'function'
+      && playbackTransitionHasAudibleNextDeck()) return true;
+  return false;
+}
+
+function scheduleTrackEndFade(media) {
+  if (!media || trackEndFadeScheduled || media.paused || media.ended) return false;
+  // 无缝过渡：曲末保持音量到 ended，不做淡出（交接零重叠、零淡变）
+  if (transitionSkipTrackEndFade()) return false;
+  var duration = Number(media.duration);
+  var currentTime = Number(media.currentTime);
+  if (!isFinite(duration) || duration <= 0 || !isFinite(currentTime)) return false;
+  var fadeOutMs = transitionFadeOutMs();
+  var fadeSec = Math.max(0, fadeOutMs) / 1000;
+  if (fadeSec <= 0) return false;
+  var remain = duration - currentTime;
+  // fadeSec 是 AudioParam ramp 的墙钟时长，保持不变；只有媒体秒 remain 需要换算
+  var wallRemain = remain / playbackWallRate();
+  if (wallRemain <= fadeSec + 0.02 || wallRemain > fadeSec + trackEndFadeLookaheadSec()) return false;
+  var token = ++trackEndFadeToken;
+  trackEndFadeScheduled = true;
+  trackEndFadeTimer = setTimeout(function () {
+    trackEndFadeTimer = 0;
+    trackEndFadeScheduled = false;
+    if (token !== trackEndFadeToken) return;
+    if (!audio || audio !== media || audio.paused || audio.ended) return;
+    if (trackEndFadeTakenOver()) return;
+    transitionNotify('onEndFadeStart');
+    rampAudioOutputGain(0, fadeOutMs, { transition: true });
+  }, Math.max(0, (wallRemain - fadeSec) * 1000));
+  return true;
 }
 
 /** 音量 UI/听感 spring 状态：拖动 1:1；滚轮/键盘/静音可中断追击 */
@@ -324,8 +550,12 @@ function applyVolumeToAudio() {
   }
   if (gainNode && audioCtx) {
     var now = audioCtx.currentTime || 0;
+    /* 这里过去用 setTargetAtTime(targetVolume, now, 0.025)：它是一条**永不结束**
+       的自动化事件，会持续把 gain 拉回 targetVolume，把之后排的淡入/淡出曲线
+       整体盖掉 —— 表现就是「暂停/播放听不到淡入淡出」。音量调节的平滑本来就
+       由 springVolumeUiTo -> applyVolumeLevel 逐帧提供，此处改用一次性写入。 */
     gainNode.gain.cancelScheduledValues(now);
-    gainNode.gain.setTargetAtTime(targetVolume, now, 0.025);
+    gainNode.gain.setValueAtTime(targetVolume, now);
   }
 }
 

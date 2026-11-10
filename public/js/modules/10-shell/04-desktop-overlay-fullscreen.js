@@ -16,6 +16,7 @@ var desktopWallpaperRuntimeState = {
 };
 var desktopWallpaperStatusGeneration = -1;
 var desktopWallpaperStatusUnsubscribe = null;
+var desktopWallpaperEscapeBound = false;
 var desktopWallpaperRendererOperation = 0;
 var desktopWallpaperUiActivationState = false;
 var desktopWallpaperHudPrimeTimer = 0;
@@ -29,6 +30,9 @@ var desktopModeControlDockState = {
   peek: false,
   peekTimer: 0
 };
+// 控制器 DOM 还没解析出来时挂的 DOMContentLoaded 重试（index-loader 用 fetch 注入模块，
+// 执行时机可能早于 body 解析完成）
+var desktopModeControlsInitPending = false;
 var desktopPointerRouteReporter = {
   timer: 0,
   x: 0,
@@ -672,7 +676,18 @@ function initDesktopModeControls(api) {
   var panel = document.getElementById('desktop-mode-control-panel');
   var softwareLockButton = document.getElementById('desktop-software-lock-toggle');
   var iconsButton = document.getElementById('desktop-icons-visible-toggle');
-  if (!dock || !handle || !panel) return;
+  if (!dock || !handle || !panel) {
+    /* 模块可能先于 body 解析执行（index-loader 是 fetch 注入），DOM 还没到就等一次，
+       否则控制器永远不初始化 —— 用户进了壁纸模式看不到任何按钮。 */
+    if (document.readyState === 'loading' && !desktopModeControlsInitPending) {
+      desktopModeControlsInitPending = true;
+      document.addEventListener('DOMContentLoaded', function () {
+        desktopModeControlsInitPending = false;
+        initDesktopModeControls(api);
+      }, { once: true });
+    }
+    return;
+  }
   setDesktopModeControlsOpen(false);
   handle.addEventListener('click', function (event) {
     consumeDesktopModeControlEvent(event);
@@ -712,6 +727,15 @@ function initDesktopModeControls(api) {
   });
   if (softwareLockButton) softwareLockButton.addEventListener('click', toggleDesktopSoftwareInteractionLocked);
   if (iconsButton) iconsButton.addEventListener('click', toggleDesktopIconsVisibility);
+  /* 控制器里的退出按钮：桌面模式下任务栏点不到窗口，这是唯一「看得见」的退出入口 */
+  var exitButton = document.getElementById('desktop-exit-wallpaper-toggle');
+  if (exitButton) exitButton.addEventListener('click', function (event) {
+    consumeDesktopModeControlEvent(event);
+    setDesktopModeControlsOpen(false);
+    if (fx) fx.wallpaperMode = false;
+    if (typeof saveLyricLayout === 'function') saveLyricLayout();
+    applyWallpaperModeState(true);
+  });
   document.addEventListener('pointerdown', function (event) {
     if (event && event.isTrusted) requestDesktopKeyboardFocus('pointerdown');
     if (!desktopModeControlDockState.open || dock.contains(event.target)) return;
@@ -915,10 +939,35 @@ function currentDesktopSongMeta() {
 function normalizeDesktopLyricText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
+/* 桌面歌词多行窗口：以当前句为中心取 count 行，两端不足时用空行补齐，
+ * 保证当前句永远落在第 floor(count/2) 行 —— 换行时整块不上下跳。
+ * entries: [{ text, progress }]；返回 null 表示仍走原来的单行渲染。 */
+function desktopLyricWindow(entries, activeIdx, count) {
+  count = normalizeDesktopLyricsLineCount(count);
+  if (count <= 1) return null;
+  var list = Array.isArray(entries) ? entries : [];
+  var half = Math.floor(count / 2);
+  var rows = [];
+  for (var k = 0; k < count; k++) {
+    var source = list[activeIdx - half + k];
+    rows.push({
+      text: source && source.text ? String(source.text) : '',
+      progress: source ? clampRange(Number(source.progress) || 0, 0, 1) : 0,
+      active: activeIdx - half + k === activeIdx
+    });
+  }
+  return rows;
+}
 function currentDesktopLyricSnapshot() {
   var rawT = audio && isFinite(audio.currentTime) ? Number(audio.currentTime) : 0;
   var t = typeof getAdjustedLyricPlaybackTime === 'function' ? getAdjustedLyricPlaybackTime(rawT) : rawT;
   var lines = Array.isArray(lyricsLines) ? lyricsLines : [];
+  var lineCount = normalizeDesktopLyricsLineCount(fx.desktopLyricsLines);
+  function withWindow(snapshot, entries, activeIdx) {
+    snapshot.lineCount = lineCount;
+    snapshot.lines = desktopLyricWindow(entries, activeIdx, lineCount);
+    return snapshot;
+  }
   if (playing && audio && lines.length) {
     var idx = -1;
     for (var i = 0; i < lines.length; i++) {
@@ -930,31 +979,47 @@ function currentDesktopLyricSnapshot() {
       var nextLine = lines[idx + 1];
       var nextT = nextLine && nextLine.t > curLine.t ? nextLine.t : Math.min((audio && audio.duration) || t + 4, curLine.t + (curLine.duration || 4.8));
       var span = Math.max(0.75, nextT - curLine.t);
-      return {
+      var entries = [];
+      for (var j = 0; j < lines.length; j++) {
+        entries.push({
+          text: normalizeDesktopLyricText((lines[j] && lines[j].text) || ''),
+          progress: j < idx ? 1 : (j > idx ? 0 : getLyricLineProgress(curLine, nextLine, t))
+        });
+      }
+      return withWindow({
         text: normalizeDesktopLyricText(curLine.text || currentLyricFallbackText()),
         progress: getLyricLineProgress(curLine, nextLine, t),
         progressSpan: span
-      };
+      }, entries, idx);
     }
     var introText = normalizeDesktopLyricText(currentLyricFallbackText());
     if (introText) {
       var firstLine = lines[0];
       var introEnd = firstLine && firstLine.t > 0 ? firstLine.t : Math.min((audio && audio.duration) || 4.8, 4.8);
-      return {
+      var introProgress = getLyricLineProgress({ t: 0, text: introText, duration: Math.max(0.8, introEnd), charCount: Math.max(1, introText.length), fallback: true }, null, t);
+      return withWindow({
         text: introText,
-        progress: getLyricLineProgress({ t: 0, text: introText, duration: Math.max(0.8, introEnd), charCount: Math.max(1, introText.length), fallback: true }, null, t),
+        progress: introProgress,
         progressSpan: Math.max(0.8, introEnd)
-      };
+      }, [{ text: introText, progress: introProgress }], 0);
     }
   }
   if (stageLyrics && stageLyrics.currentText) {
-    return {
-      text: normalizeDesktopLyricText(stageLyrics.currentText),
-      progress: stageLyrics.current && stageLyrics.current.userData ? clampRange(Number(stageLyrics.current.userData.lastLyricProgress) || 0, 0, 1) : 0,
+    var stageText = normalizeDesktopLyricText(stageLyrics.currentText);
+    var stageProgress = stageLyrics.current && stageLyrics.current.userData ? clampRange(Number(stageLyrics.current.userData.lastLyricProgress) || 0, 0, 1) : 0;
+    return withWindow({
+      text: stageText,
+      progress: stageProgress,
       progressSpan: 4.8
-    };
+    }, [{ text: stageText, progress: stageProgress }], 0);
   }
-  return { text: normalizeDesktopLyricText(currentDesktopSongMeta().title || 'Mineradio'), progress: 0, progressSpan: 4.8 };
+  // 没有歌词时退化成歌名（有歌在播时）；连歌都没有就留空，
+  // 否则桌面上会一直挂一个 "Mineradio" 的品牌名，看起来像渲染坏了。
+  var fallbackMeta = currentDesktopSongMeta();
+  var hasSong = !!(playQueue && currentIdx >= 0 && playQueue[currentIdx])
+    || !!(typeof currentLyricSong === 'function' && currentLyricSong());
+  var fallbackText = normalizeDesktopLyricText(hasSong ? (fallbackMeta.title || '') : '');
+  return withWindow({ text: fallbackText, progress: 0, progressSpan: 4.8 }, [{ text: fallbackText, progress: 0 }], 0);
 }
 function desktopOverlayColorValue(value, fallback) {
   var raw = String(value || '').trim();
@@ -1054,9 +1119,12 @@ function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
     title: meta.title,
     artist: meta.artist,
     playing: !!playing,
-    size: clampRange(Number(fx.desktopLyricsSize) || fxDefaults.desktopLyricsSize, 0.72, 1.55),
+    size: clampRange(Number(fx.desktopLyricsSize) || fxDefaults.desktopLyricsSize, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX),
     opacity: clampRange(fx.desktopLyricsOpacity == null ? fxDefaults.desktopLyricsOpacity : Number(fx.desktopLyricsOpacity), 0.28, 1),
-    y: clampRange(fx.desktopLyricsY == null ? fxDefaults.desktopLyricsY : Number(fx.desktopLyricsY), 0.08, 0.92),
+    lineCount: normalizeDesktopLyricsLineCount(fx.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : fx.desktopLyricsLines),
+    tilt: clampRange(fx.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(fx.desktopLyricsTilt), DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
+    lyricMotion: normalizeDesktopLyricsMotion(fx.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
+    lines: lyric.lines || null,
     clickThrough: isDevelopmentLockedFx('desktopLyricsClickThrough') ? true : fx.desktopLyricsClickThrough !== false,
     lyricGlowParticles: !!fx.lyricGlowParticles,
     cinema: fx.desktopLyricsCinema !== false,
@@ -1079,7 +1147,8 @@ function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
 }
 function normalizeWallpaperFps(fps) {
   fps = Math.round(Number(fps) || 0);
-  if (fps <= 0) return 30;
+  // 默认 60：与 03c 的 normalizeWallpaperFrameRate / fxDefaults.wallpaperFps 一致
+  if (fps <= 0) return 60;
   return Math.max(1, Math.min(60, fps));
 }
 function wallpaperPayload() {
@@ -1365,6 +1434,21 @@ function initDesktopWallpaperRuntimeBridge(api) {
       return api.getWallpaperModeStatus();
     }).then(applyDesktopWallpaperRuntimeStatus).catch(function () { });
   }
+  // 完整桌面模式没有实体窗口边框可点，Esc 是约定的退出方式（软件锁打开时除外）
+  if (!desktopWallpaperEscapeBound) {
+    desktopWallpaperEscapeBound = true;
+    window.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      var status = desktopWallpaperRuntimeState || {};
+      if (status.enabled !== true && status.active !== true) return;
+      if (status.softwareInteractionLocked === true) return;
+      if (fx.wallpaperMode) {
+        fx.wallpaperMode = false;
+        if (typeof saveLyricLayout === 'function') saveLyricLayout();
+      }
+      applyWallpaperModeState(true);
+    }, true);
+  }
 }
 function pushDesktopLyricsState(force) {
   var api = getDesktopWindowApi();
@@ -1377,7 +1461,10 @@ function pushDesktopLyricsState(force) {
   var colors = payload.colors || {};
   var motion = payload.motion || {};
   var payloadCustomFontId = payload.customFont ? payload.customFont.id : '';
-  var key = payload.enabled + '|' + payload.text + '|' + Math.round(payload.progress * 1000) + '|' + Math.round((payload.progressSpan || 0) * 100) + '|' + payload.playing + '|' + payload.size + '|' + payload.opacity + '|' + payload.y + '|' + payload.clickThrough + '|' + payload.cinema + '|' + payload.highlightFollow + '|' + payload.frameRate + '|' + payload.fontFamily + '|' + payloadCustomFontId + '|' + payload.fontWeight + '|' + payload.letterSpacing + '|' + payload.lineHeight + '|' + payload.lyricScale + '|' + payload.feather + '|' + payload.beatMapKey + '|' + colors.primary + '|' + colors.secondary + '|' + colors.highlight + '|' + colors.glow + '|' + motion.lyricGlow + '|' + motion.lyricGlowBeat + '|' + Math.round((motion.lyricGlowStrength || 0) * 100) + '|' + Math.round((motion.highBloom || 0) * 100) + '|' + Math.round((motion.beatGlow || 0) * 100) + '|' + Math.round((motion.beatPulse || 0) * 100) + '|' + Math.round((motion.bass || 0) * 100);
+  var linesKey = Array.isArray(payload.lines)
+    ? payload.lines.map(function (row) { return (row.active ? '*' : '') + row.text; }).join('\u001f')
+    : '';
+  var key = payload.enabled + '|' + payload.text + '|' + Math.round(payload.progress * 1000) + '|' + Math.round((payload.progressSpan || 0) * 100) + '|' + payload.playing + '|' + payload.size + '|' + payload.opacity + '|' + payload.lineCount + '|' + payload.tilt + '|' + payload.lyricMotion + '|' + linesKey + '|' + payload.clickThrough + '|' + payload.cinema + '|' + payload.highlightFollow + '|' + payload.frameRate + '|' + payload.fontFamily + '|' + payloadCustomFontId + '|' + payload.fontWeight + '|' + payload.letterSpacing + '|' + payload.lineHeight + '|' + payload.lyricScale + '|' + payload.feather + '|' + payload.beatMapKey + '|' + colors.primary + '|' + colors.secondary + '|' + colors.highlight + '|' + colors.glow + '|' + motion.lyricGlow + '|' + motion.lyricGlowBeat + '|' + Math.round((motion.lyricGlowStrength || 0) * 100) + '|' + Math.round((motion.highBloom || 0) * 100) + '|' + Math.round((motion.beatGlow || 0) * 100) + '|' + Math.round((motion.beatPulse || 0) * 100) + '|' + Math.round((motion.bass || 0) * 100);
   if (!force && key === desktopOverlayPushState.lastLyricsKey && now - desktopOverlayPushState.lyricsAt < 900) return;
   desktopOverlayPushState.lyricsAt = now;
   desktopOverlayPushState.lastLyricsKey = key;
@@ -1398,16 +1485,30 @@ function applyDesktopLyricsState(force) {
   }
   pushDesktopLyricsState(!!force);
 }
+/* 快捷菜单里的「桌面歌词」重复按钮已移除（2026-11-08）：功能完整保留在
+ * 视觉控制台 #t-desktopLyrics 与 Alt+L / Ctrl+Alt+L 热键，二者走 toggleFx('desktopLyrics')
+ * 同一条开关逻辑，状态、存档、窗口创建/关闭不受影响。 */
 function pushWallpaperState(force) {
   var api = getDesktopWindowApi();
   if (!api || typeof api.updateWallpaperMode !== 'function') return;
-  if (!force) return;
-  api.updateWallpaperMode(Object.assign(wallpaperPayload(), { reason: 'renderer-status-refresh' })).then(function (result) {
+  /* 与桌面歌词同款的按键节流：主循环每 250ms 会不带 force 地调一次，
+     内容没变就不发，歌名 / 封面 / 播放状态 / 透明度 / 帧率变了才推。 */
+  var payload = wallpaperPayload();
+  var now = performance.now();
+  var colors = payload.colors || {};
+  var key = [payload.enabled, payload.title, payload.artist, payload.cover, payload.playing,
+    payload.preset, payload.opacity, payload.frameRate,
+    colors.primary, colors.secondary, colors.highlight, colors.glow].join('\u001f');
+  if (!force && key === desktopOverlayPushState.lastWallpaperKey && now - desktopOverlayPushState.wallpaperAt < 900) return;
+  desktopOverlayPushState.wallpaperAt = now;
+  desktopOverlayPushState.lastWallpaperKey = key;
+  api.updateWallpaperMode(Object.assign(payload, { reason: 'renderer-status-refresh' })).then(function (result) {
     if (result && result.status) applyDesktopWallpaperRuntimeStatus(result.status);
     if (result && result.ok === false) console.warn('wallpaper update failed:', result.error || 'WALLPAPER_UPDATE_FAILED');
   }).catch(function (e) { console.warn('wallpaper update failed:', e); });
 }
 function applyWallpaperModeState(force) {
+  if (typeof updateWallpaperPanelVisibility === 'function') updateWallpaperPanelVisibility();
   var api = getDesktopWindowApi();
   if (!api) {
     fx.wallpaperMode = false;
@@ -1432,18 +1533,34 @@ function applyWallpaperModeState(force) {
       fx.wallpaperMode = result.ok === true && result.enabled === true;
       updateFxInputs();
     }
+    /* 挂上桌面后给一句明确的「怎么出来」：纯壁纸模式下窗口被压在桌面图标层下面，
+     * 点不到、任务栏没有条目、也拿不到键盘焦点（setFocusable(false)），所以不能写「按 Esc」。 */
+    if (result.ok === true && payload.enabled && typeof showToast === 'function') {
+      var appliedStatus = result.status && typeof result.status === 'object' ? result.status : {};
+      showToast(appliedStatus.interactive === true
+        ? '壁纸模式已开启，右上角控制器可调整'
+        : 'Mineradio 已作为桌面壁纸运行 · 点托盘图标即可切回窗口');
+    }
     if (result.ok !== true) {
       var failedStatus = result.status && typeof result.status === 'object' ? result.status : {};
       fx.wallpaperMode = result.enabled === true || failedStatus.enabled === true || failedStatus.active === true;
       updateFxInputs();
+      /* 用户点了开关但没挂上桌面（非 Windows / 资源管理器重启中 / 权限失败）：
+         开关会自己弹回去，这里必须给一句话，否则用户以为点了没反应。 */
+      if (payload.enabled && !fx.wallpaperMode && typeof showToast === 'function') {
+        var failReason = String(failedStatus.lastError || result.error || '').trim();
+        showToast('壁纸模式启动失败' + (failReason ? '：' + failReason : '，请稍后重试'));
+      }
     }
     return result;
   }).catch(function (error) {
     if (operation !== desktopWallpaperRendererOperation) return { ok: false, enabled: false, rendererStale: true, error: String(error && error.message || error) };
+    var wasEnabling = payload.enabled === true;
     fx.wallpaperMode = false;
     desktopWallpaperRuntimeState = Object.assign({}, desktopWallpaperRuntimeState, { active: false, enabled: false, attaching: false, lastError: String(error && error.message || error) });
     updateFxInputs();
     updateDesktopWallpaperRuntimeControls(desktopWallpaperRuntimeState);
+    if (wasEnabling && typeof showToast === 'function') showToast('壁纸模式启动失败，请稍后重试');
     return { ok: false, enabled: false, error: desktopWallpaperRuntimeState.lastError };
   });
 }
@@ -1454,12 +1571,20 @@ function syncDesktopOverlayState() {
     pushSonicTopographyMediaState(false);
   }
 }
-setInterval(function () {
+/* 覆盖层状态守护是应用级常驻巡检（首行已做廉价短路），但要留下可 dispose
+ * 的句柄：页面卸载时清掉，避免窗口复用 / 热重载场景下残留多个 320ms 定时器。 */
+var desktopOverlayHealthTimer = setInterval(function () {
   if (fx && (fx.desktopLyrics || fx.wallpaperMode || (typeof isSonicTopographyPresetActive === 'function' && isSonicTopographyPresetActive()))) {
     syncDesktopOverlayState();
   }
   if (fx && fx.wallpaperMode && typeof ensureDesktopWallpaperFunctionalUi === 'function') ensureDesktopWallpaperFunctionalUi('health-watch');
 }, 320);
+window.addEventListener('pagehide', function () {
+  if (desktopOverlayHealthTimer) {
+    clearInterval(desktopOverlayHealthTimer);
+    desktopOverlayHealthTimer = 0;
+  }
+}, { once: true });
 
 // 全屏
 var desktopFullscreenActive = false;
@@ -1645,3 +1770,22 @@ function toggleFullscreen() {
 // ============================================================
 //  启动
 // ============================================================
+/* 进程启动之后又同步 / 改过程序文件时，界面里跑的仍是旧代码。
+ * 这种状态最容易被误判成「功能失效」（同一个坑已经踩过几轮），
+ * 所以启动后主动问一次主进程：磁盘上的文件是不是比本进程还新。 */
+function checkAppBuildFreshness(attempt) {
+  var api = getDesktopWindowApi();
+  if (!api || typeof api.getBuildFreshness !== 'function') return;
+  api.getBuildFreshness().then(function (state) {
+    if (!state || !state.stale) return;
+    console.warn('[Mineradio] 程序文件比当前进程新，需重启才会生效，最新改动文件：', state.newestFile || '');
+    if (typeof showToast === 'function') {
+      showToast('程序文件已更新，请从托盘完全退出后重新启动');
+      return;
+    }
+    if ((attempt || 0) < 6) {
+      setTimeout(function () { checkAppBuildFreshness((attempt || 0) + 1); }, 2500);
+    }
+  }).catch(function () {});
+}
+setTimeout(function () { checkAppBuildFreshness(0); }, 5000);

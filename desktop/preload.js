@@ -38,9 +38,14 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   writeLyricCache: (key, payload) => ipcRenderer.invoke('mineradio-cache-write-lyric', key, payload),
   openUpdateInstaller: (filePath) => ipcRenderer.invoke('mineradio-open-update-installer', filePath),
   restartApp: () => ipcRenderer.invoke('mineradio-restart-app'),
+  getBuildFreshness: () => ipcRenderer.invoke('mineradio-build-freshness'),
+  // 主进程早已实现 mineradio-get-gpu-diagnostics，但以前没暴露到 desktopWindow，
+  // 渲染层的 typeof 守卫会静默跳过，性能报告里的 gpu 字段永远是 null。
+  getGpuDiagnostics: () => ipcRenderer.invoke('mineradio-get-gpu-diagnostics'),
   configureGlobalHotkeys: (bindings) => ipcRenderer.invoke('mineradio-hotkeys-configure-global', bindings || []),
   exportJsonFile: (payload) => ipcRenderer.invoke('mineradio-export-json-file', payload || {}),
   importJsonFile: () => ipcRenderer.invoke('mineradio-import-json-file'),
+  notePerfEvent: (payload) => ipcRenderer.invoke('mineradio-perf-note', payload),
   onGlobalHotkey: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload || {});
@@ -81,6 +86,13 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   },
   setWallpaperMode: (enabled, payload) => ipcRenderer.invoke('mineradio-wallpaper-set-enabled', !!enabled, payload || {}),
   updateWallpaperMode: (payload) => ipcRenderer.invoke('mineradio-wallpaper-update', payload || {}),
+  getWallpaperModeStatus: () => ipcRenderer.invoke('mineradio-wallpaper-get-status'),
+  onWallpaperModeState: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('mineradio-wallpaper-runtime-state', listener);
+    return () => ipcRenderer.removeListener('mineradio-wallpaper-runtime-state', listener);
+  },
   // 内存管理
   getMemorySnapshot: () => ipcRenderer.invoke('mineradio-memory-get-snapshot'),
   trimAppMemory: (pids) => ipcRenderer.invoke('mineradio-memory-trim-app', pids),

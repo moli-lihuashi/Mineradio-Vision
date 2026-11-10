@@ -281,6 +281,42 @@ body.home-controls-locked #bottom-bar{opacity:0!important;pointer-events:none!im
 .heart-svg{width:21px;height:21px;display:block;fill:currentColor;stroke:none;filter:drop-shadow(0 0 0 rgba(255,122,144,0))}
 .liked .heart-svg{filter:drop-shadow(0 0 10px rgba(255,122,144,.34))}
 .song-action-btn .heart-svg,.qi-act button .heart-svg{width:15px;height:15px}
+
+/* ---------- 红心点击动效（2026-11-07）----------
+ * 四套形态（纸片扇 / 油墨 / 冲击波 / 星芒）的粒子都由 06e-heart-fx.js 用 WAAPI 现场生成、
+ * 播完自删；这里只管两件事：① 心形本体按形态走不同的「跳」；② 粒子图层与粒子的基础盒模型。
+ * 图层必须挂 body：#bottom-bar.visible 有 backdrop-filter，会成为 fixed 后代的包含块，
+ * 粒子若生成在底栏里会被裁进那道圆角矩形。z-index 压在底栏(6) 之上、fx 面板(18) 之下。 */
+.heart-fx-layer{position:fixed;left:0;top:0;width:0;height:0;z-index:14;pointer-events:none}
+.heart-fx-dot{position:absolute;left:0;top:0;display:block;will-change:transform,opacity}
+.heart-fx-svg{position:absolute;display:block;overflow:visible}
+.heart-fx-face{position:absolute;display:block;will-change:transform,opacity}
+
+/* 收藏演出（06f）：整屏一块 canvas。
+ * z-index 压在心形粒子层(14) 以下 —— 粒子是「点了红心」的直接反馈，不能被整屏的暗场吞掉；
+ * 底栏(32)、顶栏(500)、各弹层(620) 都在它之上，演出的这 3 秒里界面照样能点。
+ * 画布本身 pointer-events:none，不会挡住任何交互。 */
+.heart-scene-canvas{position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:10;
+  display:block;pointer-events:none;opacity:0;transition:opacity .16s linear}
+.heart-scene-canvas.on{opacity:1}
+
+#heart-btn.heart-beat-pop .heart-svg{animation:heart-beat-pop .66s cubic-bezier(.16,1,.3,1) both}
+#heart-btn.heart-beat-soft .heart-svg{animation:heart-beat-soft .34s ease-out both}
+#heart-btn.heart-beat-quick .heart-svg{animation:heart-beat-quick .30s cubic-bezier(.16,1,.3,1) both}
+#heart-btn.heart-beat-bloom .heart-svg{animation:heart-beat-bloom .42s cubic-bezier(.16,1,.3,1) both}
+#heart-btn.heart-beat-dip .heart-svg{animation:heart-beat-dip .36s ease-out both}
+@keyframes heart-beat-pop{
+  0%{transform:scale(1) rotate(0)}
+  14%{transform:scale(.78) rotate(-6deg)}
+  34%{transform:scale(1.32) rotate(4deg)}
+  52%{transform:scale(.94) rotate(-2deg)}
+  70%{transform:scale(1.14) rotate(1deg)}
+  100%{transform:scale(1) rotate(0)}
+}
+@keyframes heart-beat-soft{0%{transform:scale(1)}40%{transform:scale(.88)}100%{transform:scale(1)}}
+@keyframes heart-beat-quick{0%{transform:scale(1)}30%{transform:scale(1.2)}58%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes heart-beat-bloom{0%{transform:scale(1)}22%{transform:scale(.92)}48%{transform:scale(1.1)}100%{transform:scale(1)}}
+@keyframes heart-beat-dip{0%{transform:scale(1)}42%{transform:scale(.82)}100%{transform:scale(1)}}
 .volume-control,.quality-control,.mood-audio-control{position:relative;display:flex;align-items:center;justify-content:center}
 .volume-control::before,.quality-control::before,.mood-audio-control::before{content:'';position:absolute;left:-34px;right:-34px;bottom:18px;height:70px;display:none;z-index:0}
 .volume-control.open::before,.volume-control:hover::before,.volume-control:focus-within::before,.quality-control.open::before,.quality-control:hover::before,.quality-control:focus-within::before,.mood-audio-control.open::before,.mood-audio-control:hover::before,.mood-audio-control:focus-within::before{display:block}

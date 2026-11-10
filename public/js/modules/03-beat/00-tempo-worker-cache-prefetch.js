@@ -146,6 +146,22 @@ function getMusicTempoWorkerUrl() {
   return musicTempoWorkerUrl;
 }
 
+// 分段解码路径用的入口：mono 已经由调用方按目标采样率拼好了，
+// 这里直接投给 worker，不再碰整轨 AudioBuffer（那个在分段路径里根本不存在）。
+async function analyzeMusicTempoFromMonoPcm(mono, sampleRate, token) {
+  if (!mono || !mono.length || !sampleRate) return null;
+  if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') return null;
+  try {
+    showBeatChip('后台锁定电影主拍…');
+    await yieldToIdle(isHiddenForBackgroundOptimization() ? 20 : 180);
+    if (token !== beatMapToken) return null;
+    return await runMusicTempoWorker(mono, sampleRate, token);
+  } catch (err) {
+    console.warn('music-tempo worker setup failed:', err);
+    return null;
+  }
+}
+
 async function analyzeMusicTempoInWorker(buffer, token) {
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') return null;
   try {
@@ -171,46 +187,68 @@ async function analyzeMusicTempoInWorker(buffer, token) {
         if (token !== beatMapToken) return null;
       }
     }
-    var worker = new Worker(getMusicTempoWorkerUrl());
-    return await new Promise(function(resolve) {
-      var done = false;
-      var timer = setTimeout(function(){
-        if (done) return;
-        done = true;
-        worker.terminate();
-        resolve(null);
-      }, 16000);
-      worker.onmessage = function(ev) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        worker.terminate();
-        var data = ev.data || {};
-        if (!data.ok) {
-          console.warn('music-tempo worker failed:', data.error);
-          resolve(null);
-          return;
-        }
-        resolve(data);
-      };
-      worker.onerror = function(err) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        worker.terminate();
-        console.warn('music-tempo worker error:', err && err.message ? err.message : err);
-        resolve(null);
-      };
-      worker.postMessage({
-        mono: mono.buffer,
-        sampleRate: buffer.sampleRate,
-        scriptUrl: location.origin + '/vendor/music-tempo.min.js'
-      }, [mono.buffer]);
-    });
+    return await runMusicTempoWorker(mono, buffer.sampleRate, token);
   } catch (err) {
     console.warn('music-tempo worker setup failed:', err);
     return null;
   }
+}
+
+// 把 mono PCM 交给 worker 跑 music-tempo。mono.buffer 走 transfer（不是结构化克隆），
+// 不发双份 —— 55 分钟 22.05kHz 的 mono 是 291MB，克隆一下就是 582MB。
+function runMusicTempoWorker(mono, sampleRate, token) {
+  return new Promise(function(resolve) {
+    var worker;
+    try {
+      worker = new Worker(getMusicTempoWorkerUrl());
+    } catch (err) {
+      console.warn('music-tempo worker create failed:', err && err.message ? err.message : err);
+      resolve(null);
+      return;
+    }
+    var done = false;
+    var timer = setTimeout(function(){
+      if (done) return;
+      done = true;
+      try { worker.terminate(); } catch (_) {}
+      resolve(null);
+    }, 16000);
+    worker.onmessage = function(ev) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { worker.terminate(); } catch (_) {}
+      var data = ev.data || {};
+      if (!data.ok) {
+        console.warn('music-tempo worker failed:', data.error);
+        resolve(null);
+        return;
+      }
+      resolve(data);
+    };
+    worker.onerror = function(err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { worker.terminate(); } catch (_) {}
+      console.warn('music-tempo worker error:', err && err.message ? err.message : err);
+      resolve(null);
+    };
+    try {
+      worker.postMessage({
+        mono: mono.buffer,
+        sampleRate: sampleRate,
+        scriptUrl: location.origin + '/vendor/music-tempo.min.js'
+      }, [mono.buffer]);
+    } catch (err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { worker.terminate(); } catch (_) {}
+      console.warn('music-tempo worker postMessage failed:', err && err.message ? err.message : err);
+      resolve(null);
+    }
+  });
 }
 
 function scheduleBeatAnalysis(songId, audioUrl, token, song) {
@@ -248,7 +286,7 @@ function scheduleBeatAnalysis(songId, audioUrl, token, song) {
         return;
       }
       beatAnalysisStartedAt = performance.now();
-      analyzeAudioBeats(audioUrl, null, token, {
+      analyzeAudioBeats(audioUrl, normalizeBeatDurationSec(song && song.duration), token, {
         skipMusicTempo: beatAnalysisConfig.skipMusicTempoWhilePlaying && !audio.paused,
         background: true,
         song: song || null
@@ -446,7 +484,7 @@ async function runQueueBeatPrefetch(fromIdx, token, seq, state) {
       await yieldToIdle(isHiddenForBackgroundOptimization() ? 30 : 240);
     }
     if (token !== beatMapToken || seq !== beatPrefetchToken || beatMapCache[key]) return;
-    var map = await analyzeAudioBeats(audioUrl, null, token, {
+    var map = await analyzeAudioBeats(audioUrl, normalizeBeatDurationSec(song && song.duration), token, {
       background: true,
       prefetch: true,
       song: song
