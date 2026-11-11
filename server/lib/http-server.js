@@ -3,6 +3,7 @@
 // 注意：原 server.js 顶层的 path 是模块级绑定，搬进工厂后模块内不再有它。
 // 静态资源段（resolve / join / sep）依赖它，漏了就只会在真请求时抛 path is not defined。
 const path = require('path');
+const crypto = require('crypto');
 
 // HTTP 分发层：server.js 尾巴上最后一块。
 //   · CORS（只放行 127.0.0.1 / localhost 的 origin）
@@ -29,11 +30,66 @@ module.exports = function createHttpServer(deps) {
     serveIndexHtml,
     getUserCookie,
     getApiTokenAuto,
+    getApiToken,
     nativeDjAvailable,
   } = deps || {};
 
   // shader 市场目录缓存：mtime 未变则复用上次结果，避免每次请求同步扫目录阻塞主进程（server 内嵌主进程）
   let shaderMarketCache = { dir: '', mtime: 0, shaders: null };
+
+  // ---------- Host 头校验（DNS rebinding 防线）----------
+  // 为什么必须有：`/` 的 serveIndexHtml 会把 API_TOKEN 明文注入 HTML，而静态路由不过 token 门禁。
+  // 攻击者只要让自己的域名先解析到攻击机、再 rebind 到 127.0.0.1，浏览器就会用 **evil.com 的 origin**
+  // 去请求本机服务 —— 此时同源成立，响应可读，token 直接落到攻击者手里。CORS 反射在这里救不了：
+  // 同源请求根本不走 CORS 检查。唯一可靠的判别是 Host 头，因为 rebinding 后 Host 仍是 evil.com。
+  // 放行：环回字面量（127.0.0.1 / localhost / ::1，带不带端口均可）。
+  // 显式需要局域网访问时用 MINERADIO_ALLOW_NON_LOOPBACK_HOST=1 解除，默认 fail-closed。
+  const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+  const allowNonLoopbackHost = String(process.env.MINERADIO_ALLOW_NON_LOOPBACK_HOST || '').trim() === '1';
+  function hostHeaderIsLoopback(rawHost) {
+    if (allowNonLoopbackHost) return true;
+    const host = String(rawHost || '').trim().toLowerCase();
+    if (!host) return false;
+    // IPv6 字面量形如 [::1]:3000，先摘掉方括号内的部分再按端口切分
+    let hostname = host;
+    if (host.startsWith('[')) {
+      const close = host.indexOf(']');
+      if (close === -1) return false;
+      hostname = host.slice(0, close + 1);
+    } else {
+      const colon = host.lastIndexOf(':');
+      if (colon !== -1) hostname = host.slice(0, colon);
+    }
+    return LOOPBACK_HOSTNAMES.has(hostname);
+  }
+
+  // 首页注入页的 token 门禁。只认 query token（渲染进程导航时带），
+  // 不接受 header —— 浏览器地址栏导航没法带自定义头，这里也不该为此放宽。
+  function assertIndexToken(searchParams) {
+    const token = String((searchParams && searchParams.get('token')) || '').trim();
+    if (!token) return false;
+    const expected = String((typeof getApiToken === 'function' ? getApiToken() : '') || '').trim();
+    if (!expected) return false;
+    return safeTokenEquals(token, expected);
+  }
+
+  // 常量时间比较：长度不同直接 false（长度本身不是秘密），等长走 timingSafeEqual。
+  function safeTokenEquals(a, b) {
+    const bufA = Buffer.from(String(a), 'utf8');
+    const bufB = Buffer.from(String(b), 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    try { return crypto.timingSafeEqual(bufA, bufB); } catch (_) { return false; }
+  }
+
+  // 本服务自己的 origin 集合。渲染进程是从 http://localhost:PORT 或 http://127.0.0.1:PORT 打开的，
+  // 两种写法都算自己；端口必须等于本服务实际监听的 PORT。
+  function isOwnOrigin(origin) {
+    let parsed;
+    try { parsed = new URL(origin); } catch (_) { return false; }
+    if (parsed.protocol !== 'http:') return false;
+    if (String(parsed.port || '') !== String(PORT || '')) return false;
+    return LOOPBACK_HOSTNAMES.has(parsed.hostname.toLowerCase());
+  }
 
   // ---------- 汉字笔顺：同源取 hanzi-writer medians ----------
   // 为什么要有这一段：渲染层 index.html 的 CSP 是 `connect-src 'self' …`，
@@ -111,8 +167,19 @@ module.exports = function createHttpServer(deps) {
     const url = new URL(req.url, 'http://localhost:' + PORT);
     const pn = url.pathname;
 
+    // Host 头校验放在最前面：它保护的是「读响应」这件事本身，
+    // 所以必须在任何可能写出 token / 用户数据的响应之前拒绝（CORS 头也一并不发）。
+    if (!hostHeaderIsLoopback(req.headers.host)) {
+      sendJSON(res, { error: 'BAD_HOST' }, 403);
+      return;
+    }
+
     const origin = req.headers.origin;
-    if (origin && /^http:\/\/127\.0\.0\.1:|^http:\/\/localhost:/.test(origin)) {
+    // 只回显本服务自己的 origin（任意端口都不放）。
+    // 以前是 /^http:\/\/127\.0\.0\.1:|^http:\/\/localhost:/ —— 任何跑在本机的网页
+    // （包括用户随手打开的另一个 localhost 开发服务器）都能拿到带 ACAO 的响应去读 token 注入页。
+    // 本服务只有一个真实消费者：自己的渲染进程，它用的就是 PORT 这个 origin。
+    if (origin && isOwnOrigin(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Mineradio-Token');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -194,6 +261,15 @@ module.exports = function createHttpServer(deps) {
       return;
     }
     if (pn === '/' || pn === '/index.html') {
+      // 注入页里带着明文 API_TOKEN，是全站唯一的 token 出处 —— 必须先过 token 门禁。
+      // 不设门禁的后果：任何能访问本服务的东西（局域网、rebinding、本机其它页面）
+      // 只要 GET / 就拿到 token，随后 /api/* 全部敞开。
+      // 渲染进程自己加载时是带 ?token= 的（见 desktop/main.js 拼的 URL），
+      // 手动在浏览器开 localhost:3000 会被拒 —— 这是有意的 fail-closed。
+      if (!assertIndexToken(url.searchParams)) {
+        sendJSON(res, { error: 'UNAUTHORIZED' }, 403);
+        return;
+      }
       serveIndexHtml(res, filePath.endsWith('.html') ? filePath : path.join(publicDir, 'index.html'));
       return;
     }

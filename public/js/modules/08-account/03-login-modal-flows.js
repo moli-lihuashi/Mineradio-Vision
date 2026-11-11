@@ -277,6 +277,11 @@ function updateLoginProviderUi() {
   var isSpotify = loginProvider === 'spotify';
   var isLoggedIn = renderLoginAccountCard(loginProvider);
   var modal = document.querySelector('#login-modal .dual-login-modal');
+  // 必须在各 provider 分支之前同步：汽水 / Spotify 分支会提前 return，
+  // 若把 toggle 留在后面的通用尾部，这两个分支就永远不会清掉这个类。
+  // 残留时 account.css 的 `.login-modal-logged-in .qr-shell{display:none!important}`
+  // 会把二维码整个容器藏掉（标题/描述在 copy 区，照常显示 → 只剩中间一片空白）。
+  if (modal) modal.classList.toggle('login-modal-logged-in', isLoggedIn);
   var title = document.getElementById('login-modal-title');
   var desc = document.getElementById('login-modal-desc');
   var shell = document.getElementById('qr-shell');
@@ -415,7 +420,6 @@ function updateLoginProviderUi() {
   if (neteaseBtn) neteaseBtn.classList.toggle('active', loginProvider === 'netease');
   if (qqBtn) qqBtn.classList.toggle('active', isQQ);
   if (kugouBtn) kugouBtn.classList.toggle('active', isKugou);
-  if (modal) modal.classList.toggle('login-modal-logged-in', isLoggedIn);
   if (title) title.textContent = isLoggedIn ? (meta.label + '已登录') : ('扫码登录' + meta.label);
   if (desc) {
     desc.innerHTML = isLoggedIn
@@ -501,7 +505,9 @@ async function refreshQr() {
     var qsImg = document.getElementById('qr-img');
     var qsStatus = document.getElementById('qr-status');
     qishuiQrToken = '';
-    if (qsImg) { qsImg.style.display = ''; qsImg.src = ''; }
+    // 不要在这里先清 src：请求失败（尤其上游 rate_limited）时会把二维码留成
+    // 永久空白，且没有任何恢复路径。只在拿到新图后覆盖。
+    if (qsImg) qsImg.style.display = '';
     try {
       if (qsStatus) {
         qsStatus.style.display = '';
@@ -589,9 +595,24 @@ async function refreshQr() {
   }
 }
 function startQrPoll() { if (qrPollTimer) clearInterval(qrPollTimer); qrPollTimer = setInterval(checkQr, 2000); }
-function stopQrPoll() { if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; } }
+function stopQrPoll() {
+  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  if (qrRetryTimer) { clearTimeout(qrRetryTimer); qrRetryTimer = null; }
+  // 推进代际并让出锁：凡是「停止轮询」都意味着上一轮的语义已经作废
+  // （换二维码 / 登录完成 / 关窗 / 限流等待）。此时若不主动放锁，
+  // 一个永不落定的在途 checkQr 会把 qrCheckInFlight 永久钉在 true，
+  // 之后哪怕重新 startQrPoll() 也会被入口直接 return，界面彻底不动。
+  qrCheckSerial++;
+  qrCheckInFlight = false;
+  qrCheckHolder = 0;
+}
 async function logoutLoginProvider(provider) {
-  provider = provider === 'qq' ? 'qq' : (provider === 'kugou' ? 'kugou' : (provider === 'spotify' ? 'spotify' : 'netease'));
+  // 白名单必须包含 qishui：否则 updateLoginProviderUi 在汽水已登录时把按钮 onclick
+  // 绑到 logoutLoginProvider('qishui')，这里却把 provider 归成 netease，
+  // 结果是「退出汽水」实际去退网易云，汽水会话原封不动。
+  provider = (provider === 'qq' || provider === 'kugou' || provider === 'spotify' || provider === 'qishui')
+    ? provider
+    : 'netease';
   stopQrPoll();
   var statusEl = document.getElementById('qr-status');
   if (statusEl) {
@@ -919,11 +940,25 @@ async function checkQr() {
 }
 var baseCheckQr = checkQr;
 checkQr = async function() {
+  // 防重入：startQrPoll() 是 setInterval(checkQr, 2000)，而本函数是 async。
+  // 汽水分支要等主进程跑完 check_qrconnect；上游回 2046 触发二次验证时，
+  // 这次 await 会一直挂到用户操作完（可达数分钟）。没有这把锁，每 2 秒仍会
+  // 点火一次 → 在途请求并发叠加 → 上游判 error_code 7（rate_limited）→
+  // 停轮询等 60 秒 → 用户回来继续叠加，永远登不上。
+  // 注意：必须在入口就 return，不能只靠 finally 收尾。
+  if (qrCheckInFlight) return;
+  qrCheckInFlight = true;
+  var mySerial = ++qrCheckSerial;
+  qrCheckHolder = mySerial;
+  try {
   if (loginProvider === 'kugou') {
     if (!qrKey) return;
     var st = document.getElementById('qr-status');
     try {
       var r = await apiJson('/api/kugou/login/qr/check?key=' + encodeURIComponent(qrKey) + '&t=' + Date.now());
+      // 同汽水分支：await 期间用户可能已刷新二维码或关窗，陈旧结果必须丢弃，
+      // 否则它下面的 stopQrPoll() 会误停新一轮的轮询。
+      if (qrCheckHolder !== mySerial) return;
       if (r.code === 800) {
         if (st) { st.textContent = 'Kugou QR expired, refresh and try again'; st.className = 'fail'; }
         stopQrPoll();
@@ -956,8 +991,25 @@ checkQr = async function() {
     if (!qishuiQrToken) return;
     var qsSt = document.getElementById('qr-status');
     try {
-      var qr = await apiJson('/api/qishui/login/check?token=' + encodeURIComponent(qishuiQrToken) + '&t=' + Date.now());
+      var qr;
+      try {
+        qr = await apiJson('/api/qishui/login/check?token=' + encodeURIComponent(qishuiQrToken) + '&t=' + Date.now());
+      } catch (checkErr) {
+        // 二次验证相关的失败用 HTTP 409 返回，apiJson 在 !res.ok 时直接 throw，
+        // 响应体在 err.data 里。这里还原成统一结构，否则下面 mfa_* 分支永远走不到。
+        var errData = checkErr && checkErr.data;
+        if (errData && (errData.status === 'mfa_failed' || errData.status === 'mfa_cancelled')) {
+          qr = errData;
+        } else {
+          throw checkErr;
+        }
+      }
       var qsStatus = qr.status || '';
+      // 陈旧轮次直接丢弃：await 期间用户可能已经点了「刷新二维码」换了新 token，
+      // 或者关掉了登录窗。这一轮拿的是旧 token 的结果，继续往下走会把新二维码的
+      // 状态栏覆盖成旧结果，更糟的是它内部的 stopQrPoll() 会把新一轮的轮询也停掉，
+      // 表现就是「刚刷新完，状态栏闪一下就再也不动了」。
+      if (qrCheckHolder !== mySerial) return;
       if (qr.ok && qr.loggedIn) {
         stopQrPoll();
         qishuiLoginStatus = normalizeQishuiLoginStatus(qr);
@@ -978,7 +1030,22 @@ checkQr = async function() {
       } else if (qsStatus === 'scanned') {
         if (qsSt) { qsSt.textContent = '已扫码，请在 App 中确认登录…'; qsSt.className = 'scan'; }
       } else if (qsStatus === 'rate_limited') {
-        if (qsSt) { qsSt.textContent = '扫码过于频繁，请稍后再试'; qsSt.className = 'fail'; }
+        // 上游限流时不能继续每 2 秒打 check_qrconnect（限流窗口会永远不结束），
+        // 但也不能就此彻底停掉：手机端可能已经确认，只是这一次轮询被限流挡住。
+        // 因此停掉高频轮询，改为按 retryAfterMs（服务端给 60000）延迟重试一次，
+        // 让「手机已确认 → 桌面端补拾取」这条路还能走通。
+        var retryMs = Math.max(5000, Number(qr.retryAfterMs) || 60000);
+        if (qsSt) {
+          qsSt.textContent = '扫码过于频繁，' + Math.round(retryMs / 1000) + ' 秒后自动重试…';
+          qsSt.className = 'fail';
+        }
+        stopQrPoll();
+        qrRetryTimer = setTimeout(function () {
+          qrRetryTimer = null;
+          if (loginProvider !== 'qishui' || !qishuiQrToken) return;
+          startQrPoll();
+          checkQr();
+        }, retryMs);
       } else if (qsStatus === 'mfa_cancelled') {
         if (qsSt) { qsSt.textContent = '二次验证已取消，请刷新二维码重试'; qsSt.className = 'fail'; }
         stopQrPoll();
@@ -995,5 +1062,17 @@ checkQr = async function() {
     }
     return;
   }
-  return baseCheckQr();
+  // 必须 await：baseCheckQr 是 async，直接 return 它的 promise 会让
+  // finally 在 promise 还没落定时就释放锁，锁等于失效。
+  return await baseCheckQr();
+  } finally {
+    // 只释放自己持有的那一把锁。
+    // 若期间 stopQrPoll() 推进过代际（用户刷新二维码 / 关窗 / 限流等待），
+    // 说明这一轮已经作废，绝不能去清新一代的锁 —— 否则新一轮刚建立的
+    // 防重入会被旧一轮的收尾直接抹掉，缺陷原地复活。
+    if (qrCheckHolder === mySerial) {
+      qrCheckInFlight = false;
+      qrCheckHolder = 0;
+    }
+  }
 };

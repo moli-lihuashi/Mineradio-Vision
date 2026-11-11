@@ -15,6 +15,7 @@ module.exports = function register(ctx) {
     handleQishuiPlaylistTracks, handleQishuiCheckTracksLiked, handleQishuiSetTrackLiked,
     handleQishuiSetPlaylistCollected, handleQishuiPlaylistAddSong, handleQishuiSetAlbumCollected,
     handleQishuiSongUrl, handleQishuiLyric,
+    cookieDebugLog,
   } = ctx;
 
   // 汽水音乐 v6 二维码登录桥接（仅主进程运行时懒加载，避免非 electron 上下文 require 失败）
@@ -71,10 +72,30 @@ module.exports = function register(ctx) {
           return;
         }
         const qrLogin = getQishuiQrLogin();
+        const _t0 = Date.now();
         const result = await qrLogin.checkQrConnect(token);
+        const _elapsed = Date.now() - _t0;
         const data = result && result.data || {};
         const errorCode = Number(data.error_code || 0);
         const bridgeStatus = qrLogin.getStatus();
+        // 取证埋点：error_code 7 的真实触发条件在离线探针里复现不出来
+        // （200ms 连打 60 次、伪造/作废 token、_mfaDone 态重发都只回 0），
+        // 唯一能拿到证据的地方就是真实链路。这里只记判据，不记 cookie/token
+        // 明文；token 只留前 8 位用于对齐同一次登录。
+        try {
+          const _d = typeof cookieDebugLog === 'function' ? cookieDebugLog : null;
+          if (_d) {
+            _d('[QishuiCheck] token=' + String(token).slice(0, 8) +
+               ' error_code=' + errorCode +
+               ' status=' + String(data.status || '-') +
+               ' confirmed=' + (data.confirmed === true) +
+               ' elapsed=' + _elapsed + 'ms' +
+               ' bridgeLoggedIn=' + bridgeStatus.loggedIn +
+               ' cookieReady=' + bridgeStatus.cookieReady +
+               ' qrPending=' + bridgeStatus.qrPending +
+               (errorCode === 7 ? ' <<< CODE7 desc=' + String(data.description || '').slice(0, 80) : ''));
+          }
+        } catch (_) {}
         if (data.confirmed === true && errorCode === 0 && bridgeStatus.loggedIn) {
           const cookie = qrLogin.getCookie();
           if (!qishuiCookieHasLogin(cookie)) throw new Error('QISHUI_QR_SESSION_COOKIE_MISSING');
@@ -104,6 +125,10 @@ module.exports = function register(ctx) {
         }
         let status = String(data.status || '').trim();
         if (errorCode === 2) status = 'expired';
+        // error_code 7 的语义尚未确认，这里沿用既有的 rate_limited 映射只是因为
+        // 前端文案依赖它。实测（200ms 连打 60 次 / 伪造与作废 token / _mfaDone 态
+        // 重发）都无法在离线环境复现 7，所以「限流」这个解读很可能是错的。
+        // 真实触发条件需要靠上面的 [QishuiCheck] 埋点在真实链路取证后再定。
         else if (errorCode === 7) status = 'rate_limited';
         else if (status === '2') status = 'scanned';
         else if (!status || status === '1') status = 'waiting';

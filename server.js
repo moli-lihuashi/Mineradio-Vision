@@ -1973,6 +1973,10 @@ const routeCtx = {
   get userCookie() { return userCookie; },
   get qishuiCookie() { return qishuiCookie; },
   get kugouCookie() { return kugouCookie; },
+  // 明文诊断日志（写 <stableUserData>/cookie-debug.log）。汽水二维码轮询用它
+  // 记录每次上游 error_code：7 的真实触发条件目前无法在离线探针里复现，
+  // 只能在真实链路留痕，否则每次排查都只能靠猜。
+  cookieDebugLog,
 };
 
 const routeMatchers = [
@@ -2000,6 +2004,8 @@ const httpServer = require("./server/lib/http-server")({
   sendJSON, assertApiAuth, serveStatic, serveIndexHtml,
   getUserCookie: () => userCookie,
   getApiTokenAuto: () => API_TOKEN_AUTO,
+  // API_TOKEN 是 let（ensureApiToken 会重新赋值）→ 必须以 getter 注入，不能传值
+  getApiToken: () => API_TOKEN,
   nativeDjAvailable,
 });
 const { server } = httpServer;

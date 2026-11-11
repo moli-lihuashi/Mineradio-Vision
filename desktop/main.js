@@ -3714,10 +3714,13 @@ async function ensureLocalServerStarted() {
 async function loadMainWindowWithRetry(win) {
   const port = mainServerPort || process.env.PORT || 3000;
   const baseUrl = `http://127.0.0.1:${port}`;
+  // 首页是唯一注入明文 API_TOKEN 的响应，服务端因此要求它自带 token（防「GET / 即拿 token」）。
+  // 渲染进程用 query 携带：token 只在这次导航的 URL 里，页面脚本照旧读 window.__MINERADIO_API_TOKEN__。
+  const tokenQuery = mineradioApiToken ? `&token=${encodeURIComponent(mineradioApiToken)}` : '';
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (!win || win.isDestroyed()) throw new Error('Main BrowserWindow was destroyed before navigation');
-    const targetUrl = `${baseUrl}/?startupAttempt=${attempt}&startupAt=${Date.now()}`;
+    const targetUrl = `${baseUrl}/?startupAttempt=${attempt}&startupAt=${Date.now()}${tokenQuery}`;
     try {
       writeStartupState('navigation-attempt', { navigationAttempt: attempt, navigationAt: Date.now(), targetUrl });
       await withStartupTimeout(

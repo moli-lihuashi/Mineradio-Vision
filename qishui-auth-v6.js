@@ -29,6 +29,37 @@ const UA =
   'Electron/36.4.0-rs.22.release.main.1 TTElectron/36.4.0-rs.22.release.main.1 Safari/537.36';
 
 const ASSET_DIR = path.join(__dirname, 'qishui-auth-v6');
+// 验证页 XHR 会带这些自定义头。这份清单必须覆盖二次验证组件
+// index.umd.production.js 实际会发出的**全部**自定义头，否则那类请求的
+// 预检必然失败（页面表现：提交时报 Network Error）。
+//
+// 清单来源：对官方产物（555005 字节）执行
+//   grep -o "x-tt-[a-z-]\{2,40\}" index.umd.production.js | sort -u
+// 得到 5 个，其中 3 个曾经缺失，直接导致「发送短信成功、但所有提交
+// 全部 Network Error」——因为组件内 axios 是
+//   withCredentials:!0, xsrfCookieName:"passport_csrf_token",
+//   xsrfHeaderName:"x-tt-passport-csrf-token"
+// 首次请求时还没有 passport_csrf_token cookie，axios 不加 CSRF 头，预检
+// 能过（所以「发送」成功）；服务端下发该 cookie 之后，每次提交都会带上
+// x-tt-passport-csrf-token，预检挂 → 提交被判 Network Error。
+//
+// 注意：这份清单不能靠「回显预检声明的头」来省事。Electron 的
+// OnHeadersReceivedListenerDetails 没有 requestHeaders 字段
+// （见 electron.d.ts），任何 details.requestHeaders 读取恒为 undefined，
+// 只会静默退回白名单。必须在这里写全。
+const ALLOWED_CORS_REQUEST_HEADERS = [
+  'Content-Type',
+  // 组件 axios 的 xsrfHeaderName：服务端下发 passport_csrf_token 后必带。
+  'x-tt-passport-csrf-token',
+  // 组件埋点/链路追踪头。
+  'x-tt-logid',
+  // 组件签名头。
+  'x-tt-passport-aid-sign',
+  'x-tt-passport-verify-portrait',
+  'x-tt-passport-trace-id',
+  'x-tt-trace-id',
+  'x-ss-stub',
+].join(', ');
 const ASSETS = new Map([
   ['security_seed.html', 'text/html; charset=utf-8'],
   ['security_host.html', 'text/html; charset=utf-8'],
@@ -146,18 +177,88 @@ class QishuiAuthRuntime {
     this.initializing = null;
     this.destroying = false;
     this.mfaNetworkLog = [];
+    // check_qrconnect 响应头里的 Set-Cookie（name=value），登录 cookie 的
+    // 独立来源；不落盘明文、不写日志值。
+    this._checkQrSetCookiePairs = [];
     this.qrGeneration = 0;
     // 二次验证（2046）去重：同一 token 只弹一次验证窗口，并发轮询复用同一结果。
     this._mfaPromise = null;
     this._mfaToken = '';
     this._mfaDone = false;
+    // 终止态（组件失败 / 用户取消）：同一 token 不再重弹，也不再打上游，
+    // 否则 2 秒轮询会反复弹窗并把上游打到 rate_limited。
+    this._mfaStopToken = '';
+    this._mfaStopCode = '';
+    this._mfaStopMessage = '';
+    // host 页版本比对状态：只在进程内做一次，避免每次 request 都走 IPC。
+    this._hostVersionChecked = false;
+    this._hostReloading = false;
   }
 
   async initialize() {
-    if (this.window && !this.window.isDestroyed() && this.browserInfo && this.msToken) return true;
+    if (this.window && !this.window.isDestroyed() && this.browserInfo && this.msToken) {
+      // 窗口已就绪，但驻留页面的逻辑版本可能落后于磁盘上的 security_host.html
+      // （_initialize 只 loadURL 一次，之后页面 JS 常驻内存）。
+      // 不重载的话，host 页里的修复对已运行实例完全无效——用户必须重启应用，
+      // 而且期间看到的是旧报错。这里按版本号按需重载一次。
+      await this.ensureHostPageFresh();
+      return true;
+    }
     if (this.initializing) return this.initializing;
     this.initializing = this._initialize().finally(() => { this.initializing = null; });
     return this.initializing;
+  }
+
+  // 页面版本不一致 → 重载 security_host.html，使 host 页修复即时生效。
+  // 重载会丢失页面内存态（bdms/msToken 在 localStorage，不受影响），
+  // 因此只在版本确实落后时执行一次，并在失败时降级为「继续用旧页面」，
+  // 不让一次重载失败打断登录主流程。
+  async ensureHostPageFresh() {
+    if (!this.window || this.window.isDestroyed()) return false;
+    if (!this.assetBase) return false;
+    if (this._hostReloading) return false;
+    // initialize() 会被每次 request 调用，不能每次都做一次 IPC 往返。
+    // 版本比对只在进程内首次进到这里时做一次；重载成功后置位，后续直接跳过。
+    if (this._hostVersionChecked) return false;
+    // 每次改 security_host.html 里进主流程的逻辑都要同步 +1，否则
+    // 已运行实例的页面 JS 常驻内存，磁盘修复不会生效。
+    // v3：__qishuiRequest 开 withCredentials，让上游下发的登录 cookie
+    // 能真正写进 authSession（否则扫码确认后恒判「二维码已过期」）。
+    const EXPECTED = 3;
+    let current = 0;
+    try {
+      current = await this.window.webContents.executeJavaScript(
+        'Number(window.__qishuiHostVersion) || 0', true,
+      );
+    } catch (_) {
+      // 页面可能正在导航或尚未就绪：不在这里强行重载，交给下次调用。
+      return false;
+    }
+    if (Number(current) >= EXPECTED) {
+      this._hostVersionChecked = true;
+      return false;
+    }
+    this._hostReloading = true;
+    try {
+      // 重载后页面的 bdms 需要重新就绪，后续 request() 才有签名能力。
+      await this.window.loadURL(this.assetBase + 'security_host.html');
+      await this.waitForBdms();
+      this.browserInfo = await this.window.webContents.executeJavaScript(
+        'window.__qishuiBrowserInfo()', true,
+      );
+      this._mfaToken = '';
+      this._mfaDone = false;
+      this._mfaStopToken = '';
+      this._mfaStopCode = '';
+      this._mfaStopMessage = '';
+      this._hostVersionChecked = true;
+      return true;
+    } catch (_) {
+      // 重载失败：不置位，允许下次再试；但也不阻塞本次登录。
+      return false;
+    } finally {
+      this._hostReloading = false;
+    }
   }
 
   async _startAssetServer() {
@@ -205,12 +306,113 @@ class QishuiAuthRuntime {
       { urls: [OFFICIAL_BDMS_URL] },
       (_details, callback) => callback({ redirectURL: this.assetBase + 'bdms.js' }),
     );
+    // 官方接口不发 Access-Control-Allow-Origin（实测预检只回
+    // Access-Control-Allow-Methods，连 Allow-Headers 都没有），而验证页的
+    // XHR 带 x-tt-passport-verify-portrait 等自定义头，预检必挂。
+    // 这里补齐 CORS，使窗口可以安全地开启 webSecurity。
+    //
+    // 收窄点：只回显本页自己的 origin（asset server 的 127.0.0.1:port），
+    // 不再是无条件 `*`。页面只能来自 assetBase（见 _guardNavigation），
+    // 因此 Origin 恒等于 selfOrigin；若窗口被导航到外部站点，浏览器会因
+    // Origin 不匹配而拒绝 —— 属于安全失败，符合预期。
     authSession.webRequest.onHeadersReceived(
-      { urls: ['https://api.qishui.com/*', 'https://verify.zijieapi.com/*', 'https://auth.zijieapi.com/*'] },
+      {
+        urls: [
+          'https://api.qishui.com/*',
+          'https://bff-pc.qishui.com/*',
+          'https://verify.zijieapi.com/*',
+          'https://auth.zijieapi.com/*',
+        ],
+      },
       (details, callback) => {
         const headers = { ...(details.responseHeaders || {}) };
-        headers['Access-Control-Allow-Origin'] = ['*'];
+        // 从 check_qrconnect 响应头直接留存登录 cookie（只留 name=value，
+        // 不写日志、不落盘明文）。
+        //
+        // 为什么需要第二来源：上游确认登录时是通过 Set-Cookie 下发
+        // sessionid / sid_tt 的。跨站请求（本页 127.0.0.1 → api.qishui.com）
+        // 遇到 SameSite=Lax/Strict 的 cookie，Chromium 会拒绝写进 cookie jar，
+        // 于是 persistSessionCookies() 从 authSession.cookies.get({}) 里
+        // 什么也抓不到 → hasLoginCookie() 恒 false → 手机已确认却被判
+        // 「二维码已过期」。响应头是主进程能看到的原始数据，不受此限制。
+        // 只看真实 POST；预检 OPTIONS 不带 Set-Cookie，若让它写入空数组
+        // 会把上一轮真正下发的 cookie 冲掉。
+        if (String(details.url || '').includes('/passport/web/check_qrconnect/') &&
+            String(details.method || '').toUpperCase() !== 'OPTIONS') {
+          const pairs = [];
+          for (const key of Object.keys(headers)) {
+            if (key.toLowerCase() !== 'set-cookie') continue;
+            for (const raw of (headers[key] || [])) {
+              const first = String(raw || '').split(';')[0].trim();
+              if (first && first.includes('=')) pairs.push(first);
+            }
+          }
+          this._checkQrSetCookiePairs = pairs;
+          try {
+            const _envCookieFile = process.env.KUGOU_COOKIE_FILE || process.env.COOKIE_FILE || '';
+            const _logPath = _envCookieFile
+              ? path.join(path.dirname(_envCookieFile), 'cookie-debug.log')
+              : path.join(app.getPath('userData'), 'cookie-debug.log');
+            // 只记名称，绝不记值。
+            const names = pairs.map(p => p.split('=')[0]);
+            fs.appendFileSync(
+              _logPath,
+              '[' + new Date().toISOString() + '] [QishuiSetCookie] status=' + details.statusCode +
+              ' count=' + pairs.length + ' names=' + names.join(',') + '\n',
+              'utf8',
+            );
+          } catch (_) {}
+        }
+        // 先按**小写名**清掉上游自带的全部 CORS 头，再写我们自己的一份。
+        //
+        // 为什么必须清：部分宿主（实测 verify.zijieapi.com 的预检响应）上游
+        // 自己就带 `access-control-allow-origin: *`（小写键）。HTTP 头名大小写
+        // 不敏感，但 responseHeaders 是普通对象、按字符串键存放，直接写
+        // `headers['Access-Control-Allow-Origin']` 会留下两个键：
+        //   Access-Control-Allow-Origin: http://127.0.0.1:port   ← 我们注入
+        //   access-control-allow-origin: *                       ← 上游自带
+        // 浏览器合并后读到「origin, *」两个值 → 带 credentials 的 CORS 判定
+        // 直接失败，页面表现是 net::ERR_FAILED / Network Error。
+        // 这正是 api.qishui.com 能通、verify.zijieapi.com 全挂的差别。
+        //
+        // 只清 access-control-* 与 Vary，其他响应头一律保留。
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase();
+          if (lower.startsWith('access-control-') || lower === 'vary') {
+            delete headers[key];
+          }
+        }
+        let selfOrigin = '';
+        try { selfOrigin = new URL(this.assetBase).origin; } catch (_) {}
+        if (selfOrigin) {
+          headers['Access-Control-Allow-Origin'] = [selfOrigin];
+          headers['Vary'] = ['Origin'];
+        }
+        // 无条件回全量白名单，不再尝试「回显预检声明的头」。
+        // 原因：Electron 的 OnHeadersReceivedListenerDetails 没有
+        // requestHeaders 字段（见 electron.d.ts 该 interface 定义），
+        // 旧代码 `(details.requestHeaders || {})['Access-Control-Request-Headers']`
+        // 恒为 undefined，所以一直是静默走兜底——看起来「自动适配」其实没有。
+        // 而兜底清单当时漏了 x-tt-passport-csrf-token / x-tt-logid /
+        // x-tt-passport-aid-sign 三个头，组件提交时的预检全部失败。
+        // 回全量清单是安全的：Allow-Headers 只是声明「允许带哪些头」，
+        // 不放大任何请求能力，真正把住跨源边界的是上面的 ACAO 收窄。
+        headers['Access-Control-Allow-Headers'] = [ALLOWED_CORS_REQUEST_HEADERS];
+        headers['Access-Control-Allow-Methods'] = ['GET, POST, OPTIONS'];
+        headers['Access-Control-Max-Age'] = ['600'];
         headers['Access-Control-Expose-Headers'] = ['*'];
+        // 必须补 Allow-Credentials：官方二次验证组件内部的 axios 是硬编码
+        // withCredentials:true（index.umd.production.js 里
+        // tj.create({withCredentials:!0,...})），带凭据的跨源请求在
+        // webSecurity:true 下要求响应同时具备
+        //   ACAO=<具体 origin>（不能是 *） + Access-Control-Allow-Credentials:true
+        // 只给前者会被浏览器直接判失败，页面表现就是组件内所有请求
+        // 「Network Error」，短信/密码验证都无法提交。
+        // 注意：ACAO 已在上面收窄到 selfOrigin，与 credentials 组合是合法配对；
+        // 若回退成 *，这一行会让请求变成非法组合，故两者必须同时存在。
+        if (selfOrigin) {
+          headers['Access-Control-Allow-Credentials'] = ['true'];
+        }
         callback({ responseHeaders: headers });
       },
     );
@@ -236,6 +438,28 @@ class QishuiAuthRuntime {
     });
   }
 
+  // webSecurity:true 的前提：窗口必须始终停在本地 asset 页。
+  // 一旦被导航到外部站点，CORS 收窄（只回显 selfOrigin）会让请求全部失败——
+  // 这是安全失败，但用户会看到白屏。因此显式拦住外部导航并记录原因。
+  _guardNavigation() {
+    const contents = this.window.webContents;
+    const isLocalAsset = url => {
+      try {
+        const parsed = new URL(String(url));
+        return this.assetBase && parsed.href.startsWith(this.assetBase);
+      } catch (_) {
+        return false;
+      }
+    };
+    contents.on('will-navigate', (event, url) => {
+      if (isLocalAsset(url)) return;
+      event.preventDefault();
+      this.navigationBlocked = { at: Date.now(), url: this.safeEndpoint(url), reason: 'external-navigation' };
+    });
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    contents.on('will-attach-webview', event => event.preventDefault());
+  }
+
   safeEndpoint(rawUrl) {
     try {
       const value = new URL(rawUrl);
@@ -250,6 +474,31 @@ class QishuiAuthRuntime {
     ensureIdentity();
     await this._startAssetServer();
     this.authSession = session.fromPartition(AUTH_PARTITION);
+    // 启动指纹：每次真正装 CORS hook 都留一条明文记录。
+    // 主进程 .js 是 require 时加载的，改磁盘对**已运行实例无效**；而本应用
+    // 有单实例锁，用户「重新打开」只会聚焦旧窗口、新进程自行退出，看起来
+    // 像重启了其实没有。有了这行，就能从日志直接判断当前进程装的是哪一版
+    // 白名单（缺 3 个头的旧版 vs 补全后的新版），不必再靠猜。
+    // 指纹只记头名清单，不含 cookie / token / msToken。
+    try {
+      // 真实应用已在 desktop/main.js 设好 KUGOU_COOKIE_FILE（指向
+      // <stableUserData>/.kugou-cookie），dirname 后与 server.js 的
+      // cookie-debug.log 是同一份；探针进程没设该变量，直接写 userData。
+      const _envCookieFile = process.env.KUGOU_COOKIE_FILE || process.env.COOKIE_FILE || '';
+      let _logPath;
+      if (_envCookieFile) {
+        _logPath = path.join(path.dirname(_envCookieFile), 'cookie-debug.log');
+      } else {
+        try { _logPath = path.join(app.getPath('userData'), 'cookie-debug.log'); }
+        catch (_) { _logPath = path.join(__dirname, '..', 'cookie-debug.log'); }
+      }
+      fs.appendFileSync(
+        _logPath,
+        '[' + new Date().toISOString() + '] [QishuiCORS] hook-installed pid=' +
+        process.pid + ' allowHeaders=' + ALLOWED_CORS_REQUEST_HEADERS + '\n',
+        'utf8',
+      );
+    } catch (_) {}
     this._installSessionHooks();
     this.window = new BrowserWindow({
       show: false,
@@ -265,12 +514,17 @@ class QishuiAuthRuntime {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        webSecurity: false,
+        // #15 已修：原先这里是 webSecurity:false（全局关同源策略），
+        // 用来绕过官方接口缺 ACAO 导致的 CORS 失败。
+        // 现改为在 _installSessionHooks() 里补齐 CORS 头（且收窄到本页 origin），
+        // 因此可以恢复 webSecurity:true。实测见 scripts/probe-qishui-websecurity.js。
+        webSecurity: true,
         backgroundThrottling: false,
       },
     });
     this.window.setMenuBarVisibility(false);
     this.window.webContents.setUserAgent(UA);
+    this._guardNavigation();
     this.window.on('close', event => {
       if (this.destroying) return;
       event.preventDefault();
@@ -311,6 +565,8 @@ class QishuiAuthRuntime {
     await this.waitForBdms();
     this.browserInfo = await this.window.webContents.executeJavaScript('window.__qishuiBrowserInfo()', true);
     updateConfig({ msToken: this.msToken });
+    // 刚 loadURL 过，页面一定是最新的：直接置位，省掉首次请求时的一次 IPC 比对。
+    this._hostVersionChecked = true;
     return true;
   }
 
@@ -427,6 +683,12 @@ class QishuiAuthRuntime {
     this._mfaToken = '';
     this._mfaDone = false;
     this._mfaPromise = null;
+    this._mfaStopToken = '';
+    this._mfaStopCode = '';
+    this._mfaStopMessage = '';
+    // 新二维码必须丢掉上一轮响应头里留存的 cookie，
+    // 否则旧 token 的会话可能被错误合并进新一轮。
+    this._checkQrSetCookiePairs = [];
     await this.initialize();
     const identity = ensureIdentity();
     const envelope = await this.request('GET', '/passport/web/get_qrcode/', {
@@ -449,6 +711,13 @@ class QishuiAuthRuntime {
     return envelope;
   }
 
+  // 记录二次验证的终止态：同一 token 之后不再弹窗、不再请求上游。
+  _markMfaStop(tokenKey, code, message) {
+    this._mfaStopToken = String(tokenKey || '');
+    this._mfaStopCode = String(code || 'QISHUI_MFA_CANCELLED');
+    this._mfaStopMessage = String(message || '二次验证未完成');
+  }
+
   async secondVerify(decision, identity) {
     this.mfaNetworkLog = [];
     this.window.setTitle('汽水音乐安全验证');
@@ -456,6 +725,7 @@ class QishuiAuthRuntime {
     this.window.center();
     this.window.show();
     this.window.focus();
+    let failed = false;
     try {
       return await this.window.webContents.executeJavaScript(
         `window.__qishuiSecondVerify(
@@ -471,8 +741,15 @@ class QishuiAuthRuntime {
         )`,
         true,
       );
+    } catch (error) {
+      // 组件加载/执行失败时不要立刻 hide：否则用户只看到窗口「一闪」，
+      // 既读不到错误也来不及操作。保留窗口（页面上已有错误文案），
+      // 由用户点「取消验证」或关闭窗口收尾。
+      failed = true;
+      throw error;
     } finally {
-      if (this.window && !this.window.isDestroyed()) this.window.hide();
+      // 成功（验证完成）或用户取消 → 收起窗口；失败 → 保留以便阅读原因。
+      if (!failed && this.window && !this.window.isDestroyed()) this.window.hide();
     }
   }
 
@@ -501,6 +778,14 @@ class QishuiAuthRuntime {
       try {
         if (this._mfaDone && this._mfaToken === tokenKey) {
           verified = { status: true };
+        } else if (this._mfaStopToken && this._mfaStopToken === tokenKey) {
+          // 该 token 的二次验证已终止（组件失败 / 用户取消）：不再重弹、也不再
+          // 请求上游。否则每 2 秒轮询都会重新触发 2046，上游按频率判
+          // error_code 7（rate_limited），限流窗口永远不结束。
+          const cached = new Error(this._mfaStopMessage || '二次验证未完成');
+          cached.code = this._mfaStopCode || 'QISHUI_MFA_CANCELLED';
+          cached.cached = true;
+          throw cached;
         } else if (this._mfaPromise && this._mfaToken === tokenKey) {
           verified = await this._mfaPromise;
         } else {
@@ -519,11 +804,14 @@ class QishuiAuthRuntime {
             : '安全验证组件加载失败',
         );
         error.code = 'QISHUI_MFA_FAILED';
+        this._markMfaStop(tokenKey, error.code, error.message);
         throw error;
       }
       if (!verified || verified.status !== true) {
         const error = new Error(verified && verified.message || '二次验证未完成');
         error.code = 'QISHUI_MFA_CANCELLED';
+        // 用户取消同样是终止态：不记住的话，下一次轮询会把窗口再弹一次。
+        this._markMfaStop(tokenKey, error.code, error.message);
         throw error;
       }
       this._mfaDone = true;
@@ -553,8 +841,34 @@ class QishuiAuthRuntime {
       }
     }
     Object.assign(current, parseCookieString(sessionCookie));
+    // 合并主进程从 Set-Cookie 响应头直接留存的登录 cookie。
+    // authSession 的 cookie jar 可能因 SameSite 拒绝跨站写入而为空，
+    // 这条独立来源保证确认态仍能拿到 sessionid / sid_tt。
+    for (const pair of (this._checkQrSetCookiePairs || [])) {
+      const idx = pair.indexOf('=');
+      if (idx <= 0) continue;
+      const name = pair.slice(0, idx).trim();
+      const value = pair.slice(idx + 1).trim();
+      if (name && value) current[name] = value;
+    }
     if (generation !== this.qrGeneration) return;
-    updateConfig({ cookie: buildCookieString(current), msToken: this.msToken });
+    const cookie = buildCookieString(current);
+    try {
+      const _envCookieFile = process.env.KUGOU_COOKIE_FILE || process.env.COOKIE_FILE || '';
+      const _logPath = _envCookieFile
+        ? path.join(path.dirname(_envCookieFile), 'cookie-debug.log')
+        : path.join(app.getPath('userData'), 'cookie-debug.log');
+      // 只记名称与是否含登录 cookie，绝不记值。
+      const names = Object.keys(current);
+      const hasLogin = /(?:^|;\s*)(?:sessionid|sessionid_ss|sid_guard|sid_tt|uid_tt|uid_tt_ss)=/i.test(cookie);
+      fs.appendFileSync(
+        _logPath,
+        '[' + new Date().toISOString() + '] [QishuiPersist] hasLogin=' + hasLogin +
+        ' count=' + names.length + ' names=' + names.join(',') + '\n',
+        'utf8',
+      );
+    } catch (_) {}
+    updateConfig({ cookie, msToken: this.msToken });
   }
 
   async clear() {
@@ -562,6 +876,9 @@ class QishuiAuthRuntime {
     this._mfaToken = '';
     this._mfaDone = false;
     this._mfaPromise = null;
+    this._mfaStopToken = '';
+    this._mfaStopCode = '';
+    this._mfaStopMessage = '';
     if (this.authSession) {
       await this.authSession.clearStorageData({
         storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers'],
@@ -617,4 +934,11 @@ module.exports = {
   checkQrConnect,
   clear,
   constants: { API_BASE, AID, APP_VERSION, AUTH_PARTITION },
+  // 仅供探针/诊断使用：拿到已初始化的 runtime 实例，用来验证
+  // ensureHostPageFresh() 这类内部自愈逻辑。生产代码不依赖这个出口。
+  __getRuntime: () => runtime,
+  // 仅供探针/诊断使用：只把 host 页拉起来（装 CORS hook + 就绪 bdms），
+  // 不发起任何业务请求。这样探针验证「组件内 withCredentials 请求能否拿到
+  // 响应」时，不会被一次真实的 get_qrcode 调用打上游、也不会触发限流。
+  __initialize: initSignEngine,
 };

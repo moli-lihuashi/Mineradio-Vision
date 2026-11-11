@@ -172,9 +172,63 @@
         description: meta.description || '',
         enabled: !!enabledMap[id],
         blocked: pluginBlocked[id] || null,
+        pending: !!meta.pending,
         version: meta.version || '0.0.0'
       };
     });
+  }
+
+  /* 磁盘上有、但从未被用户启用过的插件：只登记元信息，**不执行源码**。
+   * 为什么不直接 eval：插件文件是任意 JS，模块顶层就会调 registerPlugin，
+   * 求值即执行 —— 以前是「放进目录 = 重启就执行」，与开关状态无关。
+   * 现在必须用户显式点过启用，才会真正读取并求值。 */
+  var pendingPlugins = {};   // id → { id, source }
+
+  function registerPendingPlugin(plugin) {
+    var id = String(plugin.id || '');
+    if (!id || pluginRegistry[id]) return;   // 内置或已求值的不覆盖
+    pluginRegistry[id] = {
+      id: id,
+      name: id,
+      description: '未加载：点开关启用后才会读取并执行该脚本',
+      version: '',
+      setup: null,
+      pending: true
+    };
+    pendingPlugins[id] = { id: id, source: plugin.source };
+    if (enabledMap[id] == null) enabledMap[id] = false;
+    writeEnabledMap();
+  }
+
+  // 真正求值插件源码。返回是否注册成功。
+  function evalPluginSource(plugin) {
+    var id = String((plugin && plugin.id) || '');
+    if (!id || !plugin.source) return false;
+    var beforeKeys = Object.keys(pluginRegistry);
+    try {
+      (0, eval)(plugin.source + '\n//# sourceURL=liquidglass-plugin-' + String(id) + '.js\n');
+    } catch (e) {
+      console.warn('[LiquidGlassPluginLoad]', id, e);
+      return false;
+    }
+    /* 判据必须是「登记项不再是 pending」而不是「登记项存在」。
+     * pending 占位也是 pluginRegistry[id]，光看存在会把「求值成功但压根没调 registerPlugin
+     * 的空脚本」当成加载成功，面板随后显示「已启用」而实际什么都没发生。 */
+    var entry = pluginRegistry[id];
+    if (entry && !entry.pending) return true;
+    /* 文件名和插件自己声明的 id 不一致：注册发生在别的 id 上，
+     * 这时把文件名占位（pending 幽灵项）清掉，否则面板会多出一条永远点不开的条目。 */
+    var newKeys = Object.keys(pluginRegistry).filter(function (k) {
+      return beforeKeys.indexOf(k) < 0;
+    });
+    if (newKeys.length) {
+      if (entry && entry.pending) {
+        delete pluginRegistry[id];
+        delete pendingPlugins[id];
+      }
+      return true;
+    }
+    return false;
   }
 
   function registerPlugin(meta, setupFn) {
@@ -229,6 +283,31 @@
 
   function setPluginEnabled(id, enabled) {
     if (!pluginRegistry[id]) return false;
+    /* pending 插件：源码还没被求值过，setup 是 null。
+     * 先真正执行源码（这一步才会调 registerPlugin 拿到 setupFn），再走下面的正常启用路径。
+     * 求值失败就保持关闭，绝不让面板显示「已启用」却什么都没发生。 */
+    if (enabled && pluginRegistry[id].pending) {
+      var pendingEntry = pendingPlugins[id];
+      /* enabledMap 在 registerPlugin 里会被读到：此刻它已是 true（用户刚点的），
+       * 所以 registerPlugin 自己就会把 setup 跑掉。这里必须先记下来，
+       * 否则下面再跑一次 setup = 同一块 root 挂两套玻璃，帧率与延迟直接翻倍。 */
+      if (!pendingEntry || !evalPluginSource(pendingEntry)) {
+        enabledMap[id] = false;
+        writeEnabledMap();
+        return false;
+      }
+      delete pendingPlugins[id];
+      /* 插件自己声明的 id 与文件名不一致：注册落在别的 id 上，本 id 已被清掉。 */
+      if (!pluginRegistry[id] || pluginRegistry[id].pending) {
+        enabledMap[id] = false;
+        writeEnabledMap();
+        return false;
+      }
+      enabledMap[id] = true;
+      writeEnabledMap();
+      /* setup 已由 registerPlugin 执行；若被宿主区域挡下，enabledMap 已被它改回 false。 */
+      return enabledMap[id] !== false;
+    }
     enabledMap[id] = !!enabled;
     writeEnabledMap();
     if (enabled && typeof pluginRegistry[id].setup === 'function') {
@@ -419,10 +498,24 @@
       if (!(result && result.ok)) return;
       (result.plugins || []).forEach(function (plugin) {
         if (!plugin || !plugin.source) return;
-        try {
-          (0, eval)(plugin.source + '\n//# sourceURL=liquidglass-plugin-' + String(plugin.id || 'unknown') + '.js\n');
-        } catch (e) {
-          console.warn('[LiquidGlassPluginLoad]', plugin.id, e);
+        var id = String(plugin.id || '');
+        if (!id) return;
+        /* 求值即执行：插件文件的 registerPlugin 在模块顶层就跑了，与开关无关。
+         * 所以首次发现的插件**只登记元信息、不读源码**（pending），
+         * 让面板能显示它、用户能点开，但代码一行都不执行 —— 攻击面从
+         * 「目录可写 = 重启即执行」收缩到「用户显式点过启用」。 */
+        if (!pluginRegistry[id]) registerPendingPlugin(plugin);
+        /* 已求值过（内置插件，或上次本会话已加载）：不重复 eval，
+         * 重复执行会重跑 registerPlugin → 再挂一套玻璃，直接翻倍帧开销。 */
+        if (!pluginRegistry[id] || !pluginRegistry[id].pending) return;
+        /* 上次会话用户点过启用：这次启动才真正求值。
+         * 求值成功后 registerPlugin 会用新对象覆盖登记项，pending 自然消失。 */
+        if (enabledMap[id]) {
+          if (evalPluginSource(plugin)) delete pendingPlugins[id];
+          else {
+            enabledMap[id] = false;
+            writeEnabledMap();
+          }
         }
       });
     } catch (e) {

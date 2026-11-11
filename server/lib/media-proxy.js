@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 // 媒体代理与 API 鉴权：
 //   · 出站 HTTP 只允许白名单 CDN（PROXY_MEDIA_HOST_SUFFIXES），并且**逐跳**复核重定向目标，
 //     防白名单主机用 302 把请求带进内网 / 本机 / 云元数据地址（SSRF）
@@ -126,6 +128,15 @@ module.exports = function createMediaProxy(deps) {
     return String(pathname || '').startsWith('/api/');
   }
 
+  // 常量时间比较：`===` 在首个不同字节处提前返回，逐字节计时差可被用来还原 token。
+  // 本服务只监听环回、攻击面有限，但比较成本几乎为零，没有理由留着这个侧信道。
+  function tokenEqualsConstantTime(a, b) {
+    const bufA = Buffer.from(String(a == null ? '' : a), 'utf8');
+    const bufB = Buffer.from(String(b == null ? '' : b), 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    try { return crypto.timingSafeEqual(bufA, bufB); } catch (_) { return false; }
+  }
+
   function assertApiAuth(req, pathname, searchParams) {
     if (!requiresApiAuth(pathname)) return true;
     const headerToken = String(req.headers['x-mineradio-token'] || '').trim();
@@ -134,7 +145,10 @@ module.exports = function createMediaProxy(deps) {
       queryToken = String(searchParams.get('token') || searchParams.get('t') || '').trim();
     }
     const token = headerToken || queryToken;
-    return token && token === getApiToken();
+    if (!token) return false;
+    const expected = getApiToken();
+    if (!expected) return false;
+    return tokenEqualsConstantTime(token, expected);
   }
 
   function audioProxyHeadersFor(audioUrl, range) {

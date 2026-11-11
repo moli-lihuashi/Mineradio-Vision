@@ -4,6 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <script>
+      // 页面版本号：主进程用它判断「窗口里驻留的页面是否已过期」。
+      // 背景：_initialize() 只在首次建窗口时 loadURL 一次，之后页面 JS 常驻内存；
+      // 磁盘上的 security_host.html 更新后，旧实例仍跑旧逻辑（组件后缀回退修不上）。
+      // 主进程比对不一致时会重载本页，使修复无需重启应用即可生效。
+      // 改动本文件里任何会进入主流程的逻辑时，请同步 +1。
+      window.__qishuiHostVersion = 3;
       // Install the observer before sdk-glue/bdms. It records field names and
       // lengths only, never credential values, so first-run bootstrap can be
       // reconstructed without leaking security state into diagnostics.
@@ -179,6 +185,18 @@
         return new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open(request.method || 'GET', request.url, true);
+          // 必须带凭据：主进程的二维码轮询（get_qrcode / check_qrconnect）
+          // 全走这个 XHR。上游在 status=confirmed 时通过 Set-Cookie 下发
+          // sessionid / sid_tt 等登录 cookie，跨源 XHR 不带 withCredentials
+          // 时 Chromium 会**直接丢弃**这些 Set-Cookie，于是
+          // persistSessionCookies() 从 authSession 里什么都抓不到、
+          // hasLoginCookie() 恒 false，手机已确认却被判「二维码已过期」。
+          //
+          // 组件内部 axios 自带 withCredentials:!0，但那是另一个 XHR 实现，
+          // 覆盖不到主进程这条轮询链路，所以这里必须单独开。
+          // 主进程的 onHeadersReceived 已注入 ACAO=<selfOrigin> +
+          // Access-Control-Allow-Credentials:true，两者是配对生效的。
+          xhr.withCredentials = true;
           for (const [name, value] of Object.entries(request.headers || {})) {
             xhr.setRequestHeader(name, String(value));
           }
@@ -240,29 +258,74 @@
           .some(item => host === item || host.endsWith('.' + item));
       }
 
-      function loadVerifyScript(url) {
+      // 上游 2046 决策里的 url 可能是「无后缀」形式
+      // （实测：.../second_verification_web/dist/index.umd.production），
+      // 该地址直连返回 404，真实文件是同级 index.umd.production.js（200）。
+      // 浏览器 <script> 拿不到 404 的原因，只会触发 onerror，用户看到的就是
+      // 「安全验证组件加载失败」。因此按候选序列依次尝试，首个成功即返回。
+      function verifyScriptCandidates(url) {
+        const list = [];
+        let parsed = null;
+        try { parsed = new URL(String(url)); } catch (_) {}
+        if (!parsed) return list;
+        list.push(parsed.toString());
+        // 路径末段没有扩展名（或不是 .js）时，补 .js 再试一次。
+        if (!/\.js$/i.test(parsed.pathname)) {
+          const withJs = new URL(parsed.toString());
+          withJs.pathname = withJs.pathname + '.js';
+          if (withJs.toString() !== parsed.toString()) list.push(withJs.toString());
+        }
+        return list;
+      }
+
+      function loadOneScript(url) {
         return new Promise((resolve, reject) => {
-          let parsed = null;
-          try { parsed = new URL(String(url)); } catch (_) {}
-          if (!parsed || parsed.protocol !== 'https:') {
-            reject(new Error(`二次验证组件必须使用 https：${safeUrl(url)}`));
-            return;
-          }
-          if (!verifyScriptHostAllowed(parsed.hostname)) {
-            reject(new Error(
-              `二次验证组件域名不在白名单：${parsed.hostname}` +
-              '（确认域名可信后可设置 MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS 追加）',
-            ));
-            return;
-          }
           const script = document.createElement('script');
           script.type = 'text/javascript';
-          script.crossOrigin = 'anonymous';
-          script.src = parsed.toString();
-          script.onload = resolve;
-          script.onerror = () => reject(new Error(`二次验证组件加载失败：${safeUrl(url)}`));
+          // 不要设 crossOrigin='anonymous'：那会把组件脚本变成 CORS 请求，
+          // 而 CORS 头只对固定域名注入（主进程白名单之外的宿主拿不到 ACAO），
+          // 结果是脚本必加载失败 → 验证窗口 show 后立刻 hide（用户看到「一闪」）。
+          // 经典 <script> 加载不触发 CORS 预检，安全边界由 https + 域名白名单保证。
+          script.src = url;
+          script.onload = () => resolve(url);
+          script.onerror = () => {
+            // 失败后移除节点，避免残留的 error 节点影响后续候选与重试。
+            try { script.remove(); } catch (_) {}
+            reject(new Error(`二次验证组件加载失败：${safeUrl(url)}`));
+          };
           document.head.appendChild(script);
         });
+      }
+
+      async function loadVerifyScript(url) {
+        const candidates = verifyScriptCandidates(url);
+        if (!candidates.length) {
+          throw new Error(`二次验证组件 URL 无效：${safeUrl(url)}`);
+        }
+        // 每个候选都要单独过安全校验：补 .js 不能绕过 https / 域名白名单。
+        for (const candidate of candidates) {
+          const parsed = new URL(candidate);
+          if (parsed.protocol !== 'https:') {
+            throw new Error(`二次验证组件必须使用 https：${safeUrl(candidate)}`);
+          }
+          if (!verifyScriptHostAllowed(parsed.hostname)) {
+            throw new Error(
+              `二次验证组件域名不在白名单：${parsed.hostname}` +
+              '（确认域名可信后可设置 MINERADIO_QISHUI_VERIFY_SCRIPT_HOSTS 追加）',
+            );
+          }
+        }
+        let lastError = null;
+        for (const candidate of candidates) {
+          try {
+            trace('verifyScript.load', { url: safeUrl(candidate) });
+            return await loadOneScript(candidate);
+          } catch (error) {
+            lastError = error;
+            trace('verifyScript.failed', { url: safeUrl(candidate) });
+          }
+        }
+        throw lastError || new Error(`二次验证组件加载失败：${safeUrl(url)}`);
       }
 
       async function expandVerifyCenterDecision(originDecision, options) {

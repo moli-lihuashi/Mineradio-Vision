@@ -5,6 +5,8 @@
 - 方法：分域通读 + 逐条行号证据核验（高危项已人工复核）
 - 结论先行：**基础防护（contextIsolation / 静态路径穿越 / body 上限 / beatmap 哈希 / WE 协议白名单）写得规范；问题集中在「远程供应链信任」和「渲染进程失陷后的放大链」两处系统性缺口。**
 
+> **后续状态（2026-11-11）**：本报告是 2026-10-17 的审查快照，下文「#15 / #16 未做」是当时的判定，保留不改。该项已在真实扫码 + 二次验证环境完成：验证窗口恢复 `webSecurity: true`、`ACAO` 收窄到本页 origin 并配 `Allow-Credentials`、补齐 `Allow-Headers` 五个自定义头、注入前按小写名清上游 CORS 头。当时「关掉会断 MFA 链路」的顾虑属实，断链原因已查明并逐层修复（详见 `CHANGELOG.md` 的「未发布」章节与 `memory/2026-11-11.md`）。当时建议的「改走主进程 `net.request`」未采用，实际走的是补全 CORS + 显式凭据，安全性与可用性均已在真实链路验证。
+
 ---
 
 ## 一、安全问题
@@ -312,6 +314,57 @@
 - **#39** `07-fx/00-preset-archive-data.js`：删除第一份 `renderUserFxArchives`（被后一份同名声明的遮蔽，永不生效）。删除后全文件仅剩 1 处定义，行为不变（后声明者原本就赢）。
 - **#40** `05-playback/03a-home-dashboard.js`：删掉声明后从未使用的 `homeDashboardStableCoverRequests`（grep 全仓库仅此一处声明）。
 - **#41** `06-fx/00-liquidglass-manager.js`：删掉无任何引用点的 `searchResults` 预设（`01-liquidglass-config.js` 只消费 `fxPanel/searchBox/homeCard/listeningToday/bottomBar`）。保留 `04-liquidglass-plugin-api.js` 的预设枚举接口不受影响。
+
+### 补做：#20 / #21 / #27 / #29（首轮漏记，本轮补齐）✅
+
+首轮修复漏掉了这四项，问题清单里一直挂着。本轮按「改动小、无需真机验证」优先的顺序补齐。
+
+#### #21 HTTP 边界三件套（DNS rebinding）✅
+
+这是本批唯一「能被远程利用」的一项，三个子问题必须一起修，缺任一项都不成立：
+
+1. **Host 头白名单**（`server/lib/http-server.js`，`handleRequest` 最前面）
+   新增 `hostHeaderIsLoopback()`：只放行 `127.0.0.1` / `localhost` / `::1`（含 `[::1]` 字面量与任意端口），其余一律 `403 BAD_HOST`，且**在 CORS 与任何响应写出之前**拒绝（连 ACAO 都不发，不给攻击者留读响应的一半条件）。
+   为什么必须是 Host 而不是 CORS：rebinding 后浏览器以 `evil.com` 的 origin 发请求，**同源成立、不走 CORS 检查**，任何反射策略都救不了；只有 Host 头还留着 `evil.com`。
+   `desktop/main.js:3524` 原本已强制 `HOST='127.0.0.1'`，但那只是「不绑 0.0.0.0」，挡不住 rebinding —— 这一层补的正是那个缺口。需要局域网访问时用 `MINERADIO_ALLOW_NON_LOOPBACK_HOST=1` 显式解除，默认 fail-closed。
+
+2. **CORS 由「任意环回端口」收紧为「精确本服务 origin」**
+   新增 `isOwnOrigin()`：协议必须是 `http:`、端口必须等于本服务 `PORT`、主机名必须是环回字面量。原来判据是 `/^http:\/\/127\.0\.0\.1:/`，本机任何端口的页面（包括随手起的另一个 dev server）都能拿到带 ACAO 的响应去读 token 注入页。
+
+3. **`/` 与 `/index.html` 加 token 门禁**
+   `serveIndexHtml` 会把 `API_TOKEN` 明文注入 HTML（`server.js:571`），是全站唯一的 token 出处，而静态路由原本完全不过门禁 —— `GET /` 即拿 token。现在要求 `?token=` 且用常量时间比较（`safeTokenEquals` → `crypto.timingSafeEqual`），无 token / 空期望值一律 403。
+   配套必须改主进程：`loadMainWindowWithRetry` 的 `baseUrl` 原本不带 token，加门禁后不同步改就是启动白屏。已在 `desktop/main.js:3719-3723` 拼上 `&token=`（`ensureLocalServerStarted` 先于它执行，token 已就位）。
+   **已知影响**：手动在浏览器开 `localhost:3000` 会 403 —— 这是有意的 fail-closed。
+
+#### #20 token 常量时间比较 ✅
+`server/lib/media-proxy.js` 的 `assertApiAuth` 改走 `tokenEqualsConstantTime`（长度不等直接 false，等长才 `crypto.timingSafeEqual`；长度本身不是秘密），并补两处 fail-closed：`if (!token) return false` / `if (!expected) return false`。原先的 `===` 在首个不同字节处提前返回，逐字节计时差可被用来还原 token —— 本服务只监听环回、攻击面有限，但比较成本几乎为零，没理由留着侧信道。
+（`/api/audio`、`/api/cover` 走 `?token=` 的设计保留：这两个是 `<audio src>` / `<img src>` 直接发起的请求，没法带自定义头。已在报告中记为已知取舍。）
+
+#### #27 错误信息不再直回客户端 ✅
+`server/routes/update.js` 共 7 处：`/api/update/latest`、`/download`、`/patch` 三个 catch，beatmap 读/写，cuefield transition、cuefield feedback 读/写。全部改为稳定错误码（`UPDATE_CHECK_FAILED` / `UPDATE_DOWNLOAD_START_FAILED` / `UPDATE_PATCH_START_FAILED` / `BEAT_CACHE_READ_FAILED` / `BEAT_CACHE_WRITE_FAILED` / `CUEFIELD_TRANSITION_FAILED` / `CUEFIELD_FEEDBACK_READ_FAILED` / `CUEFIELD_FEEDBACK_SAVE_FAILED`），细节转服务端日志。
+复核：`grep err.message` 后该文件只剩注释与日志行；`00-update-preview.js` 只把 `error` 当提示文本显示、无逻辑分支依赖，改稳定码不构成回归。
+`publicUpdateJob` 的 `filePath` **保留**：前端「打开安装包」按钮要用，且主进程 `mineradio-open-update-installer`（`main.js:3125-3137`）已有 `isTrustedMainWindowIpc` + `path.resolve` + `startsWith(updateDir + path.sep)` 三重校验。
+
+#### #29 插件改为「显式启用才求值」 ✅
+`public/js/modules/06-fx/04-liquidglass-plugin-api.js` 的 `loadDesktopLiquidGlassPlugins` 原本无条件 `(0, eval)(plugin.source)` —— 而插件文件的 `registerPlugin` 在模块顶层就调，**求值即执行**，与开关状态无关。等于把「往 `userData/plugins/liquidglass/` 放一个 .js」直接升级成「重启即代码执行」。
+
+改为 pending 模式：
+- 首次发现的插件只 `registerPendingPlugin()` 登记元信息（`pending: true`），**不读源码**；
+- 面板照常显示（否则用户永远看不到、也就永远无法启用），描述标为「未加载：点开关启用后才会读取并执行该脚本」；
+- 用户在面板里点启用 → `setPluginEnabled` 里先 `evalPluginSource()` 真正求值拿到 `setupFn`，再走正常启用路径。
+
+两个必须注意的坑（都已在代码注释里写明）：
+- **不能重复跑 setup**：求值后 `registerPlugin` 会按当时的 `enabledMap[id]=true` 自己跑一遍 setup，`setPluginEnabled` 若继续往下走就是同一块 root 挂两套玻璃 —— 帧率与延迟直接翻倍。所以 pending 分支求值成功后**提前 return**。
+- **`evalPluginSource` 的判据是「登记项不再是 pending」而不是「登记项存在」**：pending 占位本身也是 `pluginRegistry[id]`，光看存在会把「求值成功但压根没调 registerPlugin 的空脚本」当成加载成功。另外插件自己声明的 id 与文件名不一致时，注册会落在别的 id 上，此时要清掉文件名占位（幽灵项），否则面板多出一条永远点不开的条目。
+
+`public/index.html` 的 CSP 含 `'unsafe-eval'`（MediaPipe / ONNX wasm 编译必需），所以这道收缩是**逻辑层**的，不是 CSP 层 —— 值得记下来，避免以后有人以为 CSP 已经挡住了。
+
+#### 本批验证
+- `node --check`：6 个改动文件全过。
+- 新增 `tests/http-security-boundary.test.js`（20 条，真起 server 真发请求）：Host 放行/拒绝/缺失、拒绝时无 ACAO、`[::1]`、CORS 只回显本服务 origin、`/` 与 `/index.html` 的 token 门禁（无/错/对三种）、非首页静态资源不受影响、`/api/*` 鉴权、`assertApiAuth` 常量时间与 fail-closed、源码里不得退回 `===`、主进程导航必须带 token、插件 pending 机制与「不得重复跑 setup」。
+- 新增 `scripts/check-startup-token-gate.js`：真启 Electron（支持 `--exe` 指向打包版，离线环境可用）→ 断言 URL 带 token、`#bottom-bar`/`#search-box` 渲染、`window.__MINERADIO_API_TOKEN__` 有值、用该 token 打 `/api/login/status` 得 200。**实测 PASS**（token 长度 64，`/api/login/status` 返回 200）。
+- 全量 74 个测试文件：4 个失败（`home-dashboard-update` / `home-hero-mp4-platform-recommend` / `search-frontend-pagination` / `ui-default-theme-shelf-layer`），已用 `git stash` 验证为**基线既有失败**，与本次改动无关（失败数完全一致）。
+- `node scripts/sync-dist-app.js` 同步 690 个文件，6 个改动文件双端 sha256 一致。
 
 ### 未实施（附原因）
 - **#15 `qishui-auth-v6.js:268` `webSecurity: false`** 与 **#16 `ACAO: *` / `Expose-Headers: *`**：两者是同一个设计的两面——验证页从 `http://127.0.0.1:<port>` 发起，`window.__qishuiRequest` 直接 XHR 到 `https://api.qishui.com`，且流程依赖 cookie 随会话自动携带；一旦打开 `webSecurity`，这些请求会变成需要 CORS 的跨源请求，而注入的 `ACAO: *` 对**携带凭据**的请求本身又不合法 → 登录链路会断。要真正关掉它必须把 `__qishuiRequest` 改为主进程 `net.request`（走同一 partition 的 cookie，无 CORS），并假定官方二次验证组件在自己的 iframe 里带完整 CORS 头——这两点都只能在真实汽水账号 + 触发 MFA 的环境里验证，静态推导不足以判定。本批只切断了该窗口内**唯一**的任意代码注入点（#17），把 `webSecurity:false` 的实际暴露面从「响应被篡改即任意 JS」缩到「官方组件自身代码」。在拿不到真实 MFA 会话前，改 #15/#16 属于「交付一个可能直接让用户登不上的改动」，故不做。

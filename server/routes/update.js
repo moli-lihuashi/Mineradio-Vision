@@ -62,9 +62,13 @@ module.exports = function register(ctx) {
       try {
         sendJSON(res, await fetchLatestUpdateInfo());
       } catch (err) {
+        // 不把 err.message 回给客户端：它可能带出上游 URL、内网主机名、文件绝对路径
+        // （例如 fetch 失败的 ENOTFOUND/ECONNREFUSED 会连解析目标一起进 message）。
+        // 客户端只拿稳定错误码，细节留在服务端日志里。
+        console.warn('[UpdateLatest] failed:', err && (err.stack || err.message) || err);
         sendJSON(res, {
-          ...localUpdateFallback(err.message || 'Update check failed', { configured: UPDATE_CONFIG.configured }),
-          error: err.message || 'Update check failed',
+          ...localUpdateFallback('Update check failed', { configured: UPDATE_CONFIG.configured }),
+          error: 'UPDATE_CHECK_FAILED',
         });
       }
       return;
@@ -77,7 +81,7 @@ module.exports = function register(ctx) {
         sendJSON(res, job, job.ok ? 200 : 400);
       } catch (err) {
         console.error('[UpdateDownload]', err);
-        sendJSON(res, { ok: false, error: err.message || 'UPDATE_DOWNLOAD_START_FAILED' }, 500);
+        sendJSON(res, { ok: false, error: 'UPDATE_DOWNLOAD_START_FAILED' }, 500);
       }
       return;
     }
@@ -98,7 +102,7 @@ module.exports = function register(ctx) {
         sendJSON(res, job, job.ok ? 200 : 400);
       } catch (err) {
         console.error('[UpdatePatch]', err);
-        sendJSON(res, { ok: false, error: err.message || 'UPDATE_PATCH_START_FAILED' }, 500);
+        sendJSON(res, { ok: false, error: 'UPDATE_PATCH_START_FAILED' }, 500);
       }
       return;
     }
@@ -140,7 +144,7 @@ module.exports = function register(ctx) {
             enabled: false,
             mode: 'memory-only',
             key,
-            reason: err.code || err.message || 'BEAT_CACHE_READ_FAILED',
+            reason: err.code || 'BEAT_CACHE_READ_FAILED',
             dir: info.dir,
           });
         }
@@ -157,7 +161,7 @@ module.exports = function register(ctx) {
             ok: false,
             enabled: false,
             mode: 'memory-only',
-            reason: err.code || err.message || 'BEAT_CACHE_WRITE_FAILED',
+            reason: err.code || 'BEAT_CACHE_WRITE_FAILED',
             dir: info.dir,
           });
         }
@@ -228,7 +232,7 @@ module.exports = function register(ctx) {
         // 4xx 会触发浏览器控制台 "Failed to load resource" 红字噪音
         sendJSON(res, {
           ok: false,
-          error: err && (err.code || err.message) || 'CUEFIELD_TRANSITION_FAILED',
+          error: err && (err.code || 'CUEFIELD_TRANSITION_FAILED') || 'CUEFIELD_TRANSITION_FAILED',
         }, 200);
       }
       return;
@@ -240,7 +244,7 @@ module.exports = function register(ctx) {
         try {
           sendJSON(res, { ok: true, stats: readCuefieldFeedbackStats(CUEFIELD_FEEDBACK_FILE) });
         } catch (err) {
-          sendJSON(res, { ok: false, error: err.message || 'CUEFIELD_FEEDBACK_READ_FAILED' }, 500);
+          sendJSON(res, { ok: false, error: 'CUEFIELD_FEEDBACK_READ_FAILED' }, 500);
         }
         return;
       }
@@ -250,7 +254,7 @@ module.exports = function register(ctx) {
           const record = appendCuefieldFeedback(CUEFIELD_FEEDBACK_FILE, body);
           sendJSON(res, { ok: true, record });
         } catch (err) {
-          sendJSON(res, { ok: false, error: err.code || err.message || 'CUEFIELD_FEEDBACK_SAVE_FAILED' }, 400);
+          sendJSON(res, { ok: false, error: err.code || 'CUEFIELD_FEEDBACK_SAVE_FAILED' }, 400);
         }
         return;
       }
