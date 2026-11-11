@@ -1,12 +1,87 @@
 # Changelog
 
+## v3.3.1 安全加固
+
+### 安全加固（补齐 2026-10-17 代码审查漏记的 #20 / #21 / #27 / #29）
+
+- **DNS rebinding 防线（#21）**：本地 HTTP 服务新增 Host 头白名单，只接受 `127.0.0.1` / `localhost` / `::1`，其余一律 `403 BAD_HOST` 且不发 CORS 头。此前 `HOST` 虽已锁死 `127.0.0.1`，但那挡不住 rebinding —— 攻击者域名 rebind 后浏览器以 `evil.com` 的 origin 发请求，同源成立、CORS 不参与判定，唯一可靠判据就是 Host 头。需要局域网访问时用 `MINERADIO_ALLOW_NON_LOOPBACK_HOST=1` 显式解除。
+- **CORS 收紧（#21）**：`Access-Control-Allow-Origin` 由「任意环回端口」改为只回显本服务自己的 origin（协议 http + 端口 === 本服务 PORT + 环回主机名）。此前本机任意端口的页面都能拿到带 ACAO 的响应。
+- **首页 token 门禁（#21）**：`/` 与 `/index.html` 现在要求 `?token=`（常量时间比较）。这两个是 `API_TOKEN` 明文注入 HTML 的唯一出处，原本静态路由完全不过鉴权，`GET /` 即拿 token。主进程 `loadMainWindowWithRetry` 已同步在导航 URL 拼 token。**行为变化**：手动用浏览器打开 `localhost:3000` 会 403，这是有意的 fail-closed。
+- **token 常量时间比较（#20）**：`assertApiAuth` 改用 `crypto.timingSafeEqual`，并补「空 token / 空期望值一律拒绝」两处 fail-closed。原 `===` 的逐字节提前返回可被计时侧信道利用。
+- **错误信息不外泄（#27）**：更新链、beatmap 缓存、cuefield 过渡共 7 处 `err.message` 直回客户端改为稳定错误码，细节转服务端日志。
+- **插件不再「放进目录即执行」（#29）**：LiquidGlass 插件改为 pending 模式 —— 磁盘上的插件文件首次发现时只登记元信息、不读取不执行；用户在面板里显式点启用后才求值。此前 `loadDesktopLiquidGlassPlugins` 无条件 `eval` 每个 .js，而插件的 `registerPlugin` 在模块顶层就调，等于「目录可写 = 重启即代码执行」。
+
+### #15 / #16：汽水验证窗口安全加固（已在真实扫码 + 二次验证环境验证）
+
+- **#15 已修**：验证窗口由 `webSecurity: false`（整个窗口关掉同源策略）改为 `webSecurity: true`。原先这个窗口会加载上游 2046 决策返回的远程脚本，同源策略失效时等于给持有登录 cookie 的窗口开了任意代码执行面。
+- **#16 已修**：`Access-Control-Allow-Origin` 由 `*` 改为只回显本页自己的 origin，并同时注入 `Access-Control-Allow-Credentials: true`（组件内部 axios 硬编码 `withCredentials:true`，`*` + 凭据是非法组合）。
+- 配套补齐：`Allow-Headers` 写全组件会发的 5 个自定义头；注入前按小写名删光上游自带的 `access-control-*` / `vary`（否则 `verify.zijieapi.com` 会留两个 ACAO，带凭据判定失败）；`decision.url` 走 https + 域名白名单；组件脚本补 `.js` 后缀回退。
+- **安全加固的连带修复**：把同源策略装回去之后，原本靠「门全拆」掩盖的链路问题全部暴露，逐一补齐——主进程轮询 XHR 开 `withCredentials`、从 `Set-Cookie` 响应头直接留存登录 cookie（跨站 `SameSite` 会拒写 cookie jar）、二次验证窗口去重三态与代际防重入锁、host 页版本自愈重载、登录弹窗状态类前置清理。
+- 真实链路结论：`error_code 7` 的「限流」解读已被多组探针证伪，语义仍未确认；`routes/qishui.js` 的 `status === '2'` 分支因上游真实状态是 `new`/`scanned`/`confirmed`/`expired` 而死代码化（详见「仍未收口」）。
+- 守卫：本批共新增 15 个真实 Electron 探针与 7 组静态守卫（`tests/*.test.js`），关键项均已反向自证；全量 `node scripts/run-tests.js` 通过。
+
+### 仍未收口（不影响登录，属清理项）
+
+- `error_code === 7` 仍沿用 `rate_limited` + 60s 重试的映射，仅为兼容前端既有文案；真实触发条件在离线探针里复现不出来，需真实链路取证后再定。
+- `routes/qishui.js` 的 `status === '2' → scanned` 分支已不命中（上游用 `scanned` 字面量），是死代码。
+- `_mfaDone` 之后无条件 `isResend` 重发会每轮打 2 个上游请求；不能简单跳过（会让响应停在 2046、前端退回「请扫码」），属已知但有意保留。
+- `server/qishui/auth.js` 把 7 当 `'wait'`，与路由的 `rate_limited` 并存；它的导出函数只在 `qishui-api.js` 再导出、无路由调用，是另一套未启用链路。
+- `server/lib/media-proxy.js` 的音频流仍用 `ACAO: *`（`<audio>` 跨源需要，且已过 token 门禁 + Host 白名单），与 #16 不是同一处。
+- 4 个测试列在 `KUGOU_SKIP_TESTS`（用户裁定保持原 Home 布局），是有意跳过，非回归。
+
 ## v3.3.1
 
-- 版本号递增发布（自 v3.3.0 起累积改动）：新增 Folia WebGL 玻璃、红心粒子场景、轨道过渡引擎、音乐缓存守卫、登录态自愈、播放源修订等。
+自 v3.3.0 基线累积的改动，近 600 个文件。除了下方本节的**安全加固**（其中 `webSecurity:false` 技术债已还清）外，这一版的功能亮点集中在「看得见的升级」上——视觉、动效、过渡和抗卡顿。用户只有知道升级了什么才会升级，这里说清楚每一块。
+
+### 🪟 Folia 全屏歌词舞台（默认启用）
+
+- **一整套 Folia 视觉化歌词界面**：不再只是以前那种读字型工具栏歌词，而是把歌词渲染成 14 套可切换的「歌词样式」——`classic / still / partita / tilt / claddagh / cappella / cadenza / fume / monet / pendolo / diorama / sonnet / tempera / lumiere`。每套都有独立的镜头、构图与入场/退场编排（tempera 是节目编排层：按语义分段，121 种 shot / 3 种转场 / 5 种装饰母题，seek 拖动定位依然精确）。
+- **多套背景玩法**：sora / latent / monet / noise-texture / nomand / url 等背景可切换；`folia-mods` 还带独立模组包（`visualizer-jump`、`nebbia`、`hanabi`、`machi`），清单式启停（禁用即不加载不注册，安全）。
+- **性能与回退**：与桌面歌词/壁纸同源；需动态 `import` 依赖的样式做成异步占位（pending），失败退回原生并显示原因，不会黑屏。FX 面板独占一页，可调样式、背景与动效强度。
+
+### 🧊 Folia WebGL 实时玻璃
+
+- 桌面歌词/壁纸的背景玻璃升级为 **WebGL 实时渲染**（`public/vendor/folia` + `public/folia-mods`），色彩与光晕质感远超以前纯 CSS 的效果。
+- **自愈回退**：CSS 桥实例停用时自动镜像回退到 CSS 玻璃层，避免背景发灰（此前 Folia 常发灰就是缺这条兜底）；`prefers-reduced-transparency`（系统「减少透明度」）时自动降级，尊重系统偏好。
+
+### ❤️ 红心粒子与收藏演出
+
+- **红心点击动效引擎（四套 + 随机）**：点红心不再是简单变色，而是粒子动画——
+  - `folia` 纸片楔形扇（14 个楔形扇隔一画一 + 纸色圆盘 + 双同心环）；
+  - `riso` 油墨灌满（心形从下往上灌色 + 香槟版错位套准 + 半调点）；
+  - `ring` 冲击波粒子（双环扩散 + 12 粒小心/星芒/光点径向炸开再上浮）；
+  - `star` 极简星芒（四向十字星 + 细环）；`off` 只变色不跳；默认 `random` 随机抽。
+- **收藏演出（整屏场景动画）**：`snow` 雪窗——窗外落雪，六角晶体落到玻璃上贴住化开；`birds` 鸟群——170 只椋鸟乱飞→收拢成形→盘旋→惊散。「收藏演出」与「红心动效」都在顶栏「皮肤」弹层里独立开关。
+
+### 🔀 轨道过渡引擎
+
+- **对标酷狗「歌曲过渡」效果矩阵**：四张卡片不是四套引擎，而是一套「曲末交接骨架 + 四组交接瞬间的音频包络配方」——`混音过渡 / 渐进过渡 / 无缝过渡 / 立体声转场`，前代数帧都是 Canvas 逐像素算法（交晖、紫白光环、紫白光缝、紫白光带），不加载任何图片/字体/库、不发网络请求。
+- **无缝衔接 Gapless Handoff**：曲末窗口内提前解析下一首地址、用隐藏 `<audio>` 静音预热字节（只 `load()` 不 `play()`），当前曲 `onended` 后才交接，全程只有一个音源发声——省掉 `/api/song/url` 最慢往返，切歌更顺。
+- 过渡编排层持有总开关、模式与每模式可调参数，长淡出时同步放大 `trackEndFadeLookaheadSec`。
+
+### 🔒 播放源修订 + 稳健性（不卡顿、不崩）
+
+- **媒体失败分类器**：换源失败先分类再动作，而不是一刀切递归换源。
+- **播放源 revision 追踪 + 换源事务复用**：反复点同一首歌复用同一事务，缓解旧「渲染进程崩溃」（`render-process-gone` / OOM）问题。
+- **音乐缓存守卫**：新增 cache-prune / media-cache-guard / build-provenance / log-buffer 等服务端模块。
+
+### 🔐 登录自愈
+
+- cookie 只在登录成功时写一次、dfid 不再刷新；token 轮换或返回码异常后自动自愈，减少「明明登着却要我重登」的体验断裂。
+
+### 🖼 细节修复
+
+- 桌面歌词多行布局、红心锁定图标、播放列表缓存迁移、搜索模式标签页、诊断面板等一批界面与稳定性修复。
+
+---
 
 ## v3.3.0
 
-- （内部构建基线，正式变更见 v3.3.1 说明）
+内部构建基线（v3.3.1 的承载版，正式变更见上）。
+
+- 本地音乐库（`mineradio-local://` 媒体协议）、内置歌单库（多平台混合曲目 + 本地文件）合入本仓库。
+- 服务端四个单体拆分为分层模块族；WebGL/SwiftShader 无显卡兜底启用。
+- 该项在 v3.3.1 及后续累积中得到完善，差异主要在「基础能力上线」。
 
 ## v3.2.0
 
