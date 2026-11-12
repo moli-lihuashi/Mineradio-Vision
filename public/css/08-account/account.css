@@ -542,3 +542,181 @@ body.login-guide-active #login-guide-canvas{opacity:1}
 .visual-guide-actions .primary:hover{border-color:rgba(255,83,103,.62);background:rgba(255,83,103,.20)}
 @keyframes visual-guide-scan{0%,100%{transform:translateY(0);opacity:.26}42%{opacity:.72}70%{transform:translateY(82px);opacity:.18}}
 
+/* ===== Folia 风格登录页（借鉴 folia-major-main 的登录窗口版面） =====
+   只在 .folio-login 上生效；旧 DOM id / class / onclick / 分支代码全部原样保留。
+   左列用 absolute 钉在 .login-content 左侧，右侧靠 padding-left 让位，
+   因此不需要重排任何现有节点，也不会破坏 5 家共用的二维码 / Cookie 面板。 */
+#login-modal .modal.folio-login{width:min(772px,calc(100vw - 40px))}
+#login-modal .folio-login .login-content{padding-left:212px}
+#login-modal .folio-login .login-platform-list{
+  position:absolute!important;left:0!important;top:0!important;bottom:0!important;width:212px!important;
+  flex-direction:column!important;flex-wrap:nowrap;gap:4px;
+  padding:10px!important;border:0!important;border-right:1px solid rgba(255,255,255,.08)!important;
+  border-radius:0!important;background:rgba(0,0,0,.20)!important;overflow-y:auto
+}
+#login-modal .folio-login .login-platform-list button{
+  flex:0 0 auto;width:100%;height:52px!important;min-height:52px!important;
+  justify-content:flex-start!important;gap:10px;padding:0 12px!important;border-radius:11px!important;
+  position:relative
+}
+#login-modal .folio-login .login-platform-list button.active::before{
+  display:block!important;content:"";position:absolute;left:0;top:11px;bottom:11px;width:3px;
+  border-radius:3px;background:var(--folio-row-color,rgba(255,255,255,.6))
+}
+#login-modal .folio-login .login-platform-list button.netease{--folio-row-color:#d95b67}
+#login-modal .folio-login .login-platform-list button.qq{--folio-row-color:#a3c34a}
+#login-modal .folio-login .login-platform-list button.kugou{--folio-row-color:#2563eb}
+#login-modal .folio-login .login-platform-list button.qishui{--folio-row-color:#19a58c}
+#login-modal .folio-login .login-platform-list button.spotify{--folio-row-color:#1ed760}
+#login-modal .folio-login .login-platform-list button .provider-logo{
+  width:30px;height:30px;border-radius:50%;font-size:11px;font-weight:800;flex:none;
+  display:flex;align-items:center;justify-content:center;color:#fff
+}
+#login-modal .folio-login .login-platform-list button.netease .provider-logo{background:#d95b67}
+#login-modal .folio-login .login-platform-list button.qq .provider-logo{background:#a3c34a}
+#login-modal .folio-login .login-platform-list button.kugou .provider-logo{background:#2563eb}
+#login-modal .folio-login .login-platform-list button.qishui .provider-logo{background:#19a58c}
+#login-modal .folio-login .login-platform-list button.spotify .provider-logo{background:#1ed760;color:#062a12}
+#login-modal .folio-login .login-platform-list button .login-provider-text{
+  display:flex;flex-direction:column;gap:2px;min-width:0;text-align:left
+}
+#login-modal .folio-login .login-platform-list button .login-provider-text b{font-size:12.5px}
+#login-modal .folio-login .login-platform-list button .login-provider-state{
+  display:block!important;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.38)
+}
+#login-modal .folio-login .login-platform-list button .login-provider-state.on{color:#7ee2a0}
+#login-modal .folio-login.login-provider-spotify .login-bg-layer[data-login-bg="spotify"]{
+  background:radial-gradient(62% 120% at 100% 0%,rgba(30,215,96,.18),transparent 72%)
+}
+
+/* Spotify 浏览器授权面板 */
+#login-modal .folio-spotify-hero{display:flex;gap:20px;align-items:center;padding:2px 0 12px;border-bottom:1px solid rgba(255,255,255,.07)}
+#login-modal .folio-spotify-hero[hidden]{display:none!important}
+#login-modal .folio-browser-tile{
+  width:132px;height:110px;flex:0 0 132px;border-radius:12px;
+  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);
+  display:flex;align-items:center;justify-content:center
+}
+#login-modal .folio-browser-window{
+  width:104px;height:78px;border-radius:8px;border:1px solid rgba(255,255,255,.16);
+  position:relative;display:flex;align-items:center;justify-content:center;padding-top:14px;box-sizing:border-box
+}
+#login-modal .folio-browser-window::before{content:"";position:absolute;left:0;right:0;top:14px;height:1px;background:rgba(255,255,255,.12)}
+#login-modal .folio-browser-window::after{
+  content:"";position:absolute;left:8px;top:6px;width:3px;height:3px;border-radius:50%;
+  background:rgba(255,255,255,.34);box-shadow:6px 0 0 rgba(255,255,255,.34),12px 0 0 rgba(255,255,255,.34)
+}
+#login-modal .folio-browser-window .spotify-mark{
+  width:28px;height:28px;border-radius:50%;background:#1ed760;color:#062a12;
+  font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center
+}
+#login-modal .folio-hero-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+#login-modal .folio-seg{
+  display:inline-flex;align-self:flex-start;gap:2px;padding:3px;border-radius:10px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08)
+}
+#login-modal .folio-seg button{
+  border:0;background:transparent;color:rgba(255,255,255,.55);font-family:inherit;
+  font-size:11px;padding:5px 10px;border-radius:8px;cursor:pointer;white-space:nowrap
+}
+#login-modal .folio-seg button.on{background:rgba(255,255,255,.14);color:#fff}
+#login-modal .folio-hero-copy h3{margin:0;font-size:19px;font-weight:750;color:rgba(255,255,255,.95)}
+#login-modal .folio-hero-copy p{margin:0;font-size:11.5px;line-height:1.7;color:rgba(255,255,255,.56)}
+#login-modal .folio-primary-btn{
+  align-self:flex-start;border:0;border-radius:9px;background:#f7e05f;color:#1d1b08;
+  font-family:inherit;font-size:12px;font-weight:750;padding:8px 14px;cursor:pointer
+}
+#login-modal .folio-primary-btn:hover{background:#ffea73}
+#login-modal .folio-steps{display:flex;gap:12px;font-size:10px;color:rgba(255,255,255,.34);flex-wrap:wrap}
+#login-modal .folio-steps b{color:#7ee2a0;font-weight:650}
+/* 主题层 prismal-chrome.css 给「横向胶囊 tab」写了
+   `#login-modal .login-platform-list.prism-lens-host button{border-radius:999px!important}`，
+   特异性与本文件的竖列规则相同又都带 !important，谁后加载谁赢 → 竖列被画成胶囊。
+   这里用 html body 前缀把特异性提到 (1,4,2)，稳定压过主题层，并顺手清掉 0.55 白边与旧阴影。 */
+html body #login-modal .folio-login .login-platform-list{
+  padding:10px!important;border-radius:0!important;gap:4px!important
+}
+html body #login-modal .folio-login .login-platform-list button{
+  height:52px!important;min-height:52px!important;border-radius:11px!important;
+  border:1px solid transparent!important;background:transparent!important;box-shadow:none!important
+}
+html body #login-modal .folio-login .login-platform-list button:hover{
+  background:rgba(255,255,255,.045)!important;border-color:transparent!important
+}
+html body #login-modal .modal.folio-login .login-platform-list button.active{
+  border-color:rgba(255,255,255,.09)!important;background:rgba(255,255,255,.075)!important;
+  box-shadow:none!important;color:#fff!important
+}
+html body #login-modal .modal.folio-login .login-platform-list button.active::before{
+  display:block!important;content:""!important;position:absolute!important;
+  left:0!important;top:12px!important;bottom:12px!important;width:3px!important;
+  border-radius:3px!important;background:var(--folio-row-color,rgba(255,255,255,.6))!important
+}
+html body #login-modal .folio-login .login-platform-list button:focus{outline:none!important}
+/* 主题层 06-fx/05-prismal-chrome.js 会给 #login-platform-tabs 注入一个
+   <div class="prism-lens-pill">（999px 胶囊 + 淡白底 + 白边），贴住当前 active 行做滑动高亮。
+   横向 tab 时它是主角，但竖列版面里我们自己的 .active 行已经有淡底 + 竖条，
+   叠在一起就是「两个框」。竖列下直接关掉它的显示，选中态只由行本身表达。 */
+html body #login-modal .modal.folio-login .login-platform-list > .prism-lens-pill{
+  display:none!important
+}
+/* 未选中行必须完全无框：hover/焦点/主题层的背景与描边一律压掉，
+   否则鼠标停过的行会残留一个框，看起来像「同时选中了两个」。 */
+html body #login-modal .folio-login .login-platform-list button:not(.active){
+  background:transparent!important;border-color:transparent!important;
+  box-shadow:none!important;outline:none!important;text-shadow:none!important
+}
+html body #login-modal .folio-login .login-platform-list button:not(.active):hover{
+  background:rgba(255,255,255,.045)!important;border-color:transparent!important
+}
+/* 列内容不溢出；滚动条一旦出现就是右侧一条竖直亮块，直接藏掉 */
+html body #login-modal .folio-login .login-platform-list{scrollbar-width:none!important}
+html body #login-modal .folio-login .login-platform-list::-webkit-scrollbar{
+  display:none!important;width:0!important;height:0!important
+}
+html body #login-modal .folio-login .login-platform-list button .login-provider-text b{
+  font-size:13px;font-weight:650
+}
+/* 默认不需要粘贴 Client ID：把旧的四家共用输入框收起来，只留一个可选入口 */
+#login-modal .folio-login.login-provider-spotify #qq-cookie-panel{display:none!important}
+#login-modal .folio-custom-toggle{
+  align-self:flex-start;border:0;background:transparent;color:rgba(255,255,255,.42);
+  font-family:inherit;font-size:10.5px;padding:0;cursor:pointer;text-decoration:underline dotted
+}
+#login-modal .folio-custom-toggle:hover{color:rgba(255,255,255,.78)}
+#login-modal .folio-spotify-custom{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#login-modal .folio-spotify-custom[hidden]{display:none!important}
+#login-modal .folio-spotify-custom input{
+  flex:1 1 180px;min-width:0;height:28px;border-radius:7px;padding:0 8px;
+  border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:#fff;font-family:inherit;font-size:11px
+}
+#login-modal .folio-spotify-custom button{
+  height:28px;border:0;border-radius:7px;padding:0 10px;background:rgba(255,255,255,.14);
+  color:#fff;font-family:inherit;font-size:11px;cursor:pointer
+}
+#login-modal .folio-spotify-custom small{font-size:9.5px;color:rgba(255,255,255,.34)}
+/* 新增浏览器面板后原弹窗高度不够，会把「打开浏览器」按钮裁掉；
+   加高弹窗并让右侧内容区自己滚动，旧 drawer 与 Client ID 输入框仍完整保留。 */
+#login-modal .modal.folio-login{
+  height:min(520px,calc(100vh - 32px))!important;max-height:min(520px,calc(100vh - 32px))!important
+}
+#login-modal .folio-login.login-provider-spotify .login-board-main{overflow:hidden}
+/* Spotify 时旧 drawer 里的「三步接入」引导与新面板重复，收起来只留 Client ID 输入与状态，
+   否则两块内容叠起来会把黄色「打开浏览器」按钮挤到滚动区域下面。 */
+#login-modal .folio-login.login-provider-spotify .login-auth-drawer{flex:0 0 auto!important;min-height:0!important}
+#login-modal .folio-login.login-provider-spotify .login-auth-copy h2,
+#login-modal .folio-login.login-provider-spotify .login-auth-copy .desc,
+#login-modal .folio-login.login-provider-spotify .spotify-guide-title,
+#login-modal .folio-login.login-provider-spotify .spotify-guide-steps,
+#login-modal .folio-login.login-provider-spotify .qq-cookie-note{display:none!important}
+#login-modal .folio-login .folio-spotify-hero{flex:0 0 auto}
+#login-modal .folio-browser-tile{width:112px;height:92px;flex-basis:112px}
+#login-modal .folio-browser-window{width:92px;height:68px}
+@media (max-width:640px){
+  #login-modal .folio-login .login-content{padding-left:0}
+  #login-modal .folio-login .login-platform-list{position:static!important;left:auto!important;top:auto!important;bottom:auto!important;width:100%;flex-direction:row!important;max-height:56px;overflow-x:auto}
+  #login-modal .folio-login .login-platform-list button{width:auto;min-width:88px;height:44px!important;min-height:44px!important}
+  #login-modal .folio-login .login-platform-list button .login-provider-state{display:none!important}
+  #login-modal .folio-spotify-hero{flex-direction:column;align-items:flex-start}
+}
+

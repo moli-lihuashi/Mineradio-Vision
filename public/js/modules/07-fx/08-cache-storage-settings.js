@@ -20,9 +20,9 @@ function setCloseBehaviorMode(mode) {
   desktopWindow.setCloseBehavior(next).then(function(res) {
     desktopCloseBehavior = (res && res.behavior) || next;
     updateCloseBehaviorControls();
-    showToast(desktopCloseBehavior === 'tray' ? '关闭行为: 最小化到托盘' : '关闭行为: 直接退出');
+    showToast(desktopCloseBehavior === 'tray' ? '最小化行为: 后台托盘' : '最小化行为: 任务栏');
   }).catch(function() {
-    showToast('设置关闭行为失败');
+    showToast('设置最小化行为失败');
   });
 }
 function renderCacheSettings(snapshot) {

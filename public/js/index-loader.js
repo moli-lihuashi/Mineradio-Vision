@@ -160,6 +160,10 @@
     'js/modules/05-playback/09f-playback-source-revision.js',
     'js/modules/05-playback/09d-playback-stall-recovery.js',
     'js/modules/05-playback/10-queue-content-fingerprint.js',
+    // 网易云增补能力面板：只绑 #home-platform-recommend 内的新节点，无全局重名函数
+    'js/modules/05-playback/20-netease-features.js',
+    // 批次2/3/4 新增接口的统一平台能力面板（IIFE + pfx 前缀，无全局重名函数）
+    'js/modules/05-playback/21-platform-extras.js',
     // lyrics / playlists
     'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
     'js/modules/06-lyrics/00-built-in-playlists.js',
@@ -191,7 +195,45 @@
     'js/modules/10-shell/05-diagnostics.js',
     'js/modules/10-shell/06-break-reminder.js',
     // folia 世界（与预设互斥的独立歌词世界；主循环会调 foliaWorldActive/foliaWorldTick）
+    // 2026-11-12 启动拆分：主波只留 00-folia-state（11KB 状态锚）。foliaWorldActive
+    // 在 Folia 运行时未落地前恒 false（active 初始 false），主循环的 folia 分支自然
+    // 跳过；foliaWorldTick 调用点已补 typeof 守卫。其余 59 个 folia 模块整体移入
+    // 延迟波末尾（保持原相对顺序）：folia 原本在主波求值，不可能依赖延迟波符号；
+    // 06-fx 对 folia 只有 typeof 守卫与 CSS 类名引用，追加在末尾依赖方向安全。
+    // 恢复链路自包含：04-folia-panel 的 foliaWorldBoot IIFE 自带轮询等开屏结束。
     'js/modules/12-folia/00-folia-state.js',
+    'js/modules/11-main-loop.js'
+  ]);
+
+  // 第二波：boot 之后再注入（FX 扩展面板 / 登录弹窗流 / 预览 / 液态玻璃周边）
+  // 注意：勿把 bindFxPanel、登录态刷新、toast、hotkeys 放进这里。
+  const deferredModulePaths = [
+    'js/modules/07-fx/05a-fx-panel-inputs.js',
+    'js/modules/07-fx/05b-fx-panel-layout.js',
+    'js/modules/07-fx/05c-fx-particle-fire.js',
+    'js/modules/07-fx/05d-heart-fx-panel.js',
+    // 顶栏「皮肤」弹层：第二个红心六格宿主，靠 05d 的 syncHeartFxGrid 渲染，须排在其后
+    'js/modules/07-fx/05e-skin-popover.js',
+    // 控制条底层频谱：皮肤弹层的第四格宿主 + #bottom-bar 内的独立 2D 画布
+    'js/modules/07-fx/05f-bar-spectrum.js',
+    'js/modules/07-fx/09-lyric-shader-market.js',
+    'js/modules/07-fx/12-perf-dashboard.js',
+    'js/modules/08-account/00-update-preview.js',
+    'js/modules/08-account/02-qishui-login.js',
+    'js/modules/08-account/03-login-modal-flows.js',
+    'js/modules/08-account/08-login-pack-qr-sync.js',
+    'js/modules/08-account/07-dynamic-libs.js',
+    'js/modules/06-fx/01-liquidglass-config.js',
+    'js/modules/06-fx/02-wallpaper-engine-fns.js',
+    'js/modules/06-fx/03-liquidglass-perf.js',
+    'js/modules/06-fx/04-liquidglass-plugin-api.js',
+    'js/modules/06-fx/05-prismal-chrome.js',
+    'js/modules/06-fx/06-liquidglass-folia-css.js',
+    'js/modules/07-playback/00-spotify-provider.js',
+    'js/modules/08-account/00-login-easter-egg.js',
+    /* ---- folia 世界（2026-11-12 启动拆分：整体从主波移入，~59 模块 / ~2.8MB）----
+     * 相对顺序与原主波完全一致。folia 模块原本在主波求值，只会依赖主波符号
+     * （此时已全部求值完毕）与本波内 hoisting，故整块后置安全。 */
     /* 自定义图片池：必须在背景/模式/面板之前（01d/01f 读 window.foliaMonetBackgroundImage，
      * 面板读 foliaAssetGet 的同步快照；晚一步加载就会「有图也当没图」）。 */
     'js/modules/12-folia/00b-folia-image-pool.js',
@@ -258,42 +300,14 @@
     /* 最后一个：注册模式（create/tick/destroy） */
     'js/modules/12-folia/0k-folia-mode-lumiere-stage.js',
     /* 调参面板：0l0（模式调参存储内核）→ 0l（通用控件 + 背景/绘光面板）→ 0l1（歌词样式面板，
-     * 往 0l 的注册表里加条目）。三个都不能早于 00-folia-state，也不能晚于 04-folia-panel 的首次调用。 */
+     * 往 0l 的注册表里加条目）。三个都不能早于 00-folia-state（主波），也不能晚于
+     * 04-folia-panel 的首次调用。 */
     'js/modules/12-folia/0l0-folia-mode-tuning.js',
     'js/modules/12-folia/0l-folia-tuning-panel.js',
     'js/modules/12-folia/0l1-folia-mode-panels.js',
     'js/modules/12-folia/03-folia-world-runtime.js',
     'js/modules/12-folia/17-folia-mod-host.js',
-    'js/modules/12-folia/04-folia-panel.js',
-    'js/modules/11-main-loop.js'
-  ]);
-
-  // 第二波：boot 之后再注入（FX 扩展面板 / 登录弹窗流 / 预览 / 液态玻璃周边）
-  // 注意：勿把 bindFxPanel、登录态刷新、toast、hotkeys 放进这里。
-  const deferredModulePaths = [
-    'js/modules/07-fx/05a-fx-panel-inputs.js',
-    'js/modules/07-fx/05b-fx-panel-layout.js',
-    'js/modules/07-fx/05c-fx-particle-fire.js',
-    'js/modules/07-fx/05d-heart-fx-panel.js',
-    // 顶栏「皮肤」弹层：第二个红心六格宿主，靠 05d 的 syncHeartFxGrid 渲染，须排在其后
-    'js/modules/07-fx/05e-skin-popover.js',
-    // 控制条底层频谱：皮肤弹层的第四格宿主 + #bottom-bar 内的独立 2D 画布
-    'js/modules/07-fx/05f-bar-spectrum.js',
-    'js/modules/07-fx/09-lyric-shader-market.js',
-    'js/modules/07-fx/12-perf-dashboard.js',
-    'js/modules/08-account/00-update-preview.js',
-    'js/modules/08-account/02-qishui-login.js',
-    'js/modules/08-account/03-login-modal-flows.js',
-    'js/modules/08-account/08-login-pack-qr-sync.js',
-    'js/modules/08-account/07-dynamic-libs.js',
-    'js/modules/06-fx/01-liquidglass-config.js',
-    'js/modules/06-fx/02-wallpaper-engine-fns.js',
-    'js/modules/06-fx/03-liquidglass-perf.js',
-    'js/modules/06-fx/04-liquidglass-plugin-api.js',
-    'js/modules/06-fx/05-prismal-chrome.js',
-    'js/modules/06-fx/06-liquidglass-folia-css.js',
-    'js/modules/07-playback/00-spotify-provider.js',
-    'js/modules/08-account/00-login-easter-egg.js'
+    'js/modules/12-folia/04-folia-panel.js'
   ];
 
   try {

@@ -131,7 +131,19 @@ var SONG_ACCOUNT_ACTION_ADAPTERS = {
     likeCheckUrl: '/api/spotify/song/like/check', likeCheckParam: 'ids', likeUrl: '/api/spotify/song/like',
     playlistAddUrl: '/api/spotify/playlist/add-song', playlistCreateUrl: '/api/spotify/playlist/create', playlistTracksUrl: '/api/spotify/playlist/tracks'
   },
-  qq: { provider: 'qq', label: 'QQ 音乐', like: false, collect: false, createPlaylist: false, readOnly: true }
+  /* 批次2（2026-11-12）：QQ 放开「新建歌单 / 歌单加删歌曲」，走明文 musicu.fcg 已验收通道。
+     红心写入（dirId 201）需要 zzc 签名加密通道、收藏歌单/专辑无可验证协议，
+     这两项保持不开放，别用 readOnly 一句话把所有写操作都盖掉。 */
+  qq: {
+    provider: 'qq', label: 'QQ 音乐',
+    like: false, collect: true, createPlaylist: true,
+    likeUrl: '', likeCheckUrl: '', likeCheckParam: 'mids',
+    playlistAddUrl: '/api/qq/playlist/add-song',
+    playlistRemoveUrl: '/api/qq/playlist/remove-song',
+    playlistCreateUrl: '/api/qq/playlist/create',
+    playlistTracksUrl: '/api/qq/playlist/tracks',
+    unsupportedMessage: 'QQ 音乐红心与收藏歌单/专辑需要账号签名通道，当前仅支持新建歌单与歌单增删歌曲'
+  }
 };
 function songAccountProvider(song) {
   if (!song || song.type === 'local' || song.type === 'podcast' || song.source === 'podcast') return 'local';
@@ -194,6 +206,7 @@ function isSongAccountLoggedIn(provider) {
 }
 function songAccountUnsupportedMessage(provider, action) {
   var adapter = songAccountAdapter(provider);
+  if (adapter && adapter.unsupportedMessage) return adapter.unsupportedMessage;
   if (adapter && adapter.readOnly) return adapter.label + '当前仅支持读取账号收藏，暂不支持写回';
   if (provider === 'qishui') return '汽水音乐当前会话暂不支持此账号操作（需本机汽水登录态）';
   if (provider === 'local') return '本地文件暂不支持同步' + (action === 'collect' ? '到歌单' : '红心');

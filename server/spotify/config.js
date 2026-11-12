@@ -27,6 +27,14 @@ const DEFAULT_SPOTIFY_TOKEN_FILE = path.join(PROJECT_ROOT, '.spotify-token.json'
 
 const DEFAULT_SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:43879/callback';
 
+/* 借鉴 Folia：没有配置任何 env / 文件时，直接用开源桌面播放器共用的 Spotify
+   客户端身份走 PKCE（无 Client Secret），用户不必自己创建 App、粘贴 Client ID。
+   该身份绑定的回调是 127.0.0.1:5588/login，不能配 43879 —— 换端口会被 Spotify 拒绝。
+   只要用户自己提供过 clientId / redirectUri（env 或 .spotify-credentials.json），
+   就完全沿用用户的配置，内置值不参与。 */
+const SPOTIFY_BUILTIN_CLIENT_ID = '65b708073fc0480ea92a077233ca87bd';
+const SPOTIFY_BUILTIN_REDIRECT_URI = 'http://127.0.0.1:5588/login';
+
 const DEFAULT_SPOTIFY_SCOPES = [
   'playlist-read-private',
   'playlist-read-collaborative',
@@ -224,11 +232,11 @@ function getSpotifyOAuthConfig() {
   const envClientSecret = firstEnv(['SPOTIFY_CLIENT_SECRET', 'MINERADIO_SPOTIFY_CLIENT_SECRET']);
   const envRedirectUri = firstEnv(['SPOTIFY_REDIRECT_URI', 'MINERADIO_SPOTIFY_REDIRECT_URI']);
   const envScopes = normalizeScopes(firstEnv(['SPOTIFY_SCOPES', 'SPOTIFY_SCOPE', 'MINERADIO_SPOTIFY_SCOPES']));
-  const clientId = envClientId || fileConfig.clientId;
-  // Desktop PKCE must not depend on a secret stored in the packaged app or user JSON.
-  // A client secret is accepted only from a backend-controlled environment for optional client-credentials requests.
+  const hasUserConfig = !!(envClientId || fileConfig.clientId || envRedirectUri || fileConfig.redirectUri);
+  const useBuiltin = !hasUserConfig;
+  const clientId = envClientId || fileConfig.clientId || (useBuiltin ? SPOTIFY_BUILTIN_CLIENT_ID : '');
   const clientSecret = envClientSecret;
-  const redirectUri = envRedirectUri || fileConfig.redirectUri || DEFAULT_SPOTIFY_REDIRECT_URI;
+  const redirectUri = envRedirectUri || fileConfig.redirectUri || (useBuiltin ? SPOTIFY_BUILTIN_REDIRECT_URI : DEFAULT_SPOTIFY_REDIRECT_URI);
   // Mineradio owns the OAuth flow, so always include the scopes required by
   // the currently exposed account actions. Existing tokens still need a fresh
   // authorization before these newly requested scopes become effective.
@@ -237,9 +245,13 @@ function getSpotifyOAuthConfig() {
   const market = (firstEnv(['SPOTIFY_MARKET', 'MINERADIO_SPOTIFY_MARKET']) || fileConfig.market || DEFAULT_SPOTIFY_MARKET || 'US').toUpperCase();
   const missing = [];
   if (!clientId) missing.push('SPOTIFY_CLIENT_ID');
+  const configSource = envClientId || envClientSecret || envRedirectUri || envScopes.length
+    ? 'env'
+    : (fileConfig.source || (useBuiltin ? 'builtin' : (redirectUri === DEFAULT_SPOTIFY_REDIRECT_URI ? 'default' : '')));
   return {
     provider: 'spotify',
     configured: missing.length === 0,
+    builtin: useBuiltin,
     clientId,
     clientSecret,
     redirectUri,
@@ -247,7 +259,7 @@ function getSpotifyOAuthConfig() {
     scope: scopes.join(' '),
     market,
     credentialsFile: fileConfig.file,
-    configSource: envClientId || envClientSecret || envRedirectUri || envScopes.length ? 'env' : (fileConfig.source || (redirectUri === DEFAULT_SPOTIFY_REDIRECT_URI ? 'default' : '')),
+    configSource,
     missing,
   };
 }

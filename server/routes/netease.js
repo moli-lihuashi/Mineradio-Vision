@@ -6,9 +6,18 @@
 //  - /api/login/cookie, /api/login/qr/key, /api/login/qr/create, /api/login/qr/check, /api/login/status, /api/logout
 //  - /api/user/playlists
 //  - /api/song/like(/check), /api/album/subscribe(/check), /api/playlist/subscribe, /api/playlist/create, /api/playlist/add-song
-//  - /api/lyric, /api/song/comments, /api/artist/detail, /api/playlist/tracks
+//  - /api/lyric, /api/song/comments, /api/artist/detail, /api/playlist/tracks, /api/album
+//  - 批次1 增补（实现见 server/netease/extras.js）：
+//    /api/personal/fm, /api/personal/fm/trash, /api/user/cloud, /api/user/cloud/detail,
+//    /api/user/listen/rank, /api/recommend/history, /api/recommend/history/detail,
+//    /api/recommend/style/list, /api/recommend/style/preference, /api/recommend/style/detail,
+//    /api/recommend/dislike, /api/scrobble, /api/explore/home, /api/explore/entries,
+//    /api/artist/albums, /api/user/albums, /api/search/collections, /api/playlist/remove-song
 // ====================================================================
+const createNeteaseExtras = require('../netease/extras');
+
 module.exports = function register(ctx) {
+  const extras = createNeteaseExtras(ctx);
   const {
     sendJSON, readRequestBody, UA,
     handleSearch, handleSongUrl, getLoginInfo, requireLogin, normalizeLoginInfo,
@@ -19,7 +28,7 @@ module.exports = function register(ctx) {
     cloudsearch, dj_hot, dj_detail, dj_program,
     login_qr_key, login_qr_create, login_qr_check, logout,
     user_playlist, song_like_check, likelist, like_song,
-    album_sub, album_sublist, playlist_subscribe,
+    album_sub, album_sublist, netease_album, playlist_subscribe,
     playlist_create, playlist_tracks, playlist_track_add,
     playlist_track_all, playlist_detail, comment_music,
     artist_detail, artist_songs, artist_top_song, lyric, lyric_new,
@@ -41,6 +50,42 @@ module.exports = function register(ctx) {
       if (!lyricNodeText(merged, key) && fallback && fallback[key]) merged[key] = fallback[key];
     });
     return merged;
+  }
+
+  // ---------- 批次1 增补的公共包装 ----------
+  // NeteaseCloudMusicApi 的失败不一定抛 Error：artist_album 对无效 id 抛的是
+  // { status:404, body:{ code:404, ... } }，没有 message。只取 err.message 会
+  // 让响应退化成 {"provider":"netease"}（实测踩过），所以统一提取到可读原因。
+  function describeUpstreamError(err) {
+    if (!err) return 'UNKNOWN_UPSTREAM_ERROR';
+    if (typeof err === 'string') return err;
+    const body = err.body || {};
+    return String(err.message || body.message || (body.code ? 'UPSTREAM_CODE_' + body.code : '') || err.status || err);
+  }
+
+  // 统一错误形态：任何上游失败都带 provider / error / message，不静默返回空数组。
+  async function runExtra(res, label, fn) {
+    try {
+      sendJSON(res, await fn());
+    } catch (err) {
+      console.error('[' + label + ']', err);
+      const reason = describeUpstreamError(err);
+      sendJSON(res, { provider: 'netease', error: reason, message: reason }, 500);
+    }
+  }
+
+  // 带「我的」语义的接口：未登录由 requireLogin 直接返回 401 + LOGIN_REQUIRED。
+  async function runAccountExtra(req, res, label, fn) {
+    const info = await requireLogin(res);
+    if (!info) return;
+    try {
+      const body = req.method === 'POST' ? await readRequestBody(req) : {};
+      sendJSON(res, await fn(info, body || {}));
+    } catch (err) {
+      console.error('[' + label + ']', err);
+      const reason = describeUpstreamError(err);
+      sendJSON(res, { provider: 'netease', loggedIn: true, error: reason, message: reason }, 500);
+    }
   }
 
   return async function(req, res, url, pn) {
@@ -429,6 +474,42 @@ module.exports = function register(ctx) {
       return;
     }
 
+    // ---------- 网易云专辑详情 ----------
+    /* 前端 05-home-track-detail.js:378 一直请求 /api/album?id=，
+       服务端此前没有这个路由 → 点网易云专辑永远「专辑详情加载失败」。 */
+    if (pn === '/api/album') {
+      try {
+        const id = url.searchParams.get('id') || url.searchParams.get('albumId') || '';
+        if (!id) { sendJSON(res, { provider: 'netease', error: 'Missing album id', album: null, songs: [] }, 400); return; }
+        const result = await netease_album({ id, cookie: ctx.userCookie, timestamp: Date.now() });
+        const code = normalizeApiCode(result);
+        if (code !== 200) {
+          sendJSON(res, { provider: 'netease', error: normalizeApiMessage(result) || 'Album detail failed', album: null, songs: [] }, 404);
+          return;
+        }
+        const album = (result.body && (result.body.album || result.body)) || {};
+        const rawSongs = Array.isArray(album.songs) ? album.songs : [];
+        const songs = rawSongs.map(song => mapSongRecord(song)).filter(song => song && song.name);
+        sendJSON(res, {
+          provider: 'netease',
+          album: {
+            id: album.id || id,
+            name: album.name || '',
+            artist: (album.artist && album.artist.name) || (Array.isArray(album.artists) && album.artists[0] && album.artists[0].name) || '',
+            cover: album.picUrl || album.cover || '',
+            publishDate: album.publishTime ? new Date(Number(album.publishTime)).toISOString().slice(0, 10) : '',
+            desc: album.description || '',
+            songCount: Number(album.size || songs.length) || songs.length,
+          },
+          songs,
+        });
+      } catch (err) {
+        console.error('[NeteaseAlbumDetail]', err);
+        sendJSON(res, { provider: 'netease', error: err.message, album: null, songs: [] }, 500);
+      }
+      return;
+    }
+
     // ---------- 网易云专辑/歌单订阅 ----------
     if (pn === '/api/album/subscribe') {
       try {
@@ -719,6 +800,116 @@ module.exports = function register(ctx) {
         console.error('[PlaylistTracks]', err);
         sendJSON(res, { error: err.message, tracks: [] }, 500);
       }
+      return;
+    }
+
+    // ==================================================================
+    //  批次1：网易云增补能力（2026-11-12）
+    //  业务实现全部在 server/netease/extras.js；这里只做参数解析、登录校验、
+    //  错误形态统一。上游方法名与参数见 node_modules/NeteaseCloudMusicApi/module/。
+    //  「接口存在」不等于「已接入」：每条都 await 真实上游，空结果带 message。
+    // ==================================================================
+
+    // ---------- 私人 FM（可按模式） ----------
+    if (pn === '/api/personal/fm') {
+      await runAccountExtra(req, res, 'PersonalFm', (info) => extras.personalFm(info, url.searchParams));
+      return;
+    }
+
+    // ---------- 私人 FM 不喜欢（垃圾桶） ----------
+    if (pn === '/api/personal/fm/trash') {
+      await runAccountExtra(req, res, 'PersonalFmTrash', (_info, body) => extras.fmTrash(body));
+      return;
+    }
+
+    // ---------- 音乐云盘 ----------
+    if (pn === '/api/user/cloud') {
+      await runAccountExtra(req, res, 'UserCloud', (info) => extras.userCloud(info, url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/user/cloud/detail') {
+      await runAccountExtra(req, res, 'UserCloudDetail', (info) => extras.userCloudDetail(info, url.searchParams));
+      return;
+    }
+
+    // ---------- 账号听歌排行 ----------
+    if (pn === '/api/user/listen/rank') {
+      await runAccountExtra(req, res, 'ListenRank', (info) => extras.listenRank(info, url.searchParams));
+      return;
+    }
+
+    // ---------- 历史每日推荐（日期列表 / 某日详情） ----------
+    if (pn === '/api/recommend/history') {
+      await runAccountExtra(req, res, 'RecommendHistory', (info) => extras.recommendHistory(info));
+      return;
+    }
+
+    if (pn === '/api/recommend/history/detail') {
+      await runAccountExtra(req, res, 'RecommendHistoryDetail', (info) => extras.recommendHistoryDetail(info, url.searchParams));
+      return;
+    }
+
+    // ---------- 日推风格 / 曲风偏好 ----------
+    if (pn === '/api/recommend/style/list') {
+      await runExtra(res, 'StyleList', () => extras.styleList());
+      return;
+    }
+
+    if (pn === '/api/recommend/style/preference') {
+      await runAccountExtra(req, res, 'StylePreference', () => extras.stylePreference());
+      return;
+    }
+
+    if (pn === '/api/recommend/style/detail') {
+      await runExtra(res, 'StyleDetail', () => extras.styleDetail(url.searchParams));
+      return;
+    }
+
+    // ---------- 推荐「不喜欢」反馈 ----------
+    if (pn === '/api/recommend/dislike') {
+      await runAccountExtra(req, res, 'RecommendDislike', (_info, body) => extras.recommendDislike(body));
+      return;
+    }
+
+    // ---------- 播放记录上报 ----------
+    if (pn === '/api/scrobble') {
+      await runAccountExtra(req, res, 'Scrobble', (_info, body) => extras.scrobblePlay(body));
+      return;
+    }
+
+    // ---------- 平台探索页 ----------
+    if (pn === '/api/explore/home') {
+      await runExtra(res, 'ExploreHome', () => extras.exploreHome(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/explore/entries') {
+      await runExtra(res, 'ExploreEntries', () => extras.exploreEntries());
+      return;
+    }
+
+    // ---------- 歌手的专辑列表 ----------
+    if (pn === '/api/artist/albums') {
+      await runExtra(res, 'ArtistAlbums', () => extras.artistAlbums(url.searchParams));
+      return;
+    }
+
+    // ---------- 收藏专辑库 ----------
+    if (pn === '/api/user/albums') {
+      await runAccountExtra(req, res, 'UserAlbums', (info) => extras.userAlbums(info, url.searchParams));
+      return;
+    }
+
+    // ---------- 专辑 / 歌单 / 歌手分类搜索 ----------
+    if (pn === '/api/search/collections') {
+      await runExtra(res, 'SearchCollections', () => extras.searchCollections(url.searchParams));
+      return;
+    }
+
+    // ---------- 从平台歌单移除歌曲 ----------
+    if (pn === '/api/playlist/remove-song') {
+      await runAccountExtra(req, res, 'PlaylistRemoveSong', (_info, body) => extras.removePlaylistSong(body));
       return;
     }
   };

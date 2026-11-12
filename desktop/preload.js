@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   clearKugouMusicLogin: () => ipcRenderer.invoke('kugou-music-clear-login'),
   clearQishuiMusicLogin: () => ipcRenderer.invoke('qishui-music-clear-login'),
   openSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-open-login'),
+  openSpotifyMusicLoginExternal: () => ipcRenderer.invoke('spotify-music-open-login-external'),
   clearSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-clear-login'),
   exportLoginCookie: (provider) => ipcRenderer.invoke('mineradio-export-login-cookie', provider),
   exportLoginSessionPack: (payload) => ipcRenderer.invoke('mineradio-export-login-pack', payload || {}),

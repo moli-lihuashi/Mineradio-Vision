@@ -137,7 +137,25 @@ async function resolveProviderPlayUrlData(song, opts) {
   }
   var endpoint = providerPlayUrlEndpoint(song, opts);
   if (!endpoint) return null;
-  return apiJson(endpoint);
+  // 取址默认 15s 超时：旧实现无超时，服务端挂起时 drain 会永远等不到
+  // 旧 playQueueAt 返回，连点后的新目标根本没有机会开始取址。
+  var timeoutMs = Number(opts.resolveTimeoutMs) || 15000;
+  var reqOpts = { timeoutMs: timeoutMs };
+  // 切歌取消信号：归属失效时上层 abort，fetch 立刻断开而不是等满超时
+  if (opts.playbackResolveSignal) reqOpts.signal = opts.playbackResolveSignal;
+  try {
+    return await apiJson(endpoint, reqOpts);
+  } catch (err) {
+    var aborted = err && (err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.code === 20);
+    if (aborted) {
+      // 外层取消（连点/清队列作废在飞请求）：保留 AbortError 身份，
+      // 由 playQueueAt 的 token 归属检查静默退场，不弹提示、不换源重试
+      if (opts.playbackResolveSignal && opts.playbackResolveSignal.aborted) throw err;
+      // 纯超时：转成可读错误，走正常失败分支
+      throw new Error('取址超时（' + Math.round(timeoutMs / 1000) + 's）');
+    }
+    throw err;
+  }
 }
 
 function neteasePlaybackMatchQuery(song, opts) {

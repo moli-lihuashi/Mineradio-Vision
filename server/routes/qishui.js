@@ -5,8 +5,13 @@
 //  - /api/qishui/user/playlists, /api/qishui/playlist/tracks
 //  - /api/qishui/song/like(/check), /api/qishui/playlist/collect, /api/qishui/playlist/add-song
 //  - /api/qishui/album/collect, /api/qishui/song/url, /api/qishui/lyric
+//  - 批次4/5 增补（实现见 server/qishui/extras.js）：
+//    /api/qishui/search/playlists, /api/qishui/feed/modes
 // ====================================================================
+const createQishuiExtras = require('../qishui/extras');
+
 module.exports = function register(ctx) {
+  const extras = createQishuiExtras(ctx);
   const {
     sendJSON, readRequestBody,
     handleQishuiStatus, saveQishuiAccessToken, getQishuiStatus, clearQishuiAccessToken,
@@ -383,6 +388,28 @@ module.exports = function register(ctx) {
       } catch (err) {
         console.error('[QishuiLyric]', err);
         sendJSON(res, { provider: 'qishui', error: err.message, lyric: '', tlyric: '' }, 500);
+      }
+      return;
+    }
+
+    // 批次4：歌单搜索（公开 PC 接口 /luna/pc/search/playlist）。
+    if (pn === '/api/qishui/search/playlists') {
+      try {
+        sendJSON(res, await extras.searchPlaylists(url.searchParams));
+      } catch (err) {
+        console.error('[QishuiPlaylistSearch]', err);
+        sendJSON(res, { provider: 'qishui', error: err.message, message: err.message, playlists: [] }, 500);
+      }
+      return;
+    }
+
+    // 批次5：场景模式目录（/luna/pc/feed/mode）。按场景取歌的端点在该域下 404，未接。
+    if (pn === '/api/qishui/feed/modes') {
+      try {
+        sendJSON(res, await extras.feedModes());
+      } catch (err) {
+        console.error('[QishuiFeedModes]', err);
+        sendJSON(res, { provider: 'qishui', error: err.message, message: err.message, modes: [] }, 500);
       }
       return;
     }

@@ -5,6 +5,10 @@
 //        #progress-bar / #controls 之前，挂一层独立 2D canvas。
 //        它不抢 backdrop-filter、不改 background、不碰 gainNode，
 //        只是在液态玻璃之上、控件之下画一条贴底频谱。
+//        canvas 除柱阵/光点外必须保持全透明：控制条自己的颜色、
+//        玻璃和 #progress-bar 进度条都由原有 CSS/DOM 负责，本层不复制、
+//        不覆盖、不重画（2026-11-12 修正：曾误把酷狗「预览卡片」的
+//        整卡渐变底色和底部白线一起画进来，导致控制条变色 + 多一条进度条）。
 //
 //  门控：只要 #bottom-bar 有 visible 就绘制 —— CSS 玻璃（backdrop-filter）
 //        与 LiquidGlass（lg-active，WebGL shell）两种分支都要生效；
@@ -20,11 +24,11 @@
 // ====================================================================
 
 var BAR_SPECTRUM_TILES = [
-  { id: 'ripple', name: '迷幻水波', sub: '点阵水波',
+  { id: 'ripple', name: '迷幻水波', sub: '单丘细柱',
     icon: '<path d="M2 13c3-4 5-4 8 0s5 4 8 0 3-3 4-3"/><path d="M4 17h.01M8 17h.01M12 17h.01M16 17h.01M20 17h.01"/>' },
-  { id: 'pulse', name: '动感律动', sub: '贴底柱状',
+  { id: 'pulse', name: '动感律动', sub: '双峰密柱',
     icon: '<path d="M4 19v-5M8 19V9M12 19V5M16 19v-7M20 19v-4"/>' },
-  { id: 'ribbon', name: '流光丝带', sub: '双曲线带',
+  { id: 'ribbon', name: '流光丝带', sub: '流动光带',
     icon: '<path d="M2 14c4-6 6 3 10-2s6 3 10-3"/><path d="M2 18c4-6 6 3 10-2s6 3 10-3"/>' },
   { id: 'off', name: '关闭', sub: '不显示',
     icon: '<circle cx="12" cy="12" r="7.4"/><path d="M7.2 16.8 16.8 7.2"/>' }
@@ -190,93 +194,132 @@ function barSpectrumIdleDecay() {
   for (var i = 0; i < n; i++) barSpectrumBins[i] *= 0.82;
 }
 
-/* ---- 迷幻水波：贴底的点阵水波带 ---- */
-function barSpectrumDrawRipple(ctx, w, cy, maxA, c, t) {
-  ctx.fillStyle = c.a;
-  var cols = Math.max(1, Math.floor(w / 4.2));
-  for (var j = 0; j < cols; j++) {
-    var xn = j / cols, x = j * 4.2 + 2;
-    var fade = Math.pow(Math.sin(Math.PI * xn), 0.65);
-    var energy = 0.30 + 0.70 * Math.min(1, barSpectrumBinAt(xn) * 1.8);
-    var wave = Math.sin(xn * 18 - t * 2.6) * 9 + Math.sin(xn * 34 + t * 1.4) * 4;
-    for (var k = -3; k <= 3; k++) {
-      var yy = cy + wave * 0.38 + (k / 3) * (4 + 9 * energy);
-      var a = fade * (0.78 - Math.abs(k) * 0.10);
-      if (a <= 0.02) continue;
-      ctx.globalAlpha = a;
-      ctx.beginPath(); ctx.arc(x, yy, k === 0 ? 1.1 : 0.8, 0, Math.PI * 2); ctx.fill();
+/* ==================================================================
+ * 酷狗频谱「绘制手法」移植（2026-11-12 修正）
+ * ------------------------------------------------------------------
+ * 取证：kugou.skn 内 PlaybackVisualRadioBox 的 Caption -> NormalBack
+ *   迷幻水波 wave_spectrum   -> wave.2x.avif   (620x160, 1445B)
+ *   节奏音阶 beat_spectrum   -> beat.2x.avif   (620x160, 1261B)
+ *   动感律动 rhythm_spectrum -> rhythm.2x.avif (620x160, 1379B)
+ *   名字表里的 u32 资源长度与 AVIF box 长度逐一吻合，不是按视觉猜的。
+ *
+ * 关键结论：这三张是「皮肤选择弹窗里的预览卡片」，不是播放页实时频谱。
+ *   卡片自带的整幅渐变底色、底部那条白色播放进度线，都是卡片装饰；
+ *   真正播放时 kugou.dll 只在页面上画一层半透明白色细柱阵，
+ *   控制条颜色、进度条由播放器自己的控件负责。
+ *   11-11 误把整张卡片搬进 #bottom-bar，导致控制条被染成棕黄色、
+ *   频谱下面又多出一条假进度线。11-12 起只保留柱阵，其余全透明。
+ *
+ * 三格是用户确认过的 迷幻水波 / 动感律动 / 流光丝带 + 关闭；
+ * 官方第三套「节奏音阶」此前已被用户明确排除，不复活。对应关系：
+ *   ripple -> 官方 wave：单丘包络 + 青白柱色
+ *   pulse  -> 官方 rhythm：双大峰 + 暖白柱色
+ *   ribbon -> 自有「流光丝带」：连续流动波形 + 粉白柱色 + 光晕粒子
+ * 柱色取自官方卡里柱体像素反解的本色（近白），不是卡片底色；
+ * 三套共用 KG 手法：固定包络 × 实时能量小幅调制、贴底细柱、水平渐变。
+ * ================================================================== */
+function barSpectrumKgTheme(mode) {
+  var g = function (x, mu, s) { var d = (x - mu) / s; return Math.exp(-0.5 * d * d); };
+  var sm = function (a, b, x) {
+    var u = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return u * u * (3 - 2 * u);
+  };
+  if (mode === 'pulse') return {
+    /* rhythm.2x.avif 柱体本色：暖白 -> 灰白 */
+    bar: [[0, '#d8cdbb'], [0.3, '#f2ece0'], [0.62, '#bcb6a9'], [1, '#8a8880']],
+    gap: 3.0, barW: 1.4, amp: 0.46, particles: 0,
+    env: function (x) {
+      return 0.02 + 0.44 * g(x, 0.23, 0.070) + 0.86 * g(x, 0.39, 0.078)
+        + 1.0 * g(x, 0.55, 0.078) + 0.44 * g(x, 0.71, 0.070);
     }
-  }
-  ctx.globalAlpha = 0.20; ctx.strokeStyle = c.b; ctx.lineWidth = 1;
-  ctx.setLineDash([2, 5]);
-  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
-  ctx.setLineDash([]);
+  };
+  if (mode === 'ribbon') return {
+    /* beat.2x.avif 柱体本色：粉白 -> 冷灰白 */
+    bar: [[0, '#b2a4a6'], [0.4, '#efe2e2'], [0.68, '#dcd6de'], [1, '#929a9e']],
+    gap: 8.0, barW: 2.6, amp: 0.44, particles: 14,
+    /* 丝带是连续流动的波，不是官方 beat 的四段鼓点峰 */
+    env: function (x) {
+      var flow = 0.5 + 0.5 * Math.sin(x * Math.PI * 4.2 - 0.6);
+      return 0.10 + 0.54 * flow * sm(0.02, 0.12, x) * (1 - sm(0.88, 0.99, x));
+    }
+  };
+  return {
+    /* wave.2x.avif 柱体本色：青白 -> 灰白 */
+    bar: [[0, '#a9c3bb'], [0.3, '#e6f2ea'], [0.58, '#bfdcd0'], [0.8, '#c9cfcb'], [1, '#aeb6b4']],
+    gap: 7.0, barW: 2.2, amp: 0.46, particles: 0,
+    env: function (x) {
+      return 0.02 + 1.0 * g(x, 0.43, 0.25) * sm(0.02, 0.18, x) * (1 - sm(0.78, 0.98, x));
+    }
+  };
 }
 
-/* ---- 动感律动：柱子从控制条底沿向上长 ----
-   列密度必须与已确认的预览一致：每 4.2px 一根 2.2px 细柱，
-   把 64 个频段线性插值到这些列；只画 64 根粗柱会变成完全不同的效果。
-   透明度整条统一（0.86），不按播放进度分深浅 —— 之前左亮右暗看着像两种颜色。 */
-function barSpectrumDrawPulse(ctx, w, cy, maxA, c) {
-  var cols = Math.max(64, Math.floor(w / 4.2));
-  var n = barSpectrumBins.length;
+function barSpectrumKgGradient(ctx, stops, w) {
   var g = ctx.createLinearGradient(0, 0, w, 0);
-  g.addColorStop(0, c.b); g.addColorStop(0.5, c.a); g.addColorStop(1, c.b);
-  ctx.fillStyle = g;
+  for (var i = 0; i < stops.length; i++) g.addColorStop(stops[i][0], stops[i][1]);
+  return g;
+}
+
+function barSpectrumKgParticles(ctx, w, h, theme, t) {
+  ctx.shadowColor = 'rgba(255,245,225,0.95)';
+  for (var k = 0; k < theme.particles; k++) {
+    var seed = k * 97.13;
+    var px = (seed + t * (9 + (k % 4) * 3)) % (w + 60) - 30;
+    var py = h - 6 - h * theme.amp * (0.35 + 0.62 * Math.abs(Math.sin(seed * 0.017 + t * 0.55)));
+    var twinkle = 0.35 + 0.65 * Math.abs(Math.sin(t * 1.9 + k * 1.7));
+    ctx.shadowBlur = 10 + 5 * twinkle;
+    ctx.globalAlpha = 0.55 * twinkle;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(px, py, 1.1 + 0.9 * (k % 3) / 2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
+function barSpectrumKgBars(ctx, w, cy, maxA, theme) {
+  ctx.fillStyle = barSpectrumKgGradient(ctx, theme.bar, w);
   ctx.globalAlpha = 0.86;
+  var cols = Math.max(64, Math.floor(w / theme.gap));
   for (var j = 0; j < cols; j++) {
     var xn = j / cols;
-    var pos = xn * (n - 1);
-    var i0 = Math.floor(pos), i1 = Math.min(n - 1, i0 + 1), f = pos - i0;
-    var v = Math.min(1, (barSpectrumBins[i0] * (1 - f) + barSpectrumBins[i1] * f) * 1.6);
-    var hh = 2 + v * maxA;
-    ctx.fillRect(j * 4.2 + 1, cy - hh, 2.2, hh);
+    /* 固定包络定形态，实时能量只做呼吸调制：形态稳定但不会一直顶在同一高度 */
+    var live = 0.38 + 0.62 * Math.min(1, barSpectrumBinAt(xn) * 1.6);
+    var hh = 2 + maxA * theme.env(xn) * live;
+    ctx.fillRect(j * theme.gap + 1, cy - hh, theme.barW, hh);
   }
-  ctx.globalAlpha = 0.62; ctx.fillStyle = c.a;
-  ctx.fillRect(0, cy - 1, w, 1);
+  ctx.globalAlpha = 1;
 }
 
-/* ---- 流光丝带：贴底的双平滑曲线 + 渐变带 + 漂浮光点 ---- */
+/* ---- 迷幻水波：青白细柱 + 中间偏左单丘 ---- */
+function barSpectrumDrawRipple(ctx, w, cy, maxA, c, t) {
+  ctx.globalAlpha = 0.86;
+  barSpectrumKgBars(ctx, w, cy, maxA, barSpectrumKgTheme('ripple'));
+}
+
+/* ---- 动感律动：暖白密柱 + 双大峰 ---- */
+function barSpectrumDrawPulse(ctx, w, cy, maxA, c, t) {
+  ctx.globalAlpha = 0.86;
+  barSpectrumKgBars(ctx, w, cy, maxA, barSpectrumKgTheme('pulse'));
+}
+
+/* ---- 流光丝带：粉白细柱 + 连续流动波形 + 光晕粒子 ---- */
 function barSpectrumDrawRibbon(ctx, w, cy, maxA, c, t) {
-  function wave(x) {
-    var xn = x / w;
-    var env = Math.sin(Math.PI * Math.max(0, Math.min(1, xn)));
-    var amt = 0.35 + 0.65 * Math.min(1, barSpectrumBinAt(xn) * 1.5);
-    return (Math.sin(xn * 11 - t * 1.9) * 0.46 + Math.sin(xn * 23 + t * 1.25) * 0.22 +
-            Math.sin(xn * 5 - t * 0.7) * 0.30) * maxA * 0.52 * amt * env;
-  }
-  var g = ctx.createLinearGradient(0, cy - maxA, 0, cy + maxA);
-  g.addColorStop(0, c.a); g.addColorStop(0.5, c.b); g.addColorStop(1, c.a);
-  ctx.beginPath(); ctx.moveTo(0, cy - wave(0));
-  for (var x = 0; x <= w; x += 4) ctx.lineTo(x, cy - wave(x));
-  for (var x2 = w; x2 >= 0; x2 -= 4) ctx.lineTo(x2, cy + wave(x2) * 0.7);
-  ctx.closePath(); ctx.globalAlpha = 0.28; ctx.fillStyle = g; ctx.fill();
-  ctx.globalAlpha = 0.80; ctx.strokeStyle = c.a; ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  for (var x3 = 0; x3 <= w; x3 += 4) { var y3 = cy - wave(x3); x3 ? ctx.lineTo(x3, y3) : ctx.moveTo(x3, y3); }
-  ctx.stroke();
-  ctx.globalAlpha = 0.38;
-  ctx.beginPath();
-  for (var x4 = 0; x4 <= w; x4 += 4) { var y4 = cy + wave(x4) * 0.7; x4 ? ctx.lineTo(x4, y4) : ctx.moveTo(x4, y4); }
-  ctx.stroke();
-  ctx.globalAlpha = 0.55; ctx.fillStyle = '#ffffff';
-  for (var k = 0; k < 12; k++) {
-    var px = ((k * 97 + t * 22) % (w + 40)) - 20;
-    var py = cy + Math.sin(k * 2.3 + t * 1.4) * maxA * 0.55;
-    ctx.beginPath(); ctx.arc(px, py, k % 3 === 0 ? 1.4 : 0.85, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.globalAlpha = 0.86;
+  barSpectrumKgBars(ctx, w, cy, maxA, barSpectrumKgTheme('ribbon'));
 }
 
 function barSpectrumPaint(ctx, w, h, t, mode) {
   ctx.clearRect(0, 0, w, h);
-  var isBar = (mode === 'pulse');
-  /* 柱状：基线钉在底沿内 6px；波形：整条带压在底部三分之一，下沿离底 7px */
-  var cy = isBar ? h - 6 : h - 20;
-  var maxA = isBar ? Math.min(h * 0.52, 46) : Math.min(h * 0.30, 26);
+  var theme = barSpectrumKgTheme(mode);
+  /* 只画柱阵与光点：不铺整幅渐变、不画进度线。
+     控制条的颜色 / 玻璃 / #progress-bar 全部由原有 CSS 与 DOM 负责，
+     本 canvas 的其余像素必须保持透明（见文件头说明）。 */
+  var cy = h - 6;
+  var maxA = Math.min(h * theme.amp, 52);
   var c = BAR_SPECTRUM_COLORS;
-  if (mode === 'pulse') barSpectrumDrawPulse(ctx, w, cy, maxA, c);
+  if (mode === 'pulse') barSpectrumDrawPulse(ctx, w, cy, maxA, c, t);
   else if (mode === 'ripple') barSpectrumDrawRipple(ctx, w, cy, maxA, c, t);
   else barSpectrumDrawRibbon(ctx, w, cy, maxA, c, t);
+  if (theme.particles) barSpectrumKgParticles(ctx, w, h, theme, t);
 }
 
 function barSpectrumTick(now) {

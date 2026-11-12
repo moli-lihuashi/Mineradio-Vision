@@ -180,35 +180,73 @@ test('④ 只读 frequencyData，不新建 analyser、不碰 gainNode', () => {
   assert.ok(Array.from(bins2).every((v) => v < 0.8), '没有音频数据时应衰减到静默');
 });
 
-/* ---------------------------------------------------------------- ⑤ 真贴底 */
-test('⑤ 柱状基线钉在 h-6，波形不越出控制条下沿', () => {
+/* ---------------------------------------------------------------- ⑤ 真贴底 + 只画柱阵（透明叠加） */
+test('⑤ 三套都贴底画柱阵，且不铺背景、不画进度线、不改控制条颜色', () => {
   const h = 96;
+  const drawFns = [
+    'barSpectrumBinAt', 'barSpectrumKgTheme', 'barSpectrumKgGradient',
+    'barSpectrumKgParticles', 'barSpectrumKgBars',
+    'barSpectrumDrawRipple', 'barSpectrumDrawPulse', 'barSpectrumDrawRibbon',
+    'barSpectrumPaint'
+  ];
+  /* 只取柱宽 <=4 的窄 rect；任何全幅 / 宽扁 rect 都是不该出现的卡片装饰 */
+  const barsOf = (c) => c.calls.rects.filter((r) => r[2] <= 4);
+  const densities = {};
+
+  ['ripple', 'pulse', 'ribbon'].forEach((mode) => {
+    const c = ctxStub();
+    runSlice(drawFns, { barSpectrumBins: new Float64Array(64).fill(0.6), ctx: c },
+      "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, '" + mode + "')");
+    const bars = barsOf(c);
+    densities[mode] = bars.length;
+    assert.ok(bars.length > 100, mode + ' 必须画出足量细柱（实际 ' + bars.length + '）');
+    const bottoms = bars.map((r) => r[1] + r[3]);
+    assert.ok(Math.max.apply(null, bottoms) <= h - 5 + 0.001, mode + ' 柱底不能超出 h-6');
+    assert.ok(Math.max.apply(null, bottoms) >= h - 7, mode + ' 柱底必须真的贴到底沿');
+    /* 11-12 修正：官方预览卡片的整幅渐变底色不能搬进控制条，否则控制台会变色 */
+    assert.ok(!c.calls.rects.some((r) => r[2] >= 1000 && r[3] >= h - 1),
+      mode + ' 禁止整幅背景填充（控制条颜色必须保持原样）');
+    /* 11-12 修正：卡片自带的白色播放进度线不能重画，播放器已有 #progress-bar */
+    assert.ok(!c.calls.rects.some((r) => r[2] > 100 && r[3] <= 4 && r[1] >= h - 5),
+      mode + ' 禁止底部宽扁进度线（播放器已有自己的进度条）');
+    assert.ok(c.calls.rects.every((r) => r[2] <= 4), mode + ' 画布上只允许窄柱，其余像素保持透明');
+  });
+  /* 三套柱距必须各不相同（官方 wave 7px / beat 8px / rhythm 3px），不能退化成同一形态 */
+  assert.ok(densities.pulse > densities.ripple && densities.ripple > densities.ribbon,
+    '三套疏密必须依次不同，实际 ' + JSON.stringify(densities));
+
+  /* 三个制造过 bug 的函数必须整体移除，不是「不调用」——防止日后被重新接回来 */
+  assert.doesNotMatch(engineSrc, /barSpectrumKgBackground|barSpectrumKgBaseline|barSpectrumKgPlayed/,
+    '整幅背景 / 进度线 / 进度读取相关代码必须删除');
+  const paintFn = extractFunction(engineSrc, 'barSpectrumPaint');
+  assert.doesNotMatch(paintFn, /Background|Baseline|Progress|fillRect\(0, 0, w, h\)/,
+    'paint 里不能再出现背景或进度线');
+  assert.match(paintFn, /ctx\.clearRect\(0, 0, w, h\)/, '每帧先清空，保证非柱体像素全透明');
+  assert.doesNotMatch(engineSrc, /currentTime\s*\/\s*duration/, '频谱不得自己算播放进度');
+  /* 卡片底色只属于预览卡片，绝不能出现在绘制代码里 */
+  assert.doesNotMatch(engineSrc, /#3c4d47|#7f5c2e|#816359/, '预览卡片底色不得进入播放器');
+
   const pulseCtx = ctxStub();
-  runSlice(['barSpectrumBinAt', 'barSpectrumDrawPulse', 'barSpectrumPaint'], {
-    barSpectrumBins: new Float64Array(64).fill(0.6), ctx: pulseCtx
-  }, "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, 'pulse')");
-  const bottoms = pulseCtx.calls.rects.map((r) => r[1] + r[3]);
-  assert.ok(bottoms.length > 200, '动感律动必须和预览一样是密集细柱（约 250 根），不能只剩 64 根粗柱');
+  runSlice(drawFns, { barSpectrumBins: new Float64Array(64).fill(0.6), ctx: pulseCtx },
+    "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, 'pulse')");
+  assert.ok(barsOf(pulseCtx).length > 200, '动感律动是最密的一套（3px 间距），不能只剩 64 根粗柱');
   assert.match(extractFunction(engineSrc, 'barSpectrumDrawPulse'), /ctx\.globalAlpha = 0\.86;/,
     '整条柱子必须同透明度，不能按播放进度分深浅（用户看到「颜色深度不统一」）');
   assert.doesNotMatch(engineSrc, /barSpectrumProgress/, '进度亮度逻辑已移除，避免左亮右暗');
-  assert.ok(Math.max.apply(null, bottoms) <= h - 5 + 0.001, '柱子底边不能超出 h-6');
-  assert.ok(Math.max.apply(null, bottoms) >= h - 7, '柱子底边必须真的贴到底沿');
-
-  const rippleCtx = ctxStub();
-  runSlice(['barSpectrumBinAt', 'barSpectrumDrawRipple', 'barSpectrumPaint'], {
-    barSpectrumBins: new Float64Array(64).fill(0.6), ctx: rippleCtx
-  }, "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, 'ripple')");
-  const ys = rippleCtx.calls.arcs.map((a) => a[1]);
-  assert.ok(ys.length > 100, '点阵模式应该画出足量点');
-  assert.ok(Math.max.apply(null, ys) <= h, '点阵不能越出控制条下沿');
-  assert.ok(Math.max.apply(null, ys) >= h - 22, '点阵带必须压在控制条底部，不能退回居中');
 
   const ribbonCtx = ctxStub();
-  runSlice(['barSpectrumBinAt', 'barSpectrumDrawRibbon', 'barSpectrumPaint'], {
-    barSpectrumBins: new Float64Array(64).fill(0.6), ctx: ribbonCtx
-  }, "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, 'ribbon')");
-  assert.ok(ribbonCtx.calls.lines > 100, '丝带模式应该画出上下两条曲线');
+  runSlice(drawFns, { barSpectrumBins: new Float64Array(64).fill(0.6), ctx: ribbonCtx },
+    "barSpectrumPaint(ctx, 1080, " + h + ", 2.4, 'ribbon')");
+  assert.ok(ribbonCtx.calls.arcs.length >= 12, '流光丝带要有白色光晕粒子');
+
+  /* 柱色取自官方卡里柱体像素反解的本色（近白），不是卡片底色 */
+  assert.match(engineSrc, /#a9c3bb/, '迷幻水波柱体色');
+  assert.match(engineSrc, /#d8cdbb/, '动感律动柱体色');
+  assert.match(engineSrc, /#b2a4a6/, '流光丝带柱体色');
+  assert.match(extractFunction(engineSrc, 'barSpectrumKgBars'), /theme\.env\(xn\)/,
+    '柱高必须由固定包络主导（酷狗「形态稳定、跟着音乐呼吸」的关键）');
+  assert.match(extractFunction(engineSrc, 'barSpectrumKgBars'),
+    /barSpectrumKgGradient\(ctx, theme\.bar, w\)/, '柱子必须用各自的水平渐变柱色');
 });
 
 /* ---------------------------------------------------------------- ⑥ 存档接线 */

@@ -261,7 +261,7 @@ function detailSongRowsHtml(songs, kind) {
   html += songs.slice(start, end).map(function(s, localIndex){
     var i = start + localIndex;
     var cover = songCoverSrc(s, 80);
-    var coverHtml = cover ? '<img class="artist-song-cover" src="' + escAttr(cover) + '" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0.18">' : '<div class="artist-song-cover"></div>';
+    var coverHtml = cover ? '<img class="artist-song-cover" src="' + escAttr(cover) + '" alt="" loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)">' : '<div class="artist-song-cover"></div>';
     if (kind === 'artist') {
       var actionsHtml = '<div class="artist-song-actions">' +
         '<button class="artist-song-action collect" type="button" title="收藏到歌单" aria-label="收藏到歌单" onclick="event.stopPropagation();collectArtistDetailSong(' + i + ')">' + artistCollectTrayIconSvg() + '</button>' +
@@ -358,7 +358,7 @@ function albumCollectionKey(song) {
 }
 function albumDetailMissingText(song) {
   var provider = typeof songProviderKey === 'function' ? songProviderKey(song) : '';
-  if (provider === 'kugou') return '酷狗暂不支持按当前音源打开完整专辑详情，可收藏歌曲到歌单。';
+  if (provider === 'kugou') return '当前酷狗歌曲缺少专辑 ID，无法打开专辑曲目。';
   if (provider === 'qishui') return '汽水暂不提供完整专辑曲目列表，可直接收藏专辑。';
   if (provider === 'qq') return '当前 QQ 歌曲缺少 albumMid，无法打开专辑曲目。';
   return '当前歌曲缺少可用专辑 ID。';
@@ -368,6 +368,12 @@ function albumDetailUrlForSong(song) {
   if (provider === 'qq') {
     var qqAlbumMid = song && (song.albumMid || song.albummid || song.album_mid || '');
     return qqAlbumMid ? '/api/qq/album/detail?mid=' + encodeURIComponent(qqAlbumMid) + '&limit=120' : '';
+  }
+  /* 批次3：酷狗专辑详情已接（server/kugou/extras.js，公开移动端接口），
+     返回 { album, songs }，与网易云 / QQ 的渲染分支共用。 */
+  if (provider === 'kugou') {
+    var kugouAlbumId = song && (song.albumId || song.album_id || '');
+    return kugouAlbumId ? '/api/kugou/album/detail?albumId=' + encodeURIComponent(kugouAlbumId) + '&limit=60' : '';
   }
   if (provider === 'spotify') {
     var spotifyAlbumId = song && (song.albumId || song.spotifyAlbumId || '');

@@ -1,0 +1,212 @@
+/* 网易云增补能力面板（2026-11-12 批次1）
+   挂在 #home-platform-recommend 弹窗内，配色与 .home-platform-recommend-sheet 一致。 */
+
+.netease-features-panel[hidden] { display: none }
+
+.netease-features-panel {
+  border-top: 1px solid rgba(255, 255, 255, .10);
+  padding-top: 12px;
+  margin-top: 4px;
+  max-height: 46vh;
+  overflow: auto;
+  /* 滚动条占位：结果行右侧有「打开」按钮，不占位时会被 8px 滑块压住 */
+  scrollbar-gutter: stable;
+  color: rgba(255, 255, 255, .86);
+  font-size: 12px;
+}
+
+.netease-features-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.netease-features-toolbar button,
+.netease-features-actions button {
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .88);
+  border-radius: 9px;
+  padding: 5px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.netease-features-toolbar button:hover,
+.netease-features-actions button:hover { background: rgba(255, 255, 255, .14) }
+.netease-features-toolbar button.netease-features-active { background: rgba(120, 200, 255, .22); border-color: rgba(120, 200, 255, .48) }
+
+/* 输入行（默认/无 + 分类搜索关键词 + 专辑 + 歌手/歌单/歌曲 ID + cursor）
+   原来这里没有样式，是浏览器原生控件：白底黑字、0 圆角、13.33px 系统字号，
+   在深色玻璃面板上像一块贴上去的白补丁。统一成与 toolbar 按钮同一套语言：
+   半透明层 + 1px 描边 + 9px 圆角 + 自定义箭头，focus 走面板的青色强调。 */
+.netease-features-inputs > *,
+.netease-features-toolbar input,
+.netease-features-toolbar select {
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .055);
+  color: rgba(255, 255, 255, .92);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  outline: none;
+  /* 面板其余玻璃元件都有一层顶部高光，输入框跟着做，避免看起来像「薄纸片」 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+
+.netease-features-inputs > *:hover,
+.netease-features-toolbar input:hover,
+.netease-features-toolbar select:hover {
+  border-color: rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .085);
+}
+
+.netease-features-inputs > *:focus,
+.netease-features-inputs > *:focus-visible,
+.netease-features-toolbar input:focus,
+.netease-features-toolbar select:focus {
+  border-color: rgba(120, 200, 255, .55);
+  background: rgba(120, 200, 255, .10);
+  box-shadow: 0 0 0 2px rgba(120, 200, 255, .14);
+}
+
+.netease-features-inputs input::placeholder {
+  color: rgba(255, 255, 255, .38);
+}
+
+/* select 去掉系统外观，换内联 SVG 的 chevron（不引外部资源，受 CSP 约束更少）。
+   给右侧留 22px，避免文字压到箭头上。 */
+.netease-features-inputs select,
+.netease-features-toolbar select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 22px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='rgba(255,255,255,0.55)' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+}
+
+.netease-features-inputs select:hover,
+.netease-features-toolbar select:hover {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='rgba(255,255,255,0.8)' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* 下拉列表本身是系统弹层，只能尽量给深色（Chromium 在 Windows 上部分采纳） */
+.netease-features-inputs select option,
+.netease-features-toolbar select option {
+  background: #1a1e28;
+  color: #e8eefc;
+}
+
+/* 模式/子模式/搜索类型这三个是短标签，固定窄一点；其余输入框按剩余空间伸缩 */
+.netease-features-inputs select {
+  min-width: 0;
+  flex: 0 1 76px;
+}
+
+/* 8 个控件排在 860px 面板里：允许压缩成一行（原来靠 size 属性的固定宽度，
+   加了 padding 后必然折行，第二行只剩一个「探索页 cursor」，很散）。
+   窄屏再放回 wrap，避免压成一条缝。 */
+.netease-features-inputs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.netease-features-inputs > * {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 700px) {
+  .netease-features-inputs { flex-wrap: wrap }
+  .netease-features-inputs > * { flex: 1 1 132px }
+  .netease-features-inputs select { flex: 1 1 96px }
+}
+
+.netease-features-status {
+  min-height: 18px;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, .62);
+  line-height: 1.5;
+}
+
+.netease-features-status.is-error { color: #ff9a9a }
+.netease-features-status.is-ok { color: #9de0b0 }
+
+.netease-features-result { display: flex; flex-direction: column; gap: 5px }
+.netease-features-section-title { margin: 8px 0 2px; font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, .9) }
+
+.netease-features-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .045);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+
+.netease-features-row-main { flex: 1; min-width: 0; cursor: pointer }
+.netease-features-row-main strong { display: block; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.netease-features-row-main small { display: block; color: rgba(255, 255, 255, .52); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.netease-features-row button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .05);
+  color: rgba(255, 255, 255, .8);
+  border-radius: 7px;
+  padding: 3px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.netease-features-row button:hover { background: rgba(255, 255, 255, .14) }
+
+.netease-features-note {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .48);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ---------- 深色细滚动条（2026-11-13）----------
+ * 面板自身 max-height:46vh + overflow:auto；不自定义时 Chromium 画浅色系统条
+ * （白色轨道 + 上下三角箭头 + 实心方块），压在 24px 圆角的深色面板上很割裂。
+ * 【坑】Chromium 一旦看到 scrollbar-width / scrollbar-color 就整组忽略
+ * ::-webkit-scrollbar-*（标准属性优先），thin 系统条会把药丸和隐藏箭头全废掉。
+ * 所以标准属性只放进 @supports 兜底给非 Blink 引擎，Electron 走 webkit 伪元素。
+ * 语言对齐 #playlist-panel / #fx-panel .fx-scroll / .player-quick-menu-popover。 */
+@supports not selector(::-webkit-scrollbar) {
+  .netease-features-panel { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .2) transparent }
+}
+.netease-features-panel::-webkit-scrollbar { width: 8px; height: 8px }
+.netease-features-panel::-webkit-scrollbar-track { background: transparent }
+.netease-features-panel::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, .16);
+  background-clip: content-box;
+  border-radius: 999px;
+}
+.netease-features-panel:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .28);
+  background-clip: content-box;
+}
+.netease-features-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, .42);
+  background-clip: content-box;
+}
+.netease-features-panel::-webkit-scrollbar-button { display: none; width: 0; height: 0 }
+.netease-features-panel::-webkit-scrollbar-corner { background: transparent }

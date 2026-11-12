@@ -61,6 +61,61 @@
 .pl-card{display:flex;align-items:center;gap:10px;padding:9px;border-radius:11px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.04);transition:all .2s;cursor:pointer;margin-bottom:7px;will-change:transform,opacity}
 .pl-card:hover{background:rgba(255,255,255,.06)}
 .pl-card img{width:44px;height:44px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,.06);flex-shrink:0}
+/* ---------- 无封面歌单的占位标记（2026-11-13）----------
+ * 喜欢 = 爱心、收藏 = 五角星，图案来自用户给的两份设计稿（圆角星 + 带高光的爱心）。
+ * 三个必须留意点：
+ *   1) 标记必须 pointer-events:none —— 它盖在卡片左侧，不能吃掉卡片原有的 hover / 点击；
+ *   2) 设计稿里的 hover 动画（心跳 / 闪烁 + 光晕）改由 .pl-card:hover 驱动，
+ *      因为鼠标真正停靠的是整张卡片，而不是这枚 25px 的小图标；
+ *   3) 颜色走 currentColor，SVG 内不写死 fill，主题换了也不跑偏。 */
+.pl-cover-mark{
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  width:var(--pl-cover-size,44px);height:var(--pl-cover-size,44px);
+  border-radius:var(--pl-cover-radius,8px);
+  background:rgba(255,255,255,.06);overflow:hidden;
+  pointer-events:none;
+  transition:filter .3s ease,background .2s ease
+}
+/* 封面槽：img 与「加载失败用的标记」叠在同一格里（标记平时 display:none，
+   由 mineradioCoverFallback 在 onerror 时亮出来）。尺寸走 --pl-cover-size，
+   这样 #playlist-panel 里那套 50px 的卡片尺寸能同时覆盖封面和占位。 */
+.pl-cover-slot{
+  position:relative;display:block;flex:0 0 auto;overflow:hidden;
+  width:var(--pl-cover-size,44px);height:var(--pl-cover-size,44px);
+  border-radius:var(--pl-cover-radius,8px);
+  background:rgba(255,255,255,.06)
+}
+.pl-cover-slot img{
+  position:absolute;inset:0;width:100%!important;height:100%!important;
+  object-fit:cover;border-radius:inherit;background:rgba(255,255,255,.06)
+}
+.pl-cover-slot .pl-cover-mark{
+  position:absolute;inset:0;width:100%;height:100%;
+  border-radius:inherit;background:transparent
+}
+#playlist-panel .pl-card{--pl-cover-size:50px;--pl-cover-radius:11px}
+.pl-cover-mark svg{width:58%;height:58%;display:block;transform-origin:50% 54%;transition:transform .25s ease,filter .3s ease}
+.pl-cover-mark.is-liked{color:#ff2d55}
+.pl-cover-mark.is-collected{color:#ffc93c}
+.pl-card:hover .pl-cover-mark.is-liked{filter:drop-shadow(0 0 12px rgba(255,45,85,.55))}
+.pl-card:hover .pl-cover-mark.is-liked svg{animation:pl-cover-beat 1.2s ease-in-out infinite}
+.pl-card:hover .pl-cover-mark.is-collected{filter:drop-shadow(0 0 12px rgba(255,201,60,.55))}
+.pl-card:hover .pl-cover-mark.is-collected svg{animation:pl-cover-twinkle 2.2s ease-in-out infinite}
+@keyframes pl-cover-beat{
+  0%,100%{transform:scale(1)}
+  25%{transform:scale(1.15)}
+  40%{transform:scale(1)}
+  60%{transform:scale(1.1)}
+  75%{transform:scale(1)}
+}
+@keyframes pl-cover-twinkle{
+  0%,100%{transform:scale(1) rotate(0deg)}
+  50%{transform:scale(1.07) rotate(4deg)}
+}
+@media (prefers-reduced-motion: reduce){
+  .pl-card:hover .pl-cover-mark.is-liked svg,
+  .pl-card:hover .pl-cover-mark.is-collected svg{animation:none}
+}
 .pl-load-more{width:100%;height:30px;margin:8px 0 2px;display:flex;align-items:center;justify-content:center}
 .pl-name{font-size:12px;color:rgba(255,255,255,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pl-sub{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

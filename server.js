@@ -87,8 +87,29 @@ const sati_resource_sub_list = _lazyFn(_neteaseMod, 'sati_resource_sub_list');
 const lyric = _lazyFn(_neteaseMod, 'lyric');
 const lyric_new = _lazyFn(_neteaseMod, 'lyric_new');
 const album_sub = _lazyFn(_neteaseMod, 'album_sub');
+/* 专辑详情：前端 /api/album?id= 一直有调用点，服务端此前没接；底层 NeteaseCloudMusicApi 的 album() 可用 */
+const netease_album = _lazyFn(_neteaseMod, 'album');
 const album_sublist = _lazyFn(_neteaseMod, 'album_sublist');
 const playlist_subscribe = _lazyFn(_neteaseMod, 'playlist_subscribe');
+// 批次1 增补：私人FM / 云盘 / 排行 / 历史日推 / 曲风 / 反馈 / 上报 / 探索 / 歌手专辑 / 分类搜索 / 移除歌曲
+// 方法名与参数逐一对照 node_modules/NeteaseCloudMusicApi/module/*.js（4.32.0）
+const personal_fm = _lazyFn(_neteaseMod, 'personal_fm');
+const personal_fm_mode = _lazyFn(_neteaseMod, 'personal_fm_mode');
+const fm_trash = _lazyFn(_neteaseMod, 'fm_trash');
+const user_cloud = _lazyFn(_neteaseMod, 'user_cloud');
+const user_cloud_detail = _lazyFn(_neteaseMod, 'user_cloud_detail');
+const user_record = _lazyFn(_neteaseMod, 'user_record');
+const history_recommend_songs = _lazyFn(_neteaseMod, 'history_recommend_songs');
+const history_recommend_songs_detail = _lazyFn(_neteaseMod, 'history_recommend_songs_detail');
+const style_list = _lazyFn(_neteaseMod, 'style_list');
+const style_preference = _lazyFn(_neteaseMod, 'style_preference');
+const style_detail = _lazyFn(_neteaseMod, 'style_detail');
+const recommend_songs_dislike = _lazyFn(_neteaseMod, 'recommend_songs_dislike');
+const scrobble = _lazyFn(_neteaseMod, 'scrobble');
+const homepage_block_page = _lazyFn(_neteaseMod, 'homepage_block_page');
+const homepage_dragon_ball = _lazyFn(_neteaseMod, 'homepage_dragon_ball');
+const artist_album = _lazyFn(_neteaseMod, 'artist_album');
+const playlist_track_delete = _lazyFn(_neteaseMod, 'playlist_track_delete');
 
 // kugou-api（函数 + 常量）
 const getKugouLoginInfoFromApi = _lazyFn(_kugouMod, 'getKugouLoginInfo');
@@ -1293,7 +1314,7 @@ const qqContent = require("./server/lib/qq-content")({
 });
 const {
   handleQQSearch, handleQQUserPlaylists, handleQQPlaylistTracks,
-  handleQQArtistDetail, handleQQSongUrl, handleQQSongComments, handleQQLyric,
+  handleQQArtistDetail, handleQQAlbumDetail, handleQQSongUrl, handleQQSongComments, handleQQLyric,
 } = qqContent;
 
 // 场景预设表：原先夹在天气代码中间，拆分后随场景块一起放回语义位置。
@@ -1943,13 +1964,21 @@ const routeCtx = {
   // ---- netease openapi ----
   cloudsearch, dj_hot, dj_detail, dj_program, login_qr_key, login_qr_create, login_qr_check,
   logout, user_playlist, song_like_check, likelist, like_song,
-  album_sub, album_sublist, playlist_subscribe, playlist_create, playlist_tracks,
+  album_sub, album_sublist, netease_album, playlist_subscribe, playlist_create, playlist_tracks,
   playlist_track_add, playlist_track_all, playlist_detail, comment_music,
   artist_detail, artist_songs, artist_top_song, lyric, lyric_new,
+  // ---- netease 批次1 增补（实现见 server/netease/extras.js） ----
+  personal_fm, personal_fm_mode, fm_trash, user_cloud, user_cloud_detail, user_record,
+  history_recommend_songs, history_recommend_songs_detail, style_list, style_preference, style_detail,
+  recommend_songs_dislike, scrobble, homepage_block_page, homepage_dragon_ball, artist_album,
+  playlist_track_delete,
   // ---- qq ----
   handleQQSearch, handleQQSongUrl, handleQQLyric, getQQLoginInfo, normalizeQQCookieInput,
   qqCookieUin, qqCookieMusicKey, saveQQCookie, bumpQQCookieEpoch, withQQCookieWriteLock, refreshQQCookieSession, refreshQQConfiguredCookieStore, getQQCookieFile,
-  handleQQUserPlaylists, handleQQPlaylistTracks, handleQQArtistDetail, handleQQSongComments,
+  handleQQUserPlaylists, handleQQPlaylistTracks, handleQQArtistDetail, handleQQAlbumDetail, handleQQSongComments,
+  // ---- qq 批次2 增补（实现见 server/qq/extras.js） ----
+  qqMusicRequest: qqSession.qqMusicRequest, qqGetJSON: qqSession.qqGetJSON,
+  mapQQPlaylistTrack: qqContent.mapQQPlaylistTrack, qqAlbumCover: qqContent.qqAlbumCover,
   // ---- kugou ----
   getKugouLoginInfoFresh, getKugouLoginInfo, handleKugouLoginQrKey, handleKugouLoginQrCheck,
   normalizeKugouCookieInput, saveKugouCookie,

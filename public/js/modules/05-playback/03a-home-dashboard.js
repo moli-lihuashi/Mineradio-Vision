@@ -484,12 +484,9 @@ function renderHomePlatformRecommendations() {
     return;
   }
 
-  if (source === 'qq') {
-    status.textContent = homePlatformRecommendationSourceLabel(source) + '推荐接口尚未接入本构建';
-    list.innerHTML = homePlatformRecommendationEmptyHtml(source, '当前版本没有可验证的平台推荐接口，未使用关键词搜索替代。');
-    return;
-  }
-
+  /* 批次2（2026-11-12）：/api/qq/recommendations 已从固定空数组换成
+     music.radioProxy.MbTrackRadioSvr/get_radio_track 的真实推荐，
+     这里不再写死「尚未接入」空态，走下面的统一 feed 渲染分支。 */
   var feedConfig = homePlatformRecommendationFeedConfig(source);
   var feedState = homePlatformRecommendationState.feeds[source];
   if (feedConfig && feedState) {

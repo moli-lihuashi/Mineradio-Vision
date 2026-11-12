@@ -50,14 +50,21 @@ function updateUserModalUi() {
       vipEl.style.color = hasProviderVip('qq', st) ? 'rgba(0,245,212,0.82)' : 'rgba(0,245,212,0.58)';
     }
   }
-  ['netease','qq','kugou','both'].forEach(function(key){
-    var btn = document.getElementById('user-provider-' + key);
-    if (btn) btn.classList.toggle('active', key === 'both' ? dualAccountMode : (!dualAccountMode && activeAccountProvider === key));
+  // 六个 tab 的选中态一律从当前 DOM 推导，不再手写平台白名单。
+  // 旧代码只列了 ['netease','qq','kugou','both']，qishui / spotify 的 .active 从不同步：
+  // 切到这两个平台时 chip 与账号信息都已切过去，左列却一个高亮都没有（实测 active:[]）。
+  // 用 querySelectorAll 而不是数组，以后新增平台按钮会被自动纳入。
+  Array.prototype.forEach.call(document.querySelectorAll('#user-platform-tabs button'), function (btn) {
+    var key = String(btn.id || '').replace(/^user-provider-/, '');
+    if (!key) return;
+    btn.classList.toggle('active', key === 'both' ? dualAccountMode : (!dualAccountMode && activeAccountProvider === key));
   });
   if (addNetease) addNetease.style.display = hasPlatformLogin('netease') ? 'none' : '';
   if (addQQ) addQQ.textContent = hasPlatformLogin('qq') ? 'QQ Music' : 'Add QQ Music';
   if (addKugou) addKugou.textContent = hasPlatformLogin('kugou') ? 'Kugou' : 'Add Kugou';
-  if (logoutBtn) logoutBtn.textContent = activeAccountProvider === 'qq' ? 'Logout QQ Music' : (activeAccountProvider === 'kugou' ? 'Logout Kugou' : 'Logout Netease');
+  // 退出按钮原来写死三家英文名，切到汽水 / Spotify 时会显示「Logout Netease」，
+  // 和 logoutActiveAccount() 实际要退的平台对不上。按 meta.label 生成，新增平台自动跟随。
+  if (logoutBtn) logoutBtn.textContent = '退出' + meta.label;
   if (hint) hint.textContent = dualAccountMode
     ? 'Showing all logged-in platforms.'
     : 'Switch account provider here, or show all logged-in platforms.';

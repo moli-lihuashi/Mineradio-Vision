@@ -1720,7 +1720,10 @@ function toggleFullscreen() {
       if (action === 'maximize') toggleFullscreen();
       if (action === 'close') {
         if (typeof saveLastPlaybackSnapshot === 'function') saveLastPlaybackSnapshot(true, 'window-close');
-        api.close(typeof closeBehaviorPreference !== 'undefined' ? closeBehaviorPreference : undefined);
+        /* 关闭按钮 = 完全退出。closeBehaviorPreference 全项目从未定义过，
+           旧写法恒传 undefined；主进程现在也一律忽略 behavior，
+           「后台托盘」只由最小化按钮承担，避免关了窗口却留下 7 个进程。 */
+        api.close();
       }
     });
   });

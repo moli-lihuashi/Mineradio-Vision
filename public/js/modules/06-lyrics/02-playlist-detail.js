@@ -2,6 +2,9 @@
 // 歌单详情 / 用户歌单列表 / 收藏取消
 // =============================================================================
 
+// 封面加载失败的兜底函数是 mineradioCoverFallback（定义在 01-api/00-mineradio-api.js，
+// 由 05-playback/00a-api-quality.js 提升成全局），全站 <img> 共用。
+
 // ---- 「我的歌单」面板左上角那个 chip：按真实登录态显示有哪些音源 ----
 // 以前是一句写死的「登录后显示网易云 / QQ / 酷狗歌单」，与实际登录的账号无关。
 var PLAYLIST_SOURCE_CHIP_ORDER = ['netease', 'qq', 'kugou', 'qishui', 'spotify'];
@@ -326,7 +329,7 @@ function playlistPanelDetailRowsHtml(options) {
   rows += tracks.slice(start, end).map(function (song, localIndex) {
     var i = start + localIndex;
     var thumb = songCoverSrc(song, 60);
-    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"') : '<div style="width:34px;height:34px;border-radius:7px;background:rgba(255,255,255,.06);flex:0 0 auto"></div>';
+    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)"') : '<div style="width:34px;height:34px;border-radius:7px;background:rgba(255,255,255,.06);flex:0 0 auto"></div>';
     var removeBtn = builtInDetail
       ? '<button type="button" class="pl-detail-row-remove" data-pl-detail-remove="' + i + '" title="从内置歌单移除">×</button>'
       : '';
@@ -348,7 +351,7 @@ function playlistPanelDetailHtml(pl, provider, detailWindow) {
   provider = normalizePlaylistProvider(provider);
   var cover = pl && pl.cover ? (provider === 'netease' ? (pl.cover + '?param=96y96') : pl.cover) : '';
   var img = cover
-    ? '<img class="pl-detail-cover" src="' + escAttr(cover) + '" alt="" decoding="async" onerror="this.style.opacity=0.2">'
+    ? '<img class="pl-detail-cover" src="' + escAttr(cover) + '" alt="" decoding="async" onerror="mineradioCoverFallback(this)">'
     : (provider === 'mineradio'
       ? '<div class="pl-detail-cover pl-built-in-placeholder">MR</div>'
       : '<div class="pl-detail-cover"></div>');
@@ -708,11 +711,72 @@ function playlistPanelGroups() {
     { key:'spotify', label:'Spotify Playlists', items:userPlaylists.filter(function(pl){ return pl.provider === 'spotify'; }) }
   ];
 }
+// ---- 没有封面的歌单：用「爱心 / 五角星」占位，而不是一块空白灰 ----
+// 判据优先级：先认「喜欢」（沿用 isLikedPlaylistContext 的既有口径：specialType 5 /
+// qishui-liked / 标题含「我喜欢 / 喜欢的音乐 / liked」），再认「收藏」（subscribed
+// 或标题含「收藏」）。两条都不命中的无封面歌单保持原灰块，不硬塞图案。
+var PLAYLIST_COVER_MARK_PATHS = {
+  // 爱心：设计稿 code (1).html 的 path，填充色交给 CSS（currentColor）以便统一主题
+  liked: '<path d="M50 88 C20 62, 2 46, 2 27 C2 12, 14 2, 27 2 C37 2, 45.5 7.5, 50 16 C54.5 7.5, 63 2, 73 2 C86 2, 98 12, 98 27 C98 46, 80 62, 50 88 Z" fill="currentColor"/>' +
+    '<ellipse cx="32" cy="25" rx="8" ry="5" fill="rgba(255,255,255,.45)" transform="rotate(-30 32 25)"/>',
+  // 五角星：设计稿 code.html 的圆角星 path（Q 曲线把所有角磨圆）
+  collected: '<path d="M 53.3 11.5 L 59.3 28.9 Q 61.2 34.6 67.2 34.7 L 85.6 35 Q 95.6 35.2 87.6 41.2 L 72.9 52.3 Q 68.1 55.9 69.9 61.6 L 75.3 79.2 Q 78.2 88.8 70 83.1 L 54.9 72.5 Q 50 69 45.1 72.5 L 30 83.1 Q 21.8 88.8 24.7 79.2 L 30.1 61.6 Q 31.9 55.9 27.1 52.3 L 12.4 41.2 Q 4.4 35.2 14.4 35 L 32.8 34.7 Q 38.8 34.6 40.8 28.9 L 46.8 11.5 Q 50 2 53.3 11.5 Z" fill="currentColor"/>' +
+    '<ellipse cx="36" cy="30" rx="7" ry="4.5" fill="rgba(255,255,255,.38)" transform="rotate(-38 36 30)"/>'
+};
+
+function playlistCoverMarkKind(pl) {
+  pl = pl || {};
+  var id = String(pl.id || '');
+  var name = String(pl.name || '');
+  try {
+    if (typeof isLikedPlaylistContext === 'function' && isLikedPlaylistContext(id, name, pl)) return 'liked';
+  } catch (_) {}
+  if (pl.subscribed === true) return 'collected';
+  if (/收藏/.test(name)) return 'collected';
+  return '';
+}
+
+function playlistCoverMarkSvg(kind) {
+  if (!kind || !PLAYLIST_COVER_MARK_PATHS[kind]) return '';
+  return '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
+    PLAYLIST_COVER_MARK_PATHS[kind] + '</svg>';
+}
+
+// 尺寸走 CSS 变量：卡片里是 44px，`#playlist-panel` 下由 CSS 覆盖成 50px，
+// 跟 `.pl-card img` 的既有尺寸保持一致（之前写死 44px 会比封面小一圈）。
+function playlistCoverBoxStyle(size, radius) {
+  return '--pl-cover-size:' + size + 'px;--pl-cover-radius:' + radius + 'px';
+}
+
+function playlistCoverMarkHtml(pl, size, radius) {
+  var kind = playlistCoverMarkKind(pl);
+  var boxStyle = playlistCoverBoxStyle(size, radius);
+  if (!kind) return '<div class="pl-cover-mark" style="' + boxStyle + '"></div>';
+  return '<div class="pl-cover-mark is-' + kind + '" style="' + boxStyle + '">' + playlistCoverMarkSvg(kind) + '</div>';
+}
+
+// 封面槽：img 与「加载失败用的标记」叠在同一格里，标记平时 display:none。
+// 为什么要这层：这张「Ta在抖音收藏的音乐」其实**有** cover URL，只是加载不出来 ——
+// 只做「无封面」分支的话它永远是一块灰。对用户来说「拿不到封面」和「没有封面」
+// 应该长一样：都显示那枚爱心/五角星。onerror 时由 mineradioCoverFallback
+// 把 img 藏掉、把兄弟标记亮出来。
+function playlistCoverHtml(pl, thumb, size, radius) {
+  if (!thumb) return playlistCoverMarkHtml(pl, size, radius);
+  var kind = playlistCoverMarkKind(pl);
+  var style = playlistCoverBoxStyle(size, radius);
+  var mark = kind
+    ? '<span class="pl-cover-mark is-' + kind + '" style="display:none">' + playlistCoverMarkSvg(kind) + '</span>'
+    : '';
+  return '<span class="pl-cover-slot" style="' + style + '">' +
+    '<img src="' + escAttr(thumb) + '" alt="" loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)">' +
+    mark + '</span>';
+}
+
 function playlistCardHtmlForPanel(pl, detailWindow) {
   var provider = normalizePlaylistProvider(pl.provider);
   var providerLabel = playlistProviderLabel(provider);
   var thumb = pl.cover ? (provider === 'netease' ? (pl.cover + '?param=88y88') : pl.cover) : '';
-  var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"') : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(255,255,255,.06);flex-shrink:0"></div>';
+  var imgTag = playlistCoverHtml(pl, thumb, 44, 8);
   var key = playlistPanelKey(provider, pl.id);
   var expanded = playlistPanelDetailState.key === key ? ' expanded' : '';
   return '<div class="pl-card' + expanded + '" data-playlist-provider="' + provider + '" data-playlist-id="' + escAttr(String(pl.id || '')) + '" data-playlist-title="' + escAttr(pl.name || '') + '">' +
@@ -839,7 +903,7 @@ function renderMyPodcastCollections(opts) {
   }
   $pod.innerHTML = items.map(function(pc){
     var thumb = pc.cover ? coverUrlWithSize(pc.cover, 88) : '';
-    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"') : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(0,245,212,.07);flex-shrink:0"></div>';
+    var imgTag = thumb ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)"') : '<div style="width:44px;height:44px;border-radius:8px;background:rgba(0,245,212,.07);flex-shrink:0"></div>';
     return '<div class="pl-card podcast-card" data-podcast-key="' + escAttr(pc.key || '') + '" data-podcast-title="' + escAttr(pc.title || '') + '">' +
       imgTag +
       '<div style="flex:1;min-width:0"><div class="pl-name">' + escHtml(pc.title || '') + '</div><div class="pl-sub">' + (pc.count || 0) + ' 项 · ' + escHtml(pc.sub || '') + '</div></div>' +

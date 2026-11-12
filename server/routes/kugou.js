@@ -6,8 +6,40 @@
 //  - /api/kugou/user/playlists, /api/kugou/playlist/tracks
 //  - /api/kugou/song/url, /api/kugou/lyric
 //  - /api/kugou/song/like(/check), /api/kugou/playlist/add-song
+//  - 批次3 增补（实现见 server/kugou/extras.js）：
+//    /api/kugou/album/detail, /api/kugou/album/songs, /api/kugou/artist/detail,
+//    /api/kugou/artist/albums, /api/kugou/search/collections, /api/kugou/recommend/cards,
+//    /api/kugou/recommend/history, /api/kugou/fm/dislike, /api/kugou/playlist/remove-song
 // ====================================================================
+const createKugouExtras = require('../kugou/extras');
+
 module.exports = function register(ctx) {
+  const extras = createKugouExtras(ctx);
+
+  // 批次3 公共包装：统一错误形态，空结果带 message，不静默返回空数组。
+  async function runExtra(res, label, fn) {
+    try {
+      sendJSON(res, await fn());
+    } catch (err) {
+      console.error('[' + label + ']', err);
+      const reason = String(err && (err.message || (err.body && err.body.message)) || err || 'KUGOU_UPSTREAM_ERROR');
+      sendJSON(res, { provider: 'kugou', error: reason, message: reason }, 500);
+    }
+  }
+
+  async function runWriteExtra(req, res, label, fn) {
+    try {
+      const body = req.method === 'POST' ? await readRequestBody(req) : {};
+      const data = await fn(body || {});
+      // 登录守卫由 extras 内部按酷狗播放态判定，回 200 + 明确 error，不冒充 5xx。
+      sendJSON(res, data);
+    } catch (err) {
+      console.error('[' + label + ']', err);
+      const reason = String(err && (err.message || (err.body && err.body.message)) || err || 'KUGOU_UPSTREAM_ERROR');
+      sendJSON(res, { provider: 'kugou', success: false, error: reason, message: reason }, 500);
+    }
+  }
+
   const {
     sendJSON, readRequestBody,
     getKugouLoginInfoFresh, getKugouLoginInfo,
@@ -245,6 +277,56 @@ module.exports = function register(ctx) {
         console.error('[KugouRecommendations]', err);
         sendJSON(res, { provider: 'kugou', loggedIn: false, songs: [], error: err.message }, 500);
       }
+      return;
+    }
+
+    // ==================================================================
+    //  批次3：酷狗专辑 / 歌手 / 分类搜索 / 推荐卡片 / 历史日推 / 反馈 / 歌单移除
+    //  公开移动端接口（A 类）匿名可验证；网关通道（B 类）需登录，由 extras 判定。
+    // ==================================================================
+
+    if (pn === '/api/kugou/album/detail') {
+      await runExtra(res, 'KugouAlbumDetail', () => extras.albumDetail(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/album/songs') {
+      await runExtra(res, 'KugouAlbumSongs', () => extras.albumSongs(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/artist/detail') {
+      await runExtra(res, 'KugouArtistDetail', () => extras.artistDetail(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/artist/albums') {
+      await runExtra(res, 'KugouArtistAlbums', () => extras.artistAlbums(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/search/collections') {
+      await runExtra(res, 'KugouSearchCollections', () => extras.searchCollections(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/recommend/cards') {
+      await runExtra(res, 'KugouRecommendCards', () => extras.recommendCards(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/recommend/history') {
+      await runExtra(res, 'KugouRecommendHistory', () => extras.recommendHistory(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/kugou/fm/dislike') {
+      await runWriteExtra(req, res, 'KugouFmDislike', (body) => extras.fmDislike(body));
+      return;
+    }
+
+    if (pn === '/api/kugou/playlist/remove-song') {
+      await runWriteExtra(req, res, 'KugouPlaylistRemoveSong', (body) => extras.playlistRemoveSong(body));
       return;
     }
   };

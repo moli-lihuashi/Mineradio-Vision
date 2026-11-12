@@ -135,22 +135,52 @@ function firstUrl(value) {
   return '';
 }
 
+// 抖音图片的「尺寸/处理后缀」怎么加才安全。
+//
+// 实测踩过两次：
+//   1) 旧实现 `text + suffix` 直接接在字符串末尾 —— 封面 URL 带 `?from=…&x-expires=99`
+//      时后缀落进 query，过期时间变成 "99~c5_300x300.jpg"，CDN 校验失败 → 403 → 裂图。
+//   2) 改成「插到 path 之后、query 之前」也错：抖音头像/封面的签名 CDN
+//      （`p3-pc-sign.douyinpic.com`）是**按 path 参与签名**的，
+//      `.../abc.jpeg` → `.../abc.jpeg~c5_300x300.jpg` 会让签名失配 → 403
+//      （用户账号头像就是这么被我改裂的）。
+//
+// 结论：带 query/fragment 的 URL 一律原样返回，一个字符都不动；
+// 只有干净 URL 才追加后缀（无签名 URL 的既有行为保持不变，也省一次重编码）。
+function qishuiAppendImageSuffix(url, suffix) {
+  if (!url || !suffix) return url;
+  if (url.includes('~')) return url;       // 已经是处理过的尺寸，别再叠
+  if (/[?#]/.test(url)) return url;        // 签名/带参 URL：path 参与签名，碰不得
+  return url + suffix;
+}
+
 function qishuiImageUrl(value, suffix) {
   if (!value) return '';
   if (typeof value === 'string') {
     const text = normalizeText(value);
     if (!/^https?:\/\//i.test(text)) return '';
-    return suffix && !text.includes('~') ? text + suffix : text;
+    return qishuiAppendImageSuffix(text, suffix);
   }
   if (Array.isArray(value)) return value.map(item => qishuiImageUrl(item, suffix)).find(Boolean) || '';
   if (typeof value !== 'object') return '';
   const cover = normalizeText(firstUrl(value.urls || value.url_list || value.urlList || value.url || value.main_url || value.cover_url || value.image_url || ''));
   const uri = normalizeText(value.uri || value.url_key || value.image_uri || value.cover_uri || '');
   let out = cover;
-  if (out && uri && !out.includes(uri)) out += uri;
-  if (!out && /^https?:\/\//i.test(uri)) out = uri;
+  if (out) {
+    // 只有「目录式基础域」才需要拼 uri（path 以 / 结尾，或压根没有 path）。
+    // 完整文件 URL 再拼一次 uri 会得到 .../a.jpg?x=1tos-cn-i-x/y 这种坏链 ——
+    // 这也是裂图的一个来源，旧实现靠 includes(uri) 判断，URL 带 query 时会漏。
+    const pathOnly = out.split(/[?#]/)[0];
+    const bareHost = /^https?:\/\/[^/]+$/i.test(pathOnly);
+    if (uri && !pathOnly.includes(uri) && (/\/$/.test(pathOnly) || bareHost)) {
+      const base = pathOnly.replace(/\/?$/, '/');
+      out = base + uri + out.slice(pathOnly.length);
+    }
+  } else if (/^https?:\/\//i.test(uri)) {
+    out = uri;
+  }
   if (!/^https?:\/\//i.test(out)) return '';
-  return suffix && !out.includes('~') ? out + suffix : out;
+  return qishuiAppendImageSuffix(out, suffix);
 }
 
 function qishuiFirstImageUrl(suffix) {

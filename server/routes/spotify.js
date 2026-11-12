@@ -6,8 +6,16 @@
 //  - /api/spotify/playlist/add-song, /api/spotify/playlist/create, /api/spotify/playlist/collect, /api/spotify/playlist/tracks
 //  - /api/spotify/album/detail, /api/spotify/search, /api/spotify/recommendations
 //  - /api/spotify/song/url, /api/spotify/lyric
+//  - 批次4 增补（实现见 server/spotify/extras.js）：
+//    /api/spotify/user/albums, /api/spotify/artist/albums, /api/spotify/artist/detail,
+//    /api/spotify/playlist/remove-song
+//  - 批次5 增补：/api/spotify/explore/categories, /api/spotify/explore/playlists,
+//    /api/spotify/recommend/made-for-you, /api/spotify/recommend/daily-mix
 // ====================================================================
+const createSpotifyExtras = require('../spotify/extras');
+
 module.exports = function register(ctx) {
+  const extras = createSpotifyExtras(ctx);
   const {
     sendJSON, readRequestBody,
     handleSpotifyStatus, saveSpotifyConfig, clearSpotifyToken, getSpotifyConfig,
@@ -17,6 +25,25 @@ module.exports = function register(ctx) {
     handleSpotifySearch, handleSpotifyRecommendations,
     handleSpotifySongUrl, handleSpotifyLyric,
   } = ctx;
+
+  // 批次4 公共包装：统一错误形态，scope 不足时前端可直接看到缺哪个权限。
+  const SPOTIFY_EXTRA_ERROR_TEXT = {
+    SPOTIFY_REFRESH_TOKEN_MISSING: '尚未连接 Spotify 账号或登录态已过期，请在「连接 Spotify」重新授权。',
+    SPOTIFY_WRITE_SCOPE_REQUIRED: 'Spotify 授权范围不足，请重新连接并授予所需权限。',
+  };
+  async function runSpotifyExtra(res, label, fn) {
+    try {
+      sendJSON(res, await fn());
+    } catch (err) {
+      console.error('[' + label + ']', err);
+      const code = err.code || err.message;
+      sendJSON(res, {
+        provider: 'spotify', error: code,
+        message: SPOTIFY_EXTRA_ERROR_TEXT[code] || err.message,
+        missingScopes: err.missingScopes || [],
+      }, Number(err.statusCode) || 500);
+    }
+  }
 
   return async function(req, res, url, pn) {
     // ========== Spotify API ==========
@@ -287,6 +314,57 @@ module.exports = function register(ctx) {
         console.error('[SpotifyLyric]', err);
         sendJSON(res, { provider: 'spotify', error: err.message, lyric: '', tlyric: '', yrc: '', ytlrc: '' }, 500);
       }
+      return;
+    }
+
+    // ==================================================================
+    //  批次4：Spotify 收藏专辑库 / 歌手页 / 歌手专辑 / 歌单移除
+    //  契约是 Spotify Web API 官方端点，权限不足由 extras 返回明确 scope 说明。
+    // ==================================================================
+
+    if (pn === '/api/spotify/user/albums') {
+      await runSpotifyExtra(res, 'SpotifyUserAlbums', () => extras.userAlbums(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/artist/albums') {
+      await runSpotifyExtra(res, 'SpotifyArtistAlbums', () => extras.artistAlbums(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/artist/detail') {
+      await runSpotifyExtra(res, 'SpotifyArtistDetail', () => extras.artistDetail(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/playlist/remove-song') {
+      await runSpotifyExtra(res, 'SpotifyPlaylistRemoveSong', async () => {
+        if (req.method !== 'POST') {
+          return { provider: 'spotify', success: false, error: 'METHOD_NOT_ALLOWED', message: '需要 POST' };
+        }
+        return extras.playlistRemoveSong(await readRequestBody(req));
+      });
+      return;
+    }
+
+    // 批次5：官方 Web API 的探索页与账号个性化推荐（私人电台不在此列，见 extras.js 头注释）。
+    if (pn === '/api/spotify/explore/categories') {
+      await runSpotifyExtra(res, 'SpotifyExploreCategories', () => extras.exploreCategories(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/explore/playlists') {
+      await runSpotifyExtra(res, 'SpotifyCategoryPlaylists', () => extras.categoryPlaylists(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/recommend/made-for-you') {
+      await runSpotifyExtra(res, 'SpotifyMadeForYou', () => extras.madeForYou(url.searchParams));
+      return;
+    }
+
+    if (pn === '/api/spotify/recommend/daily-mix') {
+      await runSpotifyExtra(res, 'SpotifyDailyMixTracks', () => extras.dailyMixTracks(url.searchParams));
       return;
     }
   };

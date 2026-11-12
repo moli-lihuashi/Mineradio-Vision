@@ -107,8 +107,8 @@ function getSpotifyConfig() {
   const localConfigMissing = !tokenConfigured && !oauth.clientId && !credentialsFileExists;
   const spotifyConfigMessage = clientCredentialsConfigured || tokenConfigured
     ? 'Spotify Web API 已接入；播放仍会按匹配源自动换源。'
-    : (localConfigMissing
-      ? 'Spotify 未连接：请先粘贴一次 Client ID 保存配置，再打开官方 OAuth 授权。'
+    : (oauth.builtin
+      ? 'Spotify 已就绪：直接点「打开浏览器」完成授权（内置桌面客户端身份，PKCE，无需粘贴 Client ID）。'
       : 'Spotify 已保存 Client ID，可直接打开官方 OAuth 授权；桌面端使用 PKCE，不保存 Client Secret。');
   const missing = [];
   if (!oauth.clientId) missing.push('SPOTIFY_CLIENT_ID');
@@ -118,6 +118,7 @@ function getSpotifyConfig() {
   return {
     provider: 'spotify',
     configured: !!(clientCredentialsConfigured || oauthConfigured || tokenConfigured),
+    builtin: !!oauth.builtin,
     loggedIn: false,
     clientId: oauth.clientId,
     clientSecret: oauth.clientSecret,

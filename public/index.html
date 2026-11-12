@@ -62,6 +62,7 @@ try {
 <link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/02-home/home.css?v=3.0.2-petwhite">
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/05-playback/netease-features.css?v=1.0.0">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/12-folia/folia-world.css?v=0.1.0-skeleton">
@@ -311,7 +312,13 @@ try {
   </div>
   <div id="home-platform-recommend-status" class="home-platform-recommend-status" role="status" aria-live="polite"></div>
   <div id="home-platform-recommend-list" class="home-platform-recommend-list"></div>
+  <!-- 网易云增补能力面板：模块 05-playback/20-netease-features.js，仅网易云 tab 显示入口 -->
+  <div id="netease-features-panel" class="netease-features-panel" hidden></div>
+  <!-- 批次2/3/4 新增接口的统一入口：模块 05-playback/21-platform-extras.js -->
+  <div id="platform-extras-panel" class="netease-features-panel" hidden></div>
   <div class="home-platform-recommend-actions">
+    <button id="home-platform-recommend-netease-tools" type="button">网易云账户能力</button>
+    <button id="home-platform-recommend-extras" type="button">平台能力</button>
     <button id="home-platform-recommend-refresh" type="button">刷新当前平台</button>
     <button id="home-platform-recommend-done" type="button">完成</button>
   </div>
@@ -1233,9 +1240,9 @@ try {
         <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(false)">系统释放</button>
         <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(true)">提权释放</button>
       </div>
-      <div class="fx-section-label">关闭窗口</div>
-      <div class="fx-seg" id="close-behavior-seg" title="点击右上角关闭按钮时的行为">
-        <button data-close-behavior="exit">直接退出</button>
+      <div class="fx-section-label">最小化窗口</div>
+      <div class="fx-seg" id="close-behavior-seg" title="点击最小化按钮时的行为；右上角关闭按钮始终完全退出播放器（含全部后台进程）">
+        <button data-close-behavior="exit">最小化到任务栏</button>
         <button data-close-behavior="tray">后台托盘</button>
       </div>
       <div class="fx-section-label">休息提醒</div>
@@ -1587,7 +1594,7 @@ try {
 
 <!-- 登录模态 -->
 <div id="login-modal" class="modal-mask">
-  <div class="modal dual-login-modal">
+  <div class="modal dual-login-modal folio-login">
     <!-- 平台渐变背景层 + 光晕 -->
     <div class="login-bg-layer active" data-login-bg="netease"></div>
     <div class="login-bg-layer" data-login-bg="qq"></div>
@@ -1611,11 +1618,11 @@ try {
 
       <!-- 单页画板：平台 → 方式 → 内容 → 操作，无嵌套卡片、无滚动 -->
       <nav class="login-platform-tabs login-platform-list" id="login-platform-tabs" aria-label="音乐平台选择">
-        <button id="login-provider-netease" class="netease active" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><b>网易云</b></button>
-        <button id="login-provider-qq" class="qq" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><b>QQ 音乐</b></button>
-        <button id="login-provider-kugou" class="kugou" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><b>酷狗</b></button>
-        <button id="login-provider-qishui" class="qishui" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><b>汽水</b></button>
-        <button id="login-provider-spotify" class="spotify" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><b>Spotify</b></button>
+        <button id="login-provider-netease" class="netease active" type="button" data-login-provider="netease" onclick="selectLoginProviderNode('netease')"><span class="provider-logo">NE</span><span class="login-provider-text"><b>网易云</b><small class="login-provider-state">未登录</small></span></button>
+        <button id="login-provider-qq" class="qq" type="button" data-login-provider="qq" onclick="selectLoginProviderNode('qq')"><span class="provider-logo">QQ</span><span class="login-provider-text"><b>QQ 音乐</b><small class="login-provider-state">未登录</small></span></button>
+        <button id="login-provider-kugou" class="kugou" type="button" data-login-provider="kugou" onclick="selectLoginProviderNode('kugou')"><span class="provider-logo">KG</span><span class="login-provider-text"><b>酷狗</b><small class="login-provider-state">未登录</small></span></button>
+        <button id="login-provider-qishui" class="qishui" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span class="provider-logo">QS</span><span class="login-provider-text"><b>汽水</b><small class="login-provider-state">未登录</small></span></button>
+        <button id="login-provider-spotify" class="spotify" type="button" data-login-provider="spotify" onclick="selectLoginProviderNode('spotify')"><span class="provider-logo">SP</span><span class="login-provider-text"><b>Spotify</b><small class="login-provider-state">未登录</small></span></button>
       </nav>
 
       <div class="login-board-toolbar">
@@ -1626,6 +1633,28 @@ try {
       </div>
 
       <div class="login-board-main">
+        <!-- Folia 风格：Spotify 浏览器授权面板（仅选中 Spotify 时显示；旧 DOM 全部保留） -->
+        <section id="folio-spotify-hero" class="folio-spotify-hero" hidden aria-label="Spotify 浏览器授权">
+          <div class="folio-browser-tile">
+            <div class="folio-browser-window"><span class="provider-logo spotify-mark">S</span></div>
+          </div>
+          <div class="folio-hero-copy">
+            <div class="folio-seg" id="folio-spotify-method" role="group" aria-label="Spotify 授权方式">
+              <button type="button" class="on" data-spotify-method="external" onclick="selectSpotifyAuthMethod('external')">系统浏览器授权</button>
+              <button type="button" data-spotify-method="embedded" onclick="selectSpotifyAuthMethod('embedded')">应用内窗口授权</button>
+            </div>
+            <h3>登录 Spotify</h3>
+            <p id="folio-spotify-note">在系统浏览器里完成授权，页面会跳回本机回调地址；令牌由应用加密保存，均衡器、Automix 与跟着音乐跳动的效果都能用。</p>
+            <button id="folio-spotify-open-btn" class="folio-primary-btn" type="button" onclick="openSpotifyExternalBrowserLogin()">打开浏览器</button>
+            <div class="folio-steps"><span>选择授权方式</span><span>打开浏览器授权</span><b>自动回到应用</b></div>
+            <button id="folio-spotify-custom-toggle" class="folio-custom-toggle" type="button" onclick="toggleFolioSpotifyCustom()">可选：使用自己的 Client ID</button>
+            <div id="folio-spotify-custom" class="folio-spotify-custom" hidden>
+              <input id="folio-spotify-client-id" type="text" spellcheck="false" autocomplete="off" placeholder="粘贴 Spotify Client ID">
+              <button type="button" onclick="saveFolioSpotifyCustomClientId()">保存</button>
+              <small>自有应用回调：http://127.0.0.1:43879/callback</small>
+            </div>
+          </div>
+        </section>
         <footer id="login-auth-drawer" class="login-auth-drawer show">
           <div class="login-auth-copy">
             <h2 id="login-modal-title">扫码登录网易云音乐</h2>

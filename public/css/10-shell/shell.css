@@ -620,8 +620,35 @@ body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,b
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-right: 4px
+  padding-right: 4px;
+  /* 常驻滚动条槽位：卡片是 54px 封面 + 两列网格，滚动条一出现/消失会让整列横向抖一下 */
+  scrollbar-gutter: stable;
 }
+/* 深色细滚动条，语言对齐 #playlist-panel / .netease-features-panel：
+   透明轨道 + 无箭头 + 8px 药丸，平时低调、悬停加深。
+   【坑】Chromium 见到 scrollbar-width/color 会整组忽略 ::-webkit-scrollbar-*，
+   所以标准属性只放进 @supports 兜底给非 Blink 引擎。 */
+@supports not selector(::-webkit-scrollbar) {
+  .home-platform-recommend-list { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .2) transparent }
+}
+.home-platform-recommend-list::-webkit-scrollbar { width: 8px; height: 8px }
+.home-platform-recommend-list::-webkit-scrollbar-track { background: transparent }
+.home-platform-recommend-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, .16);
+  background-clip: content-box;
+  border-radius: 999px;
+}
+.home-platform-recommend-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .28);
+  background-clip: content-box;
+}
+.home-platform-recommend-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, .42);
+  background-clip: content-box;
+}
+.home-platform-recommend-list::-webkit-scrollbar-button { display: none; width: 0; height: 0 }
+.home-platform-recommend-list::-webkit-scrollbar-corner { background: transparent }
 .home-platform-recommend-list h3 {
   margin: 0 0 8px;
   font-size: 13px;

@@ -35,6 +35,22 @@ module.exports = function createKugouService(deps) {
 
   const https = require('https');
 
+  /* 取址诊断：主进程 Windows 下 console.log 会被吞，直接写 cookie-debug.log。
+     只记参数摘要与上游原始响应，绝不记录 token / key 的值。 */
+  function kugouPlayDebugLog(msg) {
+    try {
+      const fs = require('fs');
+      const nodePath = require('path');
+      const cookieFile = process.env.KUGOU_COOKIE_FILE || '';
+      const dir = cookieFile
+        ? nodePath.dirname(cookieFile)
+        : (process.env.APPDATA ? nodePath.join(process.env.APPDATA, 'Mineradio') : '');
+      if (!dir) return;
+      fs.appendFileSync(nodePath.join(dir, 'cookie-debug.log'),
+        '[' + new Date().toISOString() + '] ' + msg + '\n', 'utf8');
+    } catch (_) {}
+  }
+
   /* 上游抖动的兜底：短 TTL 命中直接返回；上游失败时回落到「上一次成功」。
      旧行为是直连上游、失败就把错误抛给路由 → 500 → 渲染层 Promise.all 整体失败，
      面板从「加载中」直接变空白。实测 /api/kugou/user/playlists 在 153ms~25s 之间跳。 */
@@ -497,6 +513,12 @@ module.exports = function createKugouService(deps) {
       .replace('<!--KG_TAG_RES_START-->', '')
       .replace('<!--KG_TAG_RES_END-->', '')
       .trim();
+    kugouPlayDebugLog('[KugouTracker] hash=' + h +
+      ' albumAudioId=' + String(options.albumAudioId || '') +
+      ' userId=' + String(userId || '0') +
+      ' hasToken=' + (token ? '1' : '0') +
+      ' vipType=' + String(params.vipType) +
+      ' resp=' + String(cleanText || '').slice(0, 500).replace(/\s+/g, ' '));
     return parseJSONText(cleanText);
   }
   function kugouPlayableUrlFromResponse(json) {
@@ -564,11 +586,26 @@ module.exports = function createKugouService(deps) {
     const data = json && (json.data || json);
     const playableUrl = kugouPlayableUrlFromResponse(json);
     const code = json && (json.error_code || json.errcode || json.status);
+    /* 酷狗 trackercdn 对「第三方拿不到地址」返回 status:3 + trans_param，
+       响应里既没有 url 也没有错误消息（实测：
+       {"status":3,"trans_param":{"classmap":{"attr0":...},"display":...}}）。
+       四通道 h5/mobile/web/gateway 对同一首会明确回「无版权」。
+       这类多见于用户上传 / 二创 / Follow 版本：官方客户端用私有协议能播，
+       开放接口不给第三方地址。2026-11-12 真机取证：同歌单另外 8 首全部
+       status:1 正常，只有这两首 status:3，且四通道识别账号为 VIP。
+       旧实现在「已登录 + 没 url」时一律硬编码 paid_required，
+       于是提示「需要会员/购买」并触发登录/VIP 引导 —— 提示是错的，
+       还会白跑一轮换源与重管线。改成前端已支持的 copyright_unavailable。 */
+    const upstreamMessage = String((json && (json.error || json.errmsg || json.message)) || '').trim();
+    const thirdPartyCopyrightBlock = !playableUrl && Number(code) === 3 && !upstreamMessage;
     const restriction = playableUrl ? null : playbackRestriction('kugou',
-      loginInfo.loggedIn ? 'paid_required' : 'login_required',
-      loginInfo.loggedIn ? '酷狗没有返回当前账号可播放地址，可能需要会员、购买或官方客户端权限' : '酷狗歌曲需要登录后获取播放地址',
-      loginInfo.loggedIn ? 'upgrade' : 'login',
-      { code, rawMessage: json && (json.error || json.errmsg || json.message || '') });
+      thirdPartyCopyrightBlock ? 'copyright_unavailable'
+        : (loginInfo.loggedIn ? 'paid_required' : 'login_required'),
+      thirdPartyCopyrightBlock
+        ? '酷狗未向第三方开放该曲目播放地址（常见于用户上传或二创版本），官方客户端可播；可换用其它平台的同名版本'
+        : (loginInfo.loggedIn ? '酷狗没有返回当前账号可播放地址，可能需要会员、购买或官方客户端权限' : '酷狗歌曲需要登录后获取播放地址'),
+      thirdPartyCopyrightBlock ? 'switch_source' : (loginInfo.loggedIn ? 'upgrade' : 'login'),
+      { code, rawMessage: upstreamMessage });
     return {
       provider: 'kugou',
       url: playableUrl,

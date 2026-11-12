@@ -370,7 +370,7 @@ function queueVirtualRange(total, options, rowStep, overscan) {
 function queueItemHtml(song, i) {
   var thumb = songCoverSrc(song, 60);
   var imgTag = thumb
-    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"')
+    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)"')
     : '<div style="width:38px;height:38px;border-radius:6px;background:rgba(255,255,255,.06);flex-shrink:0"></div>';
   return '<div class="queue-item' + (i === currentIdx ? ' now' : '') + '" data-queue-index="' + i + '" onclick="playQueueAt(' + i + ')">' +
     imgTag +
@@ -386,7 +386,7 @@ function queueItemHtml(song, i) {
 function miniQueueItemHtml(song, i) {
   var thumb = songCoverSrc(song, 60);
   var imgTag = thumb
-    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="this.style.opacity=0.2"')
+    ? imgTagFromSrc(thumb, 'loading="lazy" decoding="async" onerror="mineradioCoverFallback(this)"')
     : '<div class="mini-queue-cover"></div>';
   return '<div class="mini-queue-item' + (i === currentIdx ? ' now' : '') + '" data-queue-index="' + i + '" onclick="playQueueAt(' + i + ')">' +
     imgTag +

@@ -235,6 +235,45 @@ module.exports = function createQQContent(deps) {
     };
   }
 
+  /* 经典关键词搜索接口（client_search_cp）：真正的分页在这里 —— 支持 p(页码)/n(每页数)。
+   * smartbox 是联想接口，无 offset 且上限 10 条，只能给第一页兜底。 */
+  const QQ_CLIENT_SEARCH_URL = 'https://c.y.qq.com/soso/fcgi-bin/client_search_cp';
+  async function qqKeywordSearch(keywords, page, num) {
+    const u = new URL(QQ_CLIENT_SEARCH_URL);
+    u.searchParams.set('ct', '24');
+    u.searchParams.set('qqmusic_ver', '1298');
+    u.searchParams.set('new_json', '1');
+    u.searchParams.set('remoteplace', 'txt.yqq.song');
+    u.searchParams.set('searchid', '0');
+    u.searchParams.set('t', '0');
+    u.searchParams.set('aggr', '1');
+    u.searchParams.set('cr', '1');
+    u.searchParams.set('catZhida', '1');
+    u.searchParams.set('lossless', '0');
+    u.searchParams.set('flag_qc', '0');
+    u.searchParams.set('p', String(Math.max(1, page || 1)));
+    u.searchParams.set('n', String(Math.max(1, Math.min(num || 20, 100))));
+    u.searchParams.set('w', keywords);
+    u.searchParams.set('g_tk', '5381');
+    u.searchParams.set('loginUin', '0');
+    u.searchParams.set('hostUin', '0');
+    u.searchParams.set('format', 'json');
+    u.searchParams.set('inCharset', 'utf-8');
+    u.searchParams.set('outCharset', 'utf-8');
+    u.searchParams.set('notice', '0');
+    u.searchParams.set('platform', 'yqq.json');
+    u.searchParams.set('needNewCode', '0');
+    const text = await requestText(u.toString(), {
+      headers: Object.assign({}, QQ_HEADERS, { Referer: 'https://y.qq.com/' }),
+    });
+    const json = parseJSONText(text);
+    const block = json && json.data && json.data.song;
+    const rawList = Array.isArray(block && block.list) ? block.list : [];
+    return rawList
+      .map(item => mapQQTrack(item, {}))
+      .filter(song => song && song.name && (song.mid || song.id));
+  }
+
   async function qqSmartboxSearch(keywords, limit) {
     const u = new URL(QQ_SMARTBOX_URL);
     u.searchParams.set('format', 'json');
@@ -267,8 +306,67 @@ module.exports = function createQQContent(deps) {
     return mapQQTrack(data && data.track_info, fallback);
   }
 
-  async function handleQQArtistDetail(mid, limit) {
-    const singerMid = String(mid || '').trim();
+  /* QQ 专辑详情：前端 05-home-track-detail.js:370 一直在请求 /api/qq/album/detail，
+     但服务端从来没有这个路由（点专辑永远「加载失败」）。这里补上。
+     用 u.y.qq.com 的 music.musichallAlbum.AlbumInfoServer / getAlbumDetail，
+     albumMid 是前端唯一稳定带的字段；拿不到曲目时退回按专辑名搜索。 */
+  async function handleQQAlbumDetail(mid, limit) {
+    const albumMid = String(mid || '').trim();
+    const num = Math.max(1, Math.min(200, parseInt(limit || '120', 10) || 120));
+    if (!albumMid) return { provider: 'qq', error: 'MISSING_ALBUM_MID', album: null, songs: [] };
+    let info = {};
+    let songs = [];
+    try {
+      const json = await qqMusicRequest({
+        comm: { ct: 24, cv: 0 },
+        albumSong: {
+          module: 'music.musichallAlbum.AlbumSongList',
+          method: 'GetAlbumSongList',
+          param: { albumMid, begin: 0, num, order: 2 },
+        },
+        albumInfo: {
+          module: 'music.musichallAlbum.AlbumInfoServer',
+          method: 'GetAlbumDetail',
+          param: { albumMid },
+        },
+      }, { cookie: true });
+      const infoBlock = json && json.albumInfo && json.albumInfo.data;
+      /* 真实结构（2026-11-12 抓包确认）：albumInfo.data = { basicInfo, company, singer, extra }，
+         专辑名 / 发行日 / 简介都在 basicInfo 里，不在 data 顶层。 */
+      const basic = (infoBlock && (infoBlock.basicInfo || infoBlock)) || null;
+      if (basic) {
+        /* 歌手不在 basicInfo 里：albumInfo.data.singer 才是歌手块（抓包确认），
+           结构可能是数组也可能带 singer_list。 */
+        const singerBlock = infoBlock && infoBlock.singer;
+        const singerArr = Array.isArray(basic.singer) ? basic.singer
+          : Array.isArray(singerBlock) ? singerBlock
+            : (singerBlock && Array.isArray(singerBlock.singer_list)) ? singerBlock.singer_list
+              : (singerBlock && Array.isArray(singerBlock.singerList)) ? singerBlock.singerList
+                : [];
+        info = {
+          id: basic.albumID || basic.albumId || basic.id || '',
+          mid: basic.albumMid || albumMid,
+          name: basic.albumName || basic.name || '',
+          artist: singerArr.map(x => (x && (x.name || x.title)) || '').filter(Boolean).join(' / '),
+          cover: qqAlbumCover(basic.albumMid || albumMid, 600),
+          publishDate: String(basic.publishDate || '').slice(0, 10),
+          desc: decodeHtmlEntities(basic.desc || ''),
+          songCount: Number(basic.songCount || 0) || 0,
+        };
+      }
+      const listBlock = json && json.albumSong && json.albumSong.data;
+      const rawList = listBlock && (listBlock.songList || listBlock.songlist);
+      songs = (Array.isArray(rawList) ? rawList : [])
+        .map(item => mapQQTrack((item && (item.songInfo || item.track_info || item.song)) || item, {}))
+        .filter(song => song && song.name && (song.mid || song.id));
+    } catch (e) {
+      return { provider: 'qq', error: e.message || 'QQ_ALBUM_DETAIL_FAILED', album: info, songs: [] };
+    }
+    if (!info.name) info = Object.assign({ mid: albumMid, cover: qqAlbumCover(albumMid, 600) }, info);
+    return { provider: 'qq', album: info, songs, total: info.songCount || songs.length };
+  }
+
+  async function handleQQArtistDetail(mid, limit) {    const singerMid = String(mid || '').trim();
     const num = Math.max(10, Math.min(80, parseInt(limit || '36', 10) || 36));
     if (!singerMid) return { provider: 'qq', error: 'MISSING_SINGER_MID', artist: null, songs: [] };
     const json = await qqMusicRequest({
@@ -311,9 +409,19 @@ module.exports = function createQQContent(deps) {
     };
   }
 
-  async function handleQQSearch(keywords, limit) {
+  async function handleQQSearch(keywords, limit, offset) {
     const kw = String(keywords || '').trim();
     if (!kw) return [];
+    const num = Math.max(1, Math.min(Number(limit) || 12, 100));
+    const off = Math.max(0, Number(offset) || 0);
+    const page = Math.floor(off / num) + 1;
+    /* 真分页走 client_search_cp。
+     * 网络故障（超时 / 5xx）必须继续抛出（2026-11-12 复核）：旧实现 catch 后
+     * 返回 [] + HTTP 200，前端把超时当成「没有更多歌曲」，推进 offset 并
+     * 隐藏「加载更多」，当前页也丢了。只有真正返回空列表才判定到底。
+     * 第一页真分页返回空（非异常）时仍回落 smartbox 兜底。 */
+    const pageSongs = await qqKeywordSearch(kw, page, num);
+    if (page > 1 || pageSongs.length) return pageSongs;
     const base = await qqSmartboxSearch(kw, limit);
     const detailed = await Promise.all(base.map(async item => {
       try { return await qqSongDetail(item.mid, item); }
@@ -589,6 +697,7 @@ module.exports = function createQQContent(deps) {
     qqSmartboxSearch,
     qqSongDetail,
     handleQQArtistDetail,
+    handleQQAlbumDetail,
     handleQQSearch,
     handleQQSongUrl,
     mapQQComment,

@@ -282,8 +282,142 @@ async function playLocalQueueSong(song, idx, token, firstVisualPlay, opts) {
   return true;
 }
 
+/* ── 酷狗「未返回歌曲」快速通道 ────────────────────────────────────────────
+ * 真机取证 2026-11-12：酷狗对部分 UGC / 二创曲目（用户上传、Follow / 雨声版本）
+ * 在 trackercdn 返回 {"status":3,"trans_param":{...}} —— 既无 url 也无错误消息；
+ * 服务端已把这类归为 copyright_unavailable（官方客户端用私有协议能播，第三方拿不到）。
+ * 旧链路会为它跑 tryAutoPlaybackFallback（换源搜索 6.5s 超时）→ skipFailedQueueItem
+ * → settleSourceFallbackTerminal（清 audio.src）→ 用户点播放键又重开一轮 root playback，
+ * 连点几次就打崩渲染进程。用户要求：别傻等、别卡，直接提示并自动跳下一首。
+ *
+ * 判据只认服务端响应，绝不按歌名 / 版本后缀猜 —— 同一歌单里大量正常曲目也带
+ * 「(DJ…版)」「歌手 - 歌名」这类后缀。跳转复用既有合流闸，并用
+ * 「跳过预算 + 曲目去重 + 时间窗」防止整队列不可用时无限循环。 */
+var KUGOU_SKIP_MAX = 6;
+var KUGOU_SKIP_WINDOW_MS = 12000;
+var kugouSkipState = {
+  startedAt: 0, lastClaimAt: 0, count: 0, keys: Object.create(null),
+  notified: false, stopNotified: false
+};
+
+function resetKugouSkipChain() {
+  kugouSkipState.startedAt = 0;
+  kugouSkipState.lastClaimAt = 0;
+  kugouSkipState.count = 0;
+  kugouSkipState.keys = Object.create(null);
+  kugouSkipState.notified = false;
+  kugouSkipState.stopNotified = false;
+}
+function isKugouUnavailableResponse(song, data) {
+  if (!song || !data) return false;
+  var provider = typeof getMusicProviderKey === 'function'
+    ? getMusicProviderKey(song)
+    : (song.source || song.provider || song.type || '');
+  if (provider !== 'kugou') return false;
+  var category = String(data.reason || (data.restriction && data.restriction.category) || '');
+  if (category !== 'copyright_unavailable') return false;
+  return !String(data.url || data.play_url || '');
+}
+function claimKugouSkip(song) {
+  var now = Date.now();
+  if (!kugouSkipState.startedAt) kugouSkipState.startedAt = now;
+  /* 慢响应不再续期预算（2026-11-12 复核模拟：两首不可用曲、响应间隔 6.5s，
+     旧实现每个 12s 窗口过期就重置计数，连续 10 次都获准跳转）。
+     次数与已访问曲目跟随**整轮**自动跳转全程累计；两次跳转间隔超过时间窗
+     → 直接终止（'stale'）而不是重置窗口再拿 6 次。重新拿预算的唯一入口
+     是用户手动选曲 / 切歌（playQueueAt 入口 resetKugouSkipChain）。 */
+  var lastAt = kugouSkipState.lastClaimAt || kugouSkipState.startedAt;
+  if (now - lastAt > KUGOU_SKIP_WINDOW_MS) return 'stale';
+  kugouSkipState.lastClaimAt = now;
+  var key = typeof queueItemKey === 'function' ? queueItemKey(song) : String(song.name || '');
+  if (key && kugouSkipState.keys[key]) return 'duplicate';
+  if (kugouSkipState.count >= KUGOU_SKIP_MAX) return 'budget';
+  if (playQueue && playQueue.length > 1
+      && Object.keys(kugouSkipState.keys).length >= playQueue.length) return 'exhausted';
+  if (key) kugouSkipState.keys[key] = true;
+  kugouSkipState.count++;
+  return 'ok';
+}
+/* 终止自动跳转后旧媒体源必须卸掉（2026-11-12 复核：失败分支保留了旧 audio.src，
+ * 而失败重试闸只在音源为空时生效 —— 界面选中不可播曲目、点播放键，
+ * attemptAudioPlay 会把 audio.src 里挂着的上一首重新放出来）。
+ * 卸源后 togglePlay 走「无音源」分支，由 _lastPlaybackFailAt / _kugouUnavailableAt
+ * 的失败闸接管：窗口内直接提示退出，过期后允许手动重试当前曲目。 */
+function unloadStaleTrackMedia() {
+  if (audio) {
+    try {
+      audioFadeSerial++;
+      clearAudioFadeTimers();
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.__mineradioQueueItemKey = '';
+      audio.__mineradioTrackSwitchToken = 0;
+      audio.load();
+    } catch (e) {}
+  }
+  playing = false;
+  setPlayIcon(false);
+}
+function skipKugouUnavailableTrack(idx, token, song, data) {
+  forcePlaybackControlsInteractive();
+  if (typeof hideLoading === 'function') hideLoading();
+  /* 给队列项补上失败标记：togglePlay 的不可用重试闸靠 _lastPlaybackFailAt 工作。
+     快速通道绕过了换源终局，若不在这一步补，用户点播放键会每次都重开一轮
+     root playback（真机实测连点 6 次 ΔplayQueueAt=12）。 */
+  if (typeof markQueueItemPlaybackFailed === 'function') {
+    markQueueItemPlaybackFailed(idx, null);
+  } else if (playQueue[idx]) {
+    playQueue[idx]._lastPlaybackFailAt = Date.now();
+  }
+  /* 短时效标记：这类曲目不是「换源能救」的失败，连点播放键不该再重开一轮
+     root playback（那会重置跳过链、又跑一整串自动跳）。togglePlay 读到它
+     就直接提示并退出；窗口过期后仍允许重试。 */
+  if (playQueue[idx]) playQueue[idx]._kugouUnavailableAt = Date.now();
+  /* 不再用 playbackTrackSwitchInProgress() 提前退出：drain 正在 await 当前
+     playQueueAt 时它恒为真，会把连续自动跳卡在第 2 首。此处登记的目标是
+     合流闸的正常用法（skipFailedQueueItem 同样），循环由下面的预算/去重兜底。 */
+  var claim = claimKugouSkip(song);
+  if (claim !== 'ok') {
+    unloadStaleTrackMedia();
+    if (!kugouSkipState.stopNotified && typeof showToast === 'function') {
+      kugouSkipState.stopNotified = true;
+      showToast(claim === 'stale'
+        ? '歌曲加载超时，已停止自动跳转'
+        : '多首歌曲酷狗未返回地址，已停止自动跳转');
+    }
+    return false;
+  }
+  if (!playQueue || playQueue.length <= 1 || idx < 0) {
+    unloadStaleTrackMedia();
+    if (typeof showToast === 'function') showToast('酷狗未返回歌曲，队列里没有其它曲目');
+    return false;
+  }
+  var target = playMode === 'shuffle'
+    ? shuffleNextTrackIndex()
+    : (currentIdx + 1) % playQueue.length;
+  if (target < 0) target = (currentIdx + 1) % playQueue.length;
+  if (target === idx || target === currentIdx) {
+    unloadStaleTrackMedia();
+    if (typeof showToast === 'function') showToast('酷狗未返回歌曲，队列里没有其它曲目');
+    return false;
+  }
+  if (!kugouSkipState.notified && typeof showToast === 'function') {
+    kugouSkipState.notified = true;
+    showToast('酷狗未返回歌曲，已自动跳到下一首');
+  }
+  currentIdx = target;
+  Promise.resolve(requestTrackSwitch(target, internalPlaybackOpts({
+    context: typeof scenePlaybackContextForTrackSwitch === 'function' ? scenePlaybackContextForTrackSwitch() : null,
+    preserveHomeState: true,
+    kugouSkipChain: true
+  }), 'kugou-unavailable-skip')).finally(forcePlaybackControlsInteractive);
+  return false;
+}
+
 async function playQueueAt(idx, opts) {
   opts = opts || {};
+  // 用户手动点歌 / 点下一曲会重置自动跳过链；自动跳过发起的那一轮不清，预算才能累计。
+  if (!opts.kugouSkipChain) resetKugouSkipChain();
   // 返回 boolean：false 表示换源事务已过期/应中止，勿把 true 写回 opts
   if (typeof beginSourceFallbackPlaybackInvocation === 'function' && !beginSourceFallbackPlaybackInvocation(opts)) return;
   if (idx < 0 || idx >= playQueue.length) return;
@@ -304,6 +438,8 @@ async function playQueueAt(idx, opts) {
     if (shelfManager && shelfManager.syncOpenContentToCurrent) shelfManager.syncOpenContentToCurrent(false);
   });
   trackSwitchToken++;
+  // 入口即作废上一首还在飞的取址请求：新的显式选曲不该陪旧请求等网络
+  abortActivePlaybackResolve('track-switch-entry');
   resetCuefieldAutoMix(opts.cuefieldAutoMix ? 'cuefield-handoff' : 'track-switch', {
     preservePreparedAudio: !!opts.cuefieldAutoMix,
     preserveExecution: !!opts.cuefieldAutoMix
@@ -315,6 +451,19 @@ async function playQueueAt(idx, opts) {
   closeGsapModal(document.getElementById('local-beat-modal'));
   beatMapToken++;
   var token = trackSwitchToken;
+  /* 本次切歌的取址取消句柄：连点 / 清队列作废在飞请求时 abort，
+   * 让 drain 不必等旧请求的网络往返（可能数秒～数十秒，此前甚至无超时）
+   * 就能推进最后一个目标。取消本身只断开等待——静默退场由
+   * token 归属检查负责，不会触发错误提示或换源重试。 */
+  var resolveAbort = (typeof AbortController === 'function') ? new AbortController() : null;
+  activePlaybackResolveAbort = resolveAbort;
+  if (resolveAbort && opts && typeof opts === 'object') {
+    try { opts.playbackResolveSignal = resolveAbort.signal; } catch (_) {}
+  } else if (opts && typeof opts === 'object' && opts.playbackResolveSignal) {
+    // 无 AbortController 时清掉重试链（Object.assign 继承）带来的旧信号，
+    // 绝不能拿上一代已作废的 signal 取址
+    try { delete opts.playbackResolveSignal; } catch (_) { opts.playbackResolveSignal = undefined; }
+  }
   var firstVisualPlay = !firstPlayDone;
   markPlayPhase('track-setup');
   var song = safePlaybackStep('hydrate-song', function(){ return hydrateCustomCover(playQueue[idx]); }) || playQueue[idx];
@@ -454,6 +603,11 @@ async function playQueueAt(idx, opts) {
     if (!data || !data.url) {
       // 取不到地址：封面重管线一律不启动，已排队的也作废
       dropPendingCoverLoad('no-url');
+      /* 酷狗明确未返回地址：不等换源搜索、不进换源终局（那会清 audio.src，
+         并让下一次点播放键重开一轮 root playback），直接提示并自动跳下一首。 */
+      if (isKugouUnavailableResponse(song, data)) {
+        return skipKugouUnavailableTrack(idx, token, song, data);
+      }
       /* 用户已经在连着点下一曲了：这一首本来就要被跨过去，
          不要再为它找替代源、更不要弹「不可播放」把界面钉在这种结论上。 */
       if (pendingTrackSwitch) return false;
@@ -716,6 +870,14 @@ async function playQueueAt(idx, opts) {
     }
     return true;
   } catch (err) {
+    /* 归属已失效（连点 / 清队列 / 新显式选曲作废在飞请求）：静默退场。
+       取消引发的 AbortError 只属于已被跨过的那一首——不弹提示、
+       不 hideLoading（别把新目标刚点亮的加载态盖掉）、不换源、不自动跳歌。 */
+    if (token !== trackSwitchToken) {
+      console.warn('[Playback] switch superseded, cancelled quietly:', (err && (err.name || err.message)) || err);
+      dropPendingCoverLoad('token-expired-error');
+      return false;
+    }
     console.error('Play failed:', { phase: playPhase, error: err }, err);
     hideLoading();
     forcePlaybackControlsInteractive();
@@ -735,6 +897,12 @@ async function playQueueAt(idx, opts) {
     showToast(playbackFailureToastText(err));
   }
   } catch (setupErr) {
+    /* 同上：setup 阶段被作废的在飞请求也静默退场（token 可能在声明前就出错，用 typeof 兜底） */
+    if (typeof token !== 'undefined' && token !== trackSwitchToken) {
+      console.warn('[Playback] switch superseded during setup, cancelled quietly');
+      if (typeof dropPendingCoverLoad === 'function') dropPendingCoverLoad('token-expired-setup-error');
+      return false;
+    }
     console.error('Play setup failed:', { phase: playPhase, error: setupErr }, setupErr);
     hideLoading();
     forcePlaybackControlsInteractive();
@@ -744,6 +912,10 @@ async function playQueueAt(idx, opts) {
       return;
     }
     showToast(playbackFailureToastText(setupErr));
+  } finally {
+    // 本次切歌结束（成功 / 失败 / 被取消）都释放取址取消句柄，
+    // 别让 abort 误伤后续切歌的请求
+    if (resolveAbort && activePlaybackResolveAbort === resolveAbort) activePlaybackResolveAbort = null;
   }
 }
 /* 起播归属快照：attemptAudioPlay 内部有多个 await（长暂停恢复、音频分析恢复、
@@ -848,17 +1020,128 @@ async function playAudio(opts) {
   opts = opts || {};
   return attemptAudioPlay({ manual: false, silent: !!opts.silent });
 }
+/* 「播不了的曲目」被 settleSourceFallbackTerminal 清掉 audio.src 之后，
+ * 播放键会走 (!audio || !audio.src) 分支重新 playQueueAt(currentIdx,{manual:true})。
+ * 那一轮是完整的 root playback：cancel 旧事务 → claim 明确点选（作废合流闸）
+ * → 歌词准备 / 队列与 shelf 重建 → 换源搜索 → 终局再把 src 清掉。
+ * 用户连点播放键就是连点几轮重管线；真机探针 2026-11-12 实测
+ *   click#1 playQueueAt 3→4、click#2 4→5、click#3 渲染进程崩溃重载
+ * （JS heap 只有 25~30MB，涨的是 three.js 纹理 / canvas 那类原生内存，
+ *   与 11-provider-fallback.js 里 kOomExceptionCode 0xE0000008 的记录一致）。
+ *
+ * 11-provider-fallback 的 markQueueItemPlaybackFailed 已经给失败曲目写了
+ * _lastPlaybackFailAt，这里直接复用它做「冷却 + 重试预算」，不新增存档字段：
+ * 刚判定不可用的曲目在一次失败有效期内只允许重试一次，其余点击合并掉。
+ * 正常曲目 / 标记过期后的曲目完全不受限制（网络或登录态恢复仍可重试）。 */
+var UNAVAILABLE_RETRY_COOLDOWN_MS = 3000;
+var UNAVAILABLE_RETRY_BUDGET = 1;
+var UNAVAILABLE_RETRY_FAIL_WINDOW_MS = 18000;
+var unavailableRetryState = { key: '', at: 0, count: 0, notified: false };
+
+function unavailableRetryCurrentSong() {
+  if (typeof playQueue === 'undefined' || !playQueue || !playQueue.length) return null;
+  if (typeof currentIdx !== 'number' || currentIdx < 0 || currentIdx >= playQueue.length) return null;
+  return playQueue[currentIdx] || null;
+}
+function unavailableRetrySongKey(song) {
+  if (!song) return '';
+  return String(song.id || song.mid || song.name || song.title || '');
+}
+function unavailableTrackJustFailed(song) {
+  var failedAt = Number(song && song._lastPlaybackFailAt) || 0;
+  return failedAt > 0 && Date.now() - failedAt < UNAVAILABLE_RETRY_FAIL_WINDOW_MS;
+}
+function claimUnavailablePlaybackRetry() {
+  var song = unavailableRetryCurrentSong();
+  if (!unavailableTrackJustFailed(song)) {
+    unavailableRetryState = { key: '', at: 0, count: 0, notified: false };
+    return { ok: true, reason: '' };
+  }
+  var key = unavailableRetrySongKey(song);
+  if (key !== unavailableRetryState.key) {
+    unavailableRetryState = { key: key, at: 0, count: 0, notified: false };
+  }
+  var now = Date.now();
+  if (now - unavailableRetryState.at < UNAVAILABLE_RETRY_COOLDOWN_MS) {
+    return { ok: false, reason: 'cooldown' };
+  }
+  if (unavailableRetryState.count >= UNAVAILABLE_RETRY_BUDGET) {
+    return { ok: false, reason: 'budget' };
+  }
+  unavailableRetryState.at = now;
+  unavailableRetryState.count++;
+  return { ok: true, reason: '' };
+}
+
+/* 曲末态判据：播放按钮此时该「接着听下一首」，而不是重播刚播完的这首。
+ * 正常路径认 audio.ended；代理流尾包 / 换源重载偶尔会让 ended 事件没派发，
+ * 但音频已停在 duration 附近不再前进，用户点播放键同样应该切歌。
+ * 两条护栏：还正在播（!paused）时绝不抢暂停键；duration 不合法
+ * （流媒体常见 NaN / Infinity）时只认 ended，绝不误判。 */
+function playbackReachedTrackEnd(media) {
+  if (!media) return false;
+  if (media.ended) return true;
+  if (!media.paused) return false;
+  var duration = Number(media.duration);
+  var currentTime = Number(media.currentTime);
+  if (!isFinite(duration) || duration <= 0 || !isFinite(currentTime)) return false;
+  return currentTime >= duration - 0.15;
+}
 async function togglePlay() {
   if (playToggleBusy) return;
   playToggleBusy = true;
   try {
     forcePlaybackControlsInteractive();
     if ((!audio || !audio.src) && playQueue.length && currentIdx >= 0) {
+      /* 酷狗刚明确「未返回歌曲」的曲目：连点播放键只提示，绝不重开一轮
+         root playback —— 否则会重置跳过链，又跑一整串自动跳。 */
+      var currentSong = playQueue[currentIdx];
+      var kugouUnavailableAt = Number(currentSong && currentSong._kugouUnavailableAt) || 0;
+      if (kugouUnavailableAt > 0
+          && Date.now() - kugouUnavailableAt < UNAVAILABLE_RETRY_FAIL_WINDOW_MS) {
+        forcePlaybackControlsInteractive();
+        /* 按曲目去重：连点播放键不该刷一屏一样的提示。 */
+        if (!currentSong._kugouUnavailableNotified) {
+          currentSong._kugouUnavailableNotified = true;
+          if (typeof showToast === 'function') showToast('酷狗未返回歌曲');
+        }
+        return;
+      }
+      /* 刚判定「播不了」的曲目：合并连点，绝不每次点击都重开一轮重管线。 */
+      var retryClaim = claimUnavailablePlaybackRetry();
+      if (!retryClaim.ok) {
+        if (retryClaim.reason === 'budget' && !unavailableRetryState.notified) {
+          unavailableRetryState.notified = true;
+          if (typeof showToast === 'function') showToast('这首暂时播不了，请点下一曲或稍后再试');
+        }
+        forcePlaybackControlsInteractive();
+        return;
+      }
       await playQueueAt(currentIdx, { manual: true });
       return;
     }
     if (!audio) return;
-    if (audio.paused || audio.ended) {
+    /* 曲末态：HTMLMediaElement.play() 在 ended=true 时会自动 seek 回 0 重播当前曲目。
+     * 旧实现把 audio.ended 和 audio.paused 合并成同一条 attemptAudioPlay 分支，
+     * 长歌曲上用户点完播放键还要再等整整一首才会 nextTrack —— 就是
+     * 「点击控制台的播放按钮也不会跳转播放」（真机探针 2026-11-12 B 组实测）。
+     * 现在直接走 nextTrack 的合流闸：既立刻切歌，也不再为一次点击重建
+     * 封面 / 歌词 / 音频恢复任务（连点时的「卡死重启」主要来自这些重活）。
+     * 队列只有一首时没有下一首可去，仍允许重播当前。 */
+    if (playbackReachedTrackEnd(audio)) {
+      if (playQueue.length > 1 && typeof nextTrack === 'function') {
+        /* 连点防护：已有切歌在飞/排队时不再重复登记目标。
+         * 反复 requestTrackSwitch 会不断 trackSwitchToken++，把在飞的那次起播
+         * 一次次作废，结果就是「点了没反应」甚至把渲染进程拖垮。 */
+        if (typeof playbackTrackSwitchInProgress === 'function' && playbackTrackSwitchInProgress()) return;
+        nextTrack();
+      } else {
+        try { audio.currentTime = 0; } catch (_) {}
+        await attemptAudioPlay({ manual: true });
+      }
+      return;
+    }
+    if (audio.paused) {
       await attemptAudioPlay({ manual: true });
     } else {
       await fadeOutAndPauseAudio();
@@ -908,6 +1191,19 @@ var trackSwitchDrain = null;
 /* drain 的「代」。作废排队目标时会把句柄摘掉并让代往前走，
  * 这样老的 drain 退出时不会顺手把新一轮的句柄清掉（否则会并存两个 drain）。 */
 var trackSwitchDrainGen = 0;
+/* 在飞取址请求的取消句柄（每次 playQueueAt 注册一个，finally 释放）。
+ * 作废在飞请求时 abort，让 drain 立即推进最后一个目标，而不是陪旧请求
+ * 等满网络往返 / 超时（此前旧请求既不能取消也没有超时，连点的新目标
+ * 只能干等）。取消只断开等待：静默退场由 token 归属检查负责。 */
+var activePlaybackResolveAbort = null;
+function abortActivePlaybackResolve(reason) {
+  var ctrl = activePlaybackResolveAbort;
+  if (!ctrl || typeof ctrl.abort !== 'function') return;
+  try {
+    ctrl.__mineradioCancelReason = reason || 'track-switch';
+    ctrl.abort();
+  } catch (_) {}
+}
 /* 内部发起的起播（合流闸 / 换源重试）带上这个标记。它们不是用户点选，
  * 不能把排队中的「下一曲」清掉。走 Object.assign({}, opts, ...) 的重试会天然继承它。 */
 var INTERNAL_PLAYBACK_OPT = '__mineradioInternalPlayback';
@@ -938,8 +1234,12 @@ function requestTrackSwitch(idx, opts, label) {
   idx = Number(idx);
   if (!isFinite(idx) || idx < 0 || idx >= playQueue.length) return Promise.resolve(false);
   pendingTrackSwitch = { idx: idx, opts: opts || {}, label: String(label || 'track-switch') };
-  if (trackSwitchDrain) trackSwitchToken++;   // 作废在飞的那次（下一处归属检查会退场）
-  else trackSwitchDrain = drainTrackSwitches();
+  if (trackSwitchDrain) {
+    trackSwitchToken++;   // 作废在飞的那次（下一处归属检查会退场）
+    // 同时真取消旧取址请求：不 abort 的话 drain 仍 await 在旧 playQueueAt 上，
+    // 新目标要等旧请求的网络往返结束才开始取址（模拟确认过的卡顿根因）
+    abortActivePlaybackResolve('track-switch-superseded');
+  } else trackSwitchDrain = drainTrackSwitches();
   return trackSwitchDrain;
 }
 function drainTrackSwitches() {
@@ -969,13 +1269,32 @@ function drainTrackSwitches() {
   })();
   return trackSwitchDrain;
 }
+/* 随机播放的「下一首」必须是另一首。
+ * 旧实现直接在整条队列长度上取随机整数，有 1/length 概率抽中当前曲目本身：
+ * 曲末 onended 触发后 playQueueAt(currentIdx) 把刚播完的这首从头
+ * 再来一遍，用户侧就是「一首歌完整播完却不自动跳下一首」（随机播放特有）。
+ * 真机探针 2026-11-12 A 组实测 4 次 nextTrack 有 2 次 target === currentIdx。
+ * 返回 -1 表示「没有别的曲目可去」（队列 <=1），由调用方绕回当前曲目。 */
+function shuffleNextTrackIndex() {
+  if (playMode !== 'shuffle' || !playQueue || playQueue.length <= 1) return -1;
+  var pool = [];
+  for (var i = 0; i < playQueue.length; i++) {
+    if (i !== currentIdx) pool.push(i);
+  }
+  if (!pool.length) return -1;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 function nextTrack() {
   if (!playQueue.length) return;
   playToggleBusy = false;
   forcePlaybackControlsInteractive();
-  var target = playMode === 'shuffle'
-    ? Math.floor(Math.random() * playQueue.length)
-    : (currentIdx + 1) % playQueue.length;
+  var target;
+  if (playMode === 'shuffle') {
+    target = shuffleNextTrackIndex();
+    if (target < 0) target = currentIdx;   // 单曲队列：绕回自己
+  } else {
+    target = (currentIdx + 1) % playQueue.length;
+  }
   currentIdx = target;
   Promise.resolve(requestTrackSwitch(target, {
     context: scenePlaybackContextForTrackSwitch(),
@@ -1001,6 +1320,7 @@ function prevTrack() {
 function releaseQueuePlaybackMedia(reason) {
   reason = reason || 'queue-reset';
   trackSwitchToken++;
+  abortActivePlaybackResolve('queue-reset');
   playToggleBusy = false;
   // 排队中的切歌目标一起作废：队列都空了 / 重置了，不能再把旧索引装回去
   abandonPendingTrackSwitch();

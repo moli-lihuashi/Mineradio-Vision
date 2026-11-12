@@ -1,6 +1,6 @@
 /* ===== Spotify Login ===== */
 function normalizeSpotifyLoginStatus(info) {
-  var fallback = { provider: 'spotify', loggedIn: false, configured: false, oauthConfigured: false, oauthMissing: [], preview: false, nickname: 'Spotify', userId: '', accountId: '', avatar: '', product: '', membershipKnown: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, stale: false, reauthRequired: false, playbackKeyReady: false, playbackMode: 'recommend-match', tokenConfigured: false, tokenFileExists: false, credentialsFileExists: false, localConfigMissing: false, searchReady: false };
+  var fallback = { provider: 'spotify', loggedIn: false, configured: false, oauthConfigured: false, oauthMissing: [], preview: false, nickname: 'Spotify', userId: '', accountId: '', avatar: '', product: '', membershipKnown: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, stale: false, reauthRequired: false, playbackKeyReady: false, playbackMode: 'recommend-match', tokenConfigured: false, tokenFileExists: false, credentialsFileExists: false, localConfigMissing: false, builtin: false, searchReady: false };
   var loggedIn = !!(info && info.loggedIn);
   var product = String(info && info.product || '').toLowerCase();
   var isPremium = loggedIn && product === 'premium';
@@ -25,6 +25,7 @@ function normalizeSpotifyLoginStatus(info) {
     tokenFileExists: !!(info && info.tokenFileExists),
     credentialsFileExists: !!(info && info.credentialsFileExists),
     localConfigMissing: !!(info && info.localConfigMissing),
+    builtin: !!(info && info.builtin),
     playbackKeyReady: loggedIn,
     playbackMode: 'recommend-match',
     searchReady: !!(capabilities.search || info && info.searchReady),
@@ -66,6 +67,7 @@ function spotifyLoginStatusText(info) {
   if (info.loggedIn) return 'Spotify 已连接 / ' + (info.product === 'premium' ? 'Premium' : (info.product ? String(info.product).toUpperCase() : '方案未知')) + ' / 可同步歌单和 Liked Songs';
   if (info.reauthRequired) return 'Spotify 长期授权已到期，请重新连接官方 OAuth';
   if (info.stale) return 'Spotify 登录已过期，请重新连接官方 OAuth';
+  if (info.builtin) return 'Spotify 已就绪：直接点「打开浏览器」完成授权，无需粘贴 Client ID';
   if (info.localConfigMissing) return 'Spotify 未连接：粘贴 Spotify Client ID 后点击"保存并授权"';
   if (info.oauthConfigured) return 'Spotify Client ID 已保存，点击"连接 Spotify"打开官方授权窗口';
   if (info.configured || info.searchReady) return 'Spotify 搜索已可用；登录后可同步会员状态、歌单和红心歌单';
@@ -140,6 +142,104 @@ async function copySpotifyRedirectUri() {
   }
   showToast(ok ? '已复制 Spotify 回调地址' : '复制失败，请手动复制回调地址');
 }
+/* ===== Folia 风格登录页：左列状态 + Spotify 浏览器授权面板 ===== */
+var spotifyAuthMethod = 'external';
+
+/* 从扫码平台切过来时，上一家 refreshQr 的异步回调可能晚一步把「扫码」文案写回状态行。
+   只用 setTimeout 兜不住更慢的响应，这里挂一个只纠正该类残留的观察器。 */
+var folioStatusObserver = null;
+function watchFolioSpotifyStatus() {
+  var el = document.getElementById('qr-status');
+  if (!el || typeof MutationObserver !== 'function' || folioStatusObserver) return false;
+  folioStatusObserver = new MutationObserver(function () {
+    if (loginProvider !== 'spotify') return;
+    if (!/扫码/.test(String(el.textContent || ''))) return;
+    el.textContent = spotifyLoginStatusText();
+    el.className = 'preview';
+  });
+  folioStatusObserver.observe(el, { childList: true, characterData: true, subtree: true });
+  return true;
+}
+
+function syncFolioLoginView(isSpotify) {
+  var hero = document.getElementById('folio-spotify-hero');
+  if (hero) hero.hidden = !isSpotify;
+  if (!isSpotify) {
+    var customBox = document.getElementById('folio-spotify-custom');
+    if (customBox) customBox.hidden = true;
+    var customToggle = document.getElementById('folio-spotify-custom-toggle');
+    if (customToggle) customToggle.textContent = '可选：使用自己的 Client ID';
+  }
+  ['netease', 'qq', 'kugou', 'qishui', 'spotify'].forEach(function (id) {
+    var btn = document.getElementById('login-provider-' + id);
+    if (!btn) return;
+    var state = btn.querySelector('.login-provider-state');
+    if (!state) return;
+    var logged = false;
+    try { logged = !!(typeof hasPlatformLogin === 'function' && hasPlatformLogin(id)); } catch (_) {}
+    state.textContent = logged ? '已登录' : '未登录';
+    state.classList.toggle('on', logged);
+  });
+  var embedded = spotifyAuthMethod === 'embedded';
+  Array.prototype.forEach.call(document.querySelectorAll('#folio-spotify-method button'), function (b) {
+    b.classList.toggle('on', b.getAttribute('data-spotify-method') === (embedded ? 'embedded' : 'external'));
+  });
+  var note = document.getElementById('folio-spotify-note');
+  if (note) note.textContent = embedded
+    ? '在应用内的登录窗口完成授权，无需切到浏览器。页面同样跳回本机回调地址，令牌由应用加密保存。'
+    : '在系统浏览器里完成授权，页面会跳回本机回调地址；令牌由应用加密保存，均衡器、Automix 与跟着音乐跳动的效果都能用。';
+  var openBtn = document.getElementById('folio-spotify-open-btn');
+  if (openBtn) openBtn.textContent = embedded ? '打开登录窗口' : '打开浏览器';
+  /* 从网易云等扫码平台切过来时，上一家 refreshQr 的异步回调可能晚一步把「扫码」文案写回状态行；
+     这里只纠正这一类残留，不碰授权失败等真实错误信息。 */
+  if (isSpotify) watchFolioSpotifyStatus();
+  if (isSpotify && typeof setTimeout === 'function') {
+    setTimeout(function () {
+      if (loginProvider !== 'spotify') return;
+      var statusEl = document.getElementById('qr-status');
+      if (statusEl && /扫码/.test(String(statusEl.textContent || ''))) {
+        statusEl.textContent = spotifyLoginStatusText();
+        statusEl.className = 'preview';
+      }
+    }, 500);
+  }
+}
+
+function selectSpotifyAuthMethod(method) {
+  spotifyAuthMethod = method === 'embedded' ? 'embedded' : 'external';
+  syncFolioLoginView(true);
+  return spotifyAuthMethod;
+}
+
+/* 面板上的黄色按钮复用原有完整授权链路（状态刷新 / 关窗 / toast 全都在 openSpotifyWebLogin 里） */
+function openSpotifyExternalBrowserLogin() {
+  if (typeof openSpotifyWebLogin === 'function') return openSpotifyWebLogin();
+}
+
+/* 默认完全不需要粘贴；只有想换成自己的 Spotify 应用时才展开这一格 */
+function toggleFolioSpotifyCustom() {
+  var box = document.getElementById('folio-spotify-custom');
+  if (!box) return false;
+  box.hidden = !box.hidden;
+  var toggle = document.getElementById('folio-spotify-custom-toggle');
+  if (toggle) toggle.textContent = box.hidden ? '可选：使用自己的 Client ID' : '收起自定义配置';
+  return !box.hidden;
+}
+
+async function saveFolioSpotifyCustomClientId() {
+  var input = document.getElementById('folio-spotify-client-id');
+  var value = input ? String(input.value || '').trim() : '';
+  if (!value) {
+    if (typeof showToast === 'function') showToast('先粘贴自己的 Spotify Client ID');
+    return false;
+  }
+  /* 复用既有 /api/spotify/config 保存链路，不另写一份配置请求 */
+  var legacy = document.getElementById('qq-cookie-input');
+  if (!legacy || typeof submitSpotifyConfigLogin !== 'function') return false;
+  legacy.value = value;
+  return submitSpotifyConfigLogin();
+}
+
 async function openSpotifyWebLogin() {
   if (spotifyOAuthBusy) return;
   var statusEl = document.getElementById('qr-status');
@@ -159,10 +259,14 @@ async function openSpotifyWebLogin() {
   }
   spotifyOAuthBusy = true;
   updateLoginProviderUi();
-  if (statusEl) { statusEl.textContent = '正在打开 Spotify 官方授权窗口…'; statusEl.className = 'preview'; }
+  var useExternal = (spotifyAuthMethod !== 'embedded' && typeof api.openSpotifyMusicLoginExternal === 'function');
+  if (statusEl) {
+    statusEl.textContent = useExternal ? '正在打开系统浏览器完成 Spotify 授权…' : '正在打开 Spotify 官方授权窗口…';
+    statusEl.className = 'preview';
+  }
   var failText = '';
   try {
-    var result = await api.openSpotifyMusicLogin();
+    var result = await (useExternal ? api.openSpotifyMusicLoginExternal() : api.openSpotifyMusicLogin());
     if (!result || !result.ok) {
       if (result && result.error === 'SPOTIFY_OAUTH_NOT_CONFIGURED') {
         throw new Error((result.message || '请先保存 Spotify Client ID') + (result.redirectUri ? (' / 回调地址: ' + result.redirectUri) : ''));
@@ -298,22 +402,29 @@ function updateLoginProviderUi() {
   var kugouBtn = document.getElementById('login-provider-kugou');
   var qishuiBtn = document.getElementById('login-provider-qishui');
   var spotifyBtn = document.getElementById('login-provider-spotify');
+  // 五个平台按钮的选中态必须在这里一次性同步，放在**所有分支之前**。
+  // 历史 bug：Qishui / Spotify 分支会提前 return，而通用尾部又漏了 qishuiBtn 的清理 ——
+  // 从「汽水」切到网易云 / QQ / 酷狗时，新行被设成 active、汽水的 active 却没人清，
+  // 于是同时有两个 .active 行（各自带淡底 + 竖条），视觉上就是「一个框停在汽水，
+  // 另一个框分出去到了新平台」。实测 .workbuddy/harness/verify-login-provider-tabs.js。
+  // 同理，任何「留在通用尾部」的状态清理都到不了提前 return 的分支（见下方 logged-in 的注释）。
+  [neteaseBtn, qqBtn, kugouBtn, qishuiBtn, spotifyBtn].forEach(function (btn) {
+    if (!btn) return;
+    btn.classList.toggle('active', btn.getAttribute('data-login-provider') === loginProvider);
+  });
   var canOpenNeteaseWeb = !!(window.desktopWindow && typeof window.desktopWindow.openNeteaseMusicLogin === 'function');
   var canOpenSpotifyOAuth = !!(window.desktopWindow && typeof window.desktopWindow.openSpotifyMusicLogin === 'function');
   var spotifyBusy = !!(spotifyConfigBusy || spotifyOAuthBusy);
   var qishuiBusy = !!qishuiTokenBusy;
   if (modal) modal.classList.toggle('login-provider-spotify', isSpotify);
+  /* 公共前缀：Qishui / Spotify 分支会提前 return，Folia 面板与左列状态必须在这里同步 */
+  syncFolioLoginView(isSpotify);
   if (shell && !isSpotify) shell.style.display = '';
   if (qqCookieSaveBtn && !isSpotify) qqCookieSaveBtn.style.display = '';
   if (qqCookieInput && !isSpotify && !isQishui) qqCookieInput.rows = 3;
 
   /* ===== Qishui Branch ===== */
   if (isQishui) {
-    if (neteaseBtn) neteaseBtn.classList.toggle('active', false);
-    if (qqBtn) qqBtn.classList.toggle('active', false);
-    if (kugouBtn) kugouBtn.classList.toggle('active', false);
-    if (qishuiBtn) qishuiBtn.classList.toggle('active', true);
-    if (spotifyBtn) spotifyBtn.classList.toggle('active', false);
     if (title) title.textContent = isLoggedIn ? '汽水音乐已登录' : '扫码登录汽水音乐';
     if (desc) desc.innerHTML = isLoggedIn
       ? '当前已保存 <b>汽水音乐</b> 登录会话，可继续同步歌单和会员信息。'
@@ -363,14 +474,9 @@ function updateLoginProviderUi() {
 
   /* ===== Spotify Branch ===== */
   if (isSpotify) {
-    if (neteaseBtn) neteaseBtn.classList.toggle('active', false);
-    if (qqBtn) qqBtn.classList.toggle('active', false);
-    if (kugouBtn) kugouBtn.classList.toggle('active', false);
-    if (qishuiBtn) qishuiBtn.classList.toggle('active', false);
-    if (spotifyBtn) spotifyBtn.classList.toggle('active', true);
-    if (title) title.textContent = spotifyLoginStatus.oauthConfigured ? '授权 Spotify' : '接入 Spotify';
+    if (title) title.textContent = '登录 Spotify';
     if (desc) desc.innerHTML = canOpenSpotifyOAuth
-      ? '用 Client ID 完成 OAuth，同步歌单与 Liked Songs；播放仍按匹配源换源。'
+      ? '直接点「打开浏览器」完成授权，无需创建 App、无需粘贴 Client ID；同步歌单与 Liked Songs，播放仍按匹配源换源。'
       : '当前环境不支持桌面授权，请在 Mineradio 桌面版连接。';
     if (shell) {
       shell.classList.remove('web-login-preview', 'qq-preview', 'netease-preview');
@@ -383,16 +489,13 @@ function updateLoginProviderUi() {
     if (qqCookieToggle) qqCookieToggle.classList.remove('show');
     if (qqCookieInput) {
       qqCookieInput.rows = 1;
-      qqCookieInput.placeholder = spotifyLoginStatus.oauthConfigured
-        ? '已保存 Client ID，可粘贴新的覆盖'
-        : '粘贴 Spotify Client ID';
+      qqCookieInput.placeholder = '可选：粘贴你自己的 Spotify Client ID';
     }
     if (qqCookieNote) qqCookieNote.innerHTML =
-      '<div class="spotify-guide-title">三步接入</div>' +
+      '<div class="spotify-guide-title">可选：使用自己的应用</div>' +
       '<div class="spotify-guide-steps">' +
-        '<span><i>1</i>打开开发者页，创建 App</span>' +
-        '<span><i>2</i>回调填 <code title="' + SPOTIFY_REDIRECT_URI + '">' + SPOTIFY_REDIRECT_URI + '</code></span>' +
-        '<span><i>3</i>复制 Client ID，粘贴到上方</span>' +
+        '<span><i>1</i>默认已内置桌面客户端身份，不需要填任何东西</span>' +
+        '<span><i>2</i>若 Spotify 提示应用未对你开放，可创建自己的 App</span>' +
       '</div>' +
       '<div class="spotify-guide-actions">' +
         '<button type="button" class="spotify-guide-link" onclick="openSpotifyDeveloperDashboard()">打开网页</button>' +
@@ -410,16 +513,12 @@ function updateLoginProviderUi() {
     }
     if (refreshBtn) {
       refreshBtn.disabled = spotifyBusy || !canOpenSpotifyOAuth;
-      refreshBtn.textContent = spotifyConfigBusy ? '保存中…' : (spotifyOAuthBusy ? '等待授权…' : (spotifyLoginStatus.oauthConfigured ? '打开授权' : '保存并授权'));
-      refreshBtn.onclick = spotifyLoginStatus.oauthConfigured ? openSpotifyWebLogin : submitSpotifyConfigLogin;
+      refreshBtn.textContent = spotifyConfigBusy ? '保存中…' : (spotifyOAuthBusy ? '等待授权…' : '打开浏览器');
+      refreshBtn.onclick = openSpotifyWebLogin;
     }
     return;
   }
   if (qqPanel) qqPanel.classList.remove('spotify-guide-panel');
-  if (spotifyBtn) spotifyBtn.classList.toggle('active', false);
-  if (neteaseBtn) neteaseBtn.classList.toggle('active', loginProvider === 'netease');
-  if (qqBtn) qqBtn.classList.toggle('active', isQQ);
-  if (kugouBtn) kugouBtn.classList.toggle('active', isKugou);
   if (title) title.textContent = isLoggedIn ? (meta.label + '已登录') : ('扫码登录' + meta.label);
   if (desc) {
     desc.innerHTML = isLoggedIn
@@ -781,12 +880,21 @@ async function openQQWebLogin(options) {
     renderUserBtn();
     refreshUserPlaylists(true);
     var qqPlaybackReady = !!info.playbackKeyReady && !result.partial;
-    if (statusEl) { statusEl.textContent = qqPlaybackReady ? 'QQ 音乐会话已保存' : 'QQ 账号已同步，播放授权不完整，部分歌曲会自动换源'; statusEl.className = 'scan'; }
-    setTimeout(function(){
-      closeLoginModal();
-      showToast((qqPlaybackReady ? 'QQ 音乐已登录: ' : 'QQ 账号已同步: ') + (info.nickname || info.userId || ''));
-      maybeRestorePlaybackSessionAfterLogin();
-    }, 420);
+    /* 主进程现在会在「已登录但没拿到播放态 key」时按 partial 收尾（不再无限等待窗口）。
+       但如果会话本身已过期（reauthRequired / authExpired），说明这次登录并没有真正完成，
+       不能按成功关窗：要明确告诉用户失败原因，让他能重试。 */
+    var qqLoginIncomplete = !qqPlaybackReady && (!!info.reauthRequired || !!info.authExpired);
+    if (qqLoginIncomplete) {
+      if (statusEl) { statusEl.textContent = 'QQ 登录未完成：会话已过期，请重新点击二维码登录重试'; statusEl.className = 'fail'; }
+      showToast('QQ 登录未完成，请重新扫码');
+    } else {
+      if (statusEl) { statusEl.textContent = qqPlaybackReady ? 'QQ 音乐会话已保存' : 'QQ 账号已同步，播放授权不完整，部分歌曲会自动换源'; statusEl.className = 'scan'; }
+      setTimeout(function(){
+        closeLoginModal();
+        showToast((qqPlaybackReady ? 'QQ 音乐已登录: ' : 'QQ 账号已同步: ') + (info.nickname || info.userId || ''));
+        maybeRestorePlaybackSessionAfterLogin();
+      }, 420);
+    }
   } catch (e) {
     qqWebLoginBusy = false;
     updateLoginProviderUi();

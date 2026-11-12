@@ -171,6 +171,44 @@ function smokeCoreEvalNoReferenceError() {
     add() {}, remove() {}, toggle() {}, contains() { return false; },
     item() { return ''; }, replace() {}, value: '',
   });
+  /* 2D canvas 上下文桩：沙箱里 getContext('2d') 返回 null 会让顶层求值在
+   * createRadialGradient 之类调用处中断，之后的全部模块顶层语句都不执行——
+   * 而下面的 catch 只打 WARN 就放行，「启动冒烟通过」变得不可信。
+   * 给全量 2D 方法桩后，eval 才能真正跑完；再配合末尾符号校验，
+   * 中途任何中断都会导致合并脚本末尾的符号缺失而被判失败。 */
+  const ctx2dStub = () => ({
+    canvas: null,
+    createRadialGradient() { return { addColorStop() {} }; },
+    createLinearGradient() { return { addColorStop() {} }; },
+    createConicGradient() { return { addColorStop() {} }; },
+    createPattern() { return null; },
+    fillRect() {}, clearRect() {}, strokeRect() {}, drawImage() {},
+    getImageData() { return { data: new Uint8ClampedArray(4), width: 1, height: 1 }; },
+    putImageData() {}, createImageData() { return { data: new Uint8ClampedArray(4), width: 1, height: 1 }; },
+    save() {}, restore() {}, beginPath() {}, closePath() {},
+    arc() {}, arcTo() {}, ellipse() {}, fill() {}, stroke() {},
+    moveTo() {}, lineTo() {}, quadraticCurveTo() {}, bezierCurveTo() {}, rect() {},
+    translate() {}, rotate() {}, scale() {}, setTransform() {}, resetTransform() {},
+    fillText() {}, strokeText() {}, measureText() { return { width: 0 }; },
+    clip() {}, setLineDash() {}, isPointInPath() { return false; },
+  });
+  /* WebGL 上下文桩：eval 期有模块顶层就 getContext('webgl') 探测/建管线。
+   * get/create 类返回真值普通对象（getShaderParameter 等要真值），全大写常量给 0，其余 no-op。 */
+  const glStubValue = {
+    loseContext() {}, restoreContext() {}, getParameter() { return 0; },
+    getShaderInfoLog() { return ''; }, getProgramInfoLog() { return ''; },
+  };
+  const glStub = new Proxy({}, {
+    get(target, prop) {
+      if (typeof prop !== 'string' || prop === 'then') return undefined;
+      if (!(prop in target)) {
+        if (/^(get|create|find|query|is)/.test(prop)) target[prop] = function () { return glStubValue; };
+        else if (/^[A-Z][A-Z0-9_]*$/.test(prop)) target[prop] = 0;
+        else target[prop] = function () {};
+      }
+      return target[prop];
+    }
+  });
   const elStub = () => ({
     style: { setProperty() {}, removeProperty() {}, set cssText(v) {}, get cssText() { return ''; } },
     classList: classListStub(),
@@ -180,10 +218,10 @@ function smokeCoreEvalNoReferenceError() {
     querySelector() { return elStub(); }, querySelectorAll() { return []; },
     closest() { return elStub(); }, contains() { return false; },
     focus() {}, blur() {}, click() {},
-    getContext() { return null; },
+    getContext(kind) { return /webgl/i.test(String(kind || '')) ? glStub : ctx2dStub(); },
     getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }; },
     dataset: {}, children: [], childNodes: [], parentNode: null,
-    innerHTML: '', textContent: '', value: '', id: '', width: 0, height: 0,
+    innerHTML: '', textContent: '', value: '', id: '', width: 300, height: 150,
   });
 
   const sandbox = {
@@ -269,9 +307,20 @@ function smokeCoreEvalNoReferenceError() {
     registerPlugin() {}, killTweensOf() {},
   };
   const noop = function () {};
+  /* 与 01-api/00-mineradio-api.js 的导出同形：核心波 05-playback/00a-api-quality.js
+   * 顶层 `var escHtml = Mineradio.api.escHtml;`，严格版 eval 跑到底后
+   * 首页快照的残留微任务会真的调它 —— 缺桩会让 Node 在检查通过后崩掉。 */
+  const escapeHtml = (v) => String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   sandbox.Mineradio = {
     auth: { configure: noop, getToken: () => '', on: noop, off: noop },
-    api: { get: async () => ({}), post: async () => ({}) },
+    api: {
+      get: async () => ({}), post: async () => ({}),
+      escHtml: escapeHtml,
+      escAttr: escapeHtml,
+      imgTagFromSrc: (src) => (src ? '<img src="' + escapeHtml(src) + '" alt="">' : ''),
+    },
     desktop: null,
   };
   sandbox.window = sandbox;
@@ -287,10 +336,15 @@ function smokeCoreEvalNoReferenceError() {
   sandbox.window.gsap = sandbox.gsap;
 
   const context = vm.createContext(sandbox);
+  let coreEvalThrow = null;
   try {
-    vm.runInContext(combined, context, { filename: 'mineradio-core-combined.js', timeout: 8000 });
+    /* 末尾完成标记（2026-11-12 复核）：函数声明在编译期就已提升，
+       「符号存在」证明不了初始化执行完成 —— 内存注入启动异常后哨兵检查照样通过。
+       eval 在任何位置中断，这条追加语句都不会执行 → 标记缺失 → 直接失败。 */
+    vm.runInContext(combined + '\n;window.__MINERADIO_CORE_EVAL_COMPLETED = true;', context, { filename: 'mineradio-core-combined.js', timeout: 8000 });
     console.log('[OK] Core combined eval completed without throw.');
   } catch (err) {
+    coreEvalThrow = err;
     const msg = String((err && err.message) || err);
     const idm = msg.match(/([A-Za-z_$][\w$]*)\s+is not defined/);
     if (idm && deferredOnly.has(idm[1])) {
@@ -300,16 +354,30 @@ function smokeCoreEvalNoReferenceError() {
         '  ' + String(err && err.stack || err).split('\n').slice(0, 3).join('\n  ')
       );
     }
-    if (err instanceof ReferenceError || /ReferenceError/.test(String(err && err.stack || err))) {
-      console.log('[WARN] Core eval ReferenceError on non-deferred symbol (env/sandbox): ' + msg);
-    } else {
-      console.log('[WARN] Core eval threw (env/sandbox, ignored): ' + msg.split('\n')[0]);
-    }
+    console.log('[INFO] Core eval threw (marker check below will fail): ' + msg.split('\n')[0]);
   }
+  let coreCompleted = false;
+  try { coreCompleted = vm.runInContext('window.__MINERADIO_CORE_EVAL_COMPLETED === true', context); } catch (_) {}
+  if (!coreCompleted) {
+    fail(
+      'Core eval did NOT run to completion — startup init is unverified.\n' +
+      '  (function declarations hoist ahead of execution, so symbol-existence checks alone are meaningless)\n' +
+      (coreEvalThrow
+        ? '  首个异常: ' + String(coreEvalThrow && coreEvalThrow.message || coreEvalThrow).split('\n')[0] +
+          '\n  ' + String(coreEvalThrow && coreEvalThrow.stack || '').split('\n').slice(1, 3).join('\n  ')
+        : '  (no throw captured — marker statement never ran)')
+    );
+  }
+  console.log('[OK] Core eval completion marker set (init ran to the end).');
 
-  // 主波求值后关键符号必须存在（用 typeof 读沙箱）
+  // 主波求值后关键符号必须存在（用 typeof 读沙箱）。
+  // 后半段是「合并脚本末尾」的符号：eval 在任何位置中断（如环境桩缺失抛 TypeError）
+  // 它们都不会被定义 —— 这是「完整初始化成功」的最低判据，不只是「没判白屏」。
   const requiredAfterCore = [
     'qishuiLoginStatus', 'updateFxInputs', 'setRange', 'updateHomeAudioVisual', 'scheduleFxPanelDomBind',
+    // 末尾符号（11-main-loop / 05-playback 后段）
+    'animate', 'requestMainLoopAnimationFrame', 'sampleRenderFrameCost',
+    'updateLiquidGlassBackdropMirror', 'resolveProviderPlayUrlData', 'doSearch', 'loadNextMusicSearchPage',
   ];
   const missing = [];
   for (const name of requiredAfterCore) {
@@ -318,22 +386,28 @@ function smokeCoreEvalNoReferenceError() {
     if (t === 'undefined' || t === 'missing') missing.push(name);
   }
   if (missing.length) {
-    fail('Core eval finished but required boot symbols are missing: ' + missing.join(', '));
+    const thrown = coreEvalThrow
+      ? '\n  (eval 在此中断: ' + String(coreEvalThrow && coreEvalThrow.message || coreEvalThrow).split('\n')[0] + ')'
+      : '';
+    fail('Core eval finished but required boot symbols are missing: ' + missing.join(', ') + thrown);
   }
   console.log('[OK] Boot symbols present after core eval: ' + requiredAfterCore.join(', '));
 
   if (deferredPaths.length) {
     const deferredCombined = deferredPaths.map(p => readModuleText(publicDir, p)).join('\n');
     try {
-      vm.runInContext(deferredCombined, context, { filename: 'mineradio-deferred-combined.js', timeout: 8000 });
+      vm.runInContext(deferredCombined + '\n;window.__MINERADIO_DEFERRED_EVAL_COMPLETED = true;', context, { filename: 'mineradio-deferred-combined.js', timeout: 8000 });
     } catch (err) {
       const msg = String((err && err.message) || err);
       const idm = msg.match(/([A-Za-z_$][\w$]*)\s+is not defined/);
       if (idm && deferredOnly.has(idm[1])) {
         fail('Deferred eval ReferenceError on deferred-only symbol "' + idm[1] + '"');
       }
-      console.log('[WARN] Deferred eval threw (env/sandbox, ignored): ' + msg.split('\n')[0]);
+      fail('Deferred eval did NOT run to completion: ' + msg.split('\n')[0]);
     }
+    let deferredCompleted = false;
+    try { deferredCompleted = vm.runInContext('window.__MINERADIO_DEFERRED_EVAL_COMPLETED === true', context); } catch (_) {}
+    if (!deferredCompleted) fail('Deferred eval completion marker not set');
     let ready = false;
     try { ready = !!vm.runInContext('typeof window !== "undefined" && window.__fxPanelDomModulesReady', context); } catch (_) {}
     if (!ready) fail('After deferred eval, window.__fxPanelDomModulesReady is not true');

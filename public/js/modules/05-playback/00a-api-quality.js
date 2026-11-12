@@ -5,6 +5,8 @@ var apiJson = Mineradio.api.apiJson;
 var escHtml = Mineradio.api.escHtml;
 var escAttr = Mineradio.api.escAttr;
 var imgTagFromSrc = Mineradio.api.imgTagFromSrc;
+// 封面加载失败的统一兜底（全部 <img> 的 onerror 都指向它，见 01-api/00）
+var mineradioCoverFallback = Mineradio.api.mineradioCoverFallback;
 function normalizePlaybackQuality(value) {
   value = String(value || '').toLowerCase();
   if (value === 'jymaster' || value === 'master' || value === 'svip') return 'jymaster';

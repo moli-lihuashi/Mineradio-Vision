@@ -122,10 +122,6 @@ function shouldSkipAdaptiveRenderFrame(now) {
 function sampleRenderPerf(now, dt) {
   renderPerfState.frames += 1;
   if (dt > 0.034) renderPerfState.longFrames += 1;
-  // 帧成本采样: dt 转为 ms, 目标 fps 取刷新率或 60
-  var frameCostMs = dt * 1000;
-  var targetFps = renderPerfState.displayHz || renderPerfState.fps || 60;
-  sampleAdaptiveFrameCost(frameCostMs, targetFps);
   renderPerfState.adaptivePressure = adaptiveLoadPressureLevel();
   if (now - renderPerfState.lastSampleAt >= 1000) {
     renderPerfState.fps = Math.round(renderPerfState.frames * 1000 / Math.max(1, now - renderPerfState.lastSampleAt));
@@ -133,6 +129,16 @@ function sampleRenderPerf(now, dt) {
     renderPerfState.lastSampleAt = now;
   }
   maybeTrimRuntimeCaches(now);
+}
+// 帧成本只认「实际处理耗时」：animate 里 framePerfStart → 本帧工作结束的真实毫秒。
+// 不再拿帧间隔（dt）当成本——60FPS 的正常间隔 ~16.7ms 恒超 13ms 预算，
+// 稳定满帧会被误判成最高负载等级（压力只增不减）触发不必要的分辨率下降。
+// 主动限帧跳过的帧（shouldSkipAdaptiveRenderFrame 提前 return）与深后台 tick
+// 都不反映渲染开销：前者是节奏调度，后者按 0 成本喂入让压力自然回落。
+function sampleRenderFrameCost(workMs) {
+  var targetFps = renderPerfState.targetFps || renderPerfState.displayHz || renderPerfState.fps || 60;
+  sampleAdaptiveFrameCost(Math.max(0, workMs || 0), targetFps);
+  renderPerfState.adaptivePressure = adaptiveLoadPressureLevel();
 }
 var mainFrameGates = {
   audio: createFrameGate('main.audio', 60),
@@ -183,6 +189,7 @@ function wakeMainLoopFromBackground() {
 }
 function tickDeepBackgroundFrame(now, dt) {
   sampleRenderPerf(now, dt);
+  sampleRenderFrameCost(0); // 后台休眠不是渲染压力：按 0 成本喂入，避免 250ms 休眠间隔把压力灌满
   if (fx && (fx.desktopLyrics || fx.wallpaperMode) && typeof syncDesktopOverlayState === 'function') {
     syncDesktopOverlayState();
   }
@@ -389,7 +396,9 @@ function animate() {
   if (isMainSceneCoveredBySplash()) {
     if (now - splashWarmRenderLast > 520) {
       splashWarmRenderLast = now;
+      var splashRenderPerfStart = performance.now();
       renderer.render(scene, camera);
+      sampleRenderFrameCost(performance.now() - splashRenderPerfStart);
     }
     return;
   }
@@ -845,7 +854,9 @@ function animate() {
   // Folia 世界：原生画面整段让位，改跑 Folia 自己的帧。
   // 注意这里只停「画」——前面音频分析、歌词时钟、桌面歌词同步都照常跑。
   if (foliaWorldActive()) {
-    foliaWorldTick(now, dt);
+    // foliaWorldTick 住在延迟波（folia 世界整体后置启动）：世界激活只会发生在
+    // 延迟波落地之后，但静态扫描与极端时序下仍需 typeof 兜底
+    if (typeof foliaWorldTick === 'function') foliaWorldTick(now, dt);
     // Folia 的帧也要喂玻璃镜像：不喂的话 __lgBackdropCanvas 冻在进入前的最后一帧，
     // liquid glass 卡片里永远折射粒子场景（bug：切 Folia 后玻璃停在旧画面）。
     updateFoliaLiquidGlassBackdropMirror();
@@ -862,6 +873,9 @@ function animate() {
       window.__mineradioPerf.markSince('frame.total', framePerfStart);
     }
   }
+  // 本帧真实处理耗时（含音频分析 + 场景更新 + 渲染 + 玻璃镜像）喂给自适应压力采样。
+  // 与 frame.total 埋点同口径；帧间隔本身不再参与负载判断。
+  sampleRenderFrameCost(performance.now() - framePerfStart);
 }
 // LiquidGlass 玻璃背景镜像：渲染后同帧同步 blit 主 WebGL canvas 到 2D 镜像，
 // 供玻璃 shader 采样真实页面背景（主 canvas 无 preserveDrawingBuffer，

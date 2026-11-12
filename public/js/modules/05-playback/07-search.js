@@ -4,6 +4,15 @@
 var searchTimer = null;
 var searchRequestSeq = 0;
 var searchLastResultQuery = '';
+/* 搜索会话状态：在飞取消句柄 + 分页游标 + 失败平台。
+ * 旧实现的问题（2026-11-12 评审实测）：单平台搜索接口失败后 catch 只 console.error，
+ * 界面永远停在「正在搜索」；混合搜索全失败会误报「没有找到相关歌曲」；
+ * 请求无取消，输入变化后慢平台的旧请求仍在飞；且永远只取第一页 12～18 首。 */
+var MUSIC_SEARCH_PAGE_SIZES = { qq: 12, netease: 18, qishui: 18, kugou: 18, spotify: 18 };
+var MUSIC_SEARCH_MIXED_PAGE_SIZES = { netease: 14, qq: 12 };
+var searchAbort = null;
+var searchPageState = null;
+var searchRetryContext = null;
 var SEARCH_HISTORY_STORE_KEY = 'mineradio-search-history';
 var $input = document.getElementById('search-input');
 var $results = document.getElementById('search-results');
@@ -24,8 +33,18 @@ function isMusicSearchMode(mode) {
 function searchResultKey(q, mode) {
   return (mode || searchMode || 'song') + '|' + String(q || '').trim();
 }
+/* 作废在飞的音乐搜索与分页请求（2026-11-12 复核：清空输入框走 renderSearchHistory
+ * 分支，既不取消在飞请求也不作废会话 —— 慢平台晚到的分页结果会把搜索历史盖回旧列表）。 */
+function invalidatePendingMusicSearch() {
+  searchRequestSeq++;
+  if (searchAbort) { try { searchAbort.abort(); } catch (_) {} searchAbort = null; }
+  searchPageState = null;
+}
 function clearSearchResults() {
   searchRequestSeq++;
+  if (searchAbort) { try { searchAbort.abort(); } catch (_) {} searchAbort = null; }
+  searchPageState = null;
+  searchRetryContext = null;
   searchLastResultQuery = '';
   playlist = [];
   podcastResults = [];
@@ -41,7 +60,12 @@ function searchEmptyHtml(message, opts) {
       '<div class="search-empty-shimmer"></div><div class="search-empty-shimmer"></div><div class="search-empty-shimmer"></div>' +
       '<div class="search-empty-text">' + escHtml(message || 'Searching...') + '</div></div>';
   }
-  return '<div class="search-empty"><div class="search-empty-text">' + escHtml(message || 'No results') + '</div></div>';
+  var retryBtn = '';
+  if (opts.retry) {
+    retryBtn = '<button type="button" class="search-retry-btn" onclick="retryMusicSearch()" ' +
+      'style="margin-top:10px;padding:6px 18px;border-radius:16px;border:1px solid rgba(255,255,255,0.25);background:rgba(255,255,255,0.08);color:inherit;cursor:pointer;font-size:13px">重新搜索</button>';
+  }
+  return '<div class="search-empty"><div class="search-empty-text">' + escHtml(message || 'No results') + '</div>' + retryBtn + '</div>';
 }
 function readSearchHistory() {
   try {
@@ -159,7 +183,7 @@ function programMetaText(item) {
 }
 function searchThumbHtml(src) {
   return src
-    ? imgTagFromSrc(coverUrlWithSize(src, 80), 'loading="lazy" onerror="this.style.opacity=0.2"')
+    ? imgTagFromSrc(coverUrlWithSize(src, 80), 'loading="lazy" onerror="mineradioCoverFallback(this)"')
     : '<div style="width:40px;height:40px;border-radius:6px;background:rgba(255,255,255,0.06);flex-shrink:0"></div>';
 }
 function renderPodcastRadios(items, label) {
@@ -310,6 +334,8 @@ $input.addEventListener('input', function(){
   clearTimeout(searchTimer);
   var q = $input.value.trim();
   if (!q) {
+    /* 清空输入必须作废在飞的搜索 / 分页：否则慢平台晚到的结果会把历史盖回旧列表 */
+    invalidatePendingMusicSearch();
     if (searchMode === 'podcast') loadPodcastHot();
     else renderSearchHistory();
     return;
@@ -836,36 +862,191 @@ function mergeSongSearchResults(neteaseSongs, qqSongs, limit, q) {
   out.sort(function(a, b){ return (b._searchScore || 0) - (a._searchScore || 0); });
   return out.slice(0, limit);
 }
-async function fetchMusicSearchResults(q, mode) {
+/* 单曲唯一键：跨页去重靠它（offset 不被上游支持时翻页会拿回重复内容） */
+function musicSearchSongKey(song) {
+  if (!song) return '';
+  var provider = (typeof songProviderKey === 'function') ? songProviderKey(song) : (song.source || song.provider || '');
+  var id = song.id || song.songmid || song.hash || song.fileHash || song.audioHash || song.providerSongId || '';
+  if (!id) id = (song.name || '') + '|' + (song.artist || '');
+  return provider + '|' + id;
+}
+function appendUniqueSongs(existing, incoming) {
+  var seen = {};
+  (existing || []).forEach(function (s) { var k = musicSearchSongKey(s); if (k) seen[k] = true; });
+  var added = 0;
+  (incoming || []).forEach(function (s) {
+    var k = musicSearchSongKey(s);
+    if (k && seen[k]) return;
+    if (k) seen[k] = true;
+    existing.push(s);
+    added++;
+  });
+  return added;
+}
+/* 参与某个搜索模式的全部平台。判定「到底」必须遍历这张完整名单，
+ * 不能只看本轮成功返回的平台（失败的平台要保留重试机会）。 */
+function musicSearchProvidersForMode(mode) {
+  return mode === 'song' ? ['netease', 'qq'] : [mode];
+}
+/* 按模式把累积的各平台原始结果合成展示列表（第 0 页行为与旧实现完全一致） */
+function musicSearchCombinedSongs(state) {
+  if (state.mode === 'song') {
+    return mergeSongSearchResults(state.raw.netease || [], state.raw.qq || [],
+      (state.raw.netease || []).length + (state.raw.qq || []).length, state.q);
+  }
+  var raw = state.raw[state.mode] || [];
+  if (state.mode === 'qq') return mergeSongSearchResults([], raw, Math.max(18, raw.length), state.q);
+  if (state.mode === 'netease') return mergeSongSearchResults(raw, [], Math.max(18, raw.length), state.q);
+  return raw.slice(0, Math.max(18, raw.length));
+}
+async function fetchMusicSearchResults(q, mode, pageState, signal) {
+  pageState = pageState || {};
+  var offsets = pageState.offsets || {};
   var searchUrl = typeof searchProviderUrl === 'function' ? searchProviderUrl : null;
-  if (mode === 'qq') {
-    var qqOnly = await apiJson(searchUrl ? searchUrl('qq', q, 12, 0) : ('/api/qq/search?keywords=' + encodeURIComponent(q) + '&limit=12'));
-    return mergeSongSearchResults([], qqOnly.songs || [], 18, q);
+  function fetchProvider(provider, limit) {
+    var offset = offsets[provider] || 0;
+    var url = searchUrl
+      ? searchUrl(provider, q, limit, offset)
+      : ((provider === 'netease' ? '/api/search' : '/api/' + provider + '/search') +
+        '?keywords=' + encodeURIComponent(q) + '&limit=' + limit + '&offset=' + offset);
+    var reqOpts = signal ? { signal: signal } : undefined;
+    return apiJson(url, reqOpts).then(
+      function (data) { return { provider: provider, songs: (data && data.songs) || [], limit: limit, offset: offset }; },
+      function (err) {
+        err = err || new Error('network error');
+        err.searchProvider = provider;
+        err.__searchCancelled = !!(signal && signal.aborted);
+        throw err;
+      }
+    );
   }
-  if (mode === 'netease') {
-    var neOnly = await apiJson(searchUrl ? searchUrl('netease', q, 18, 0) : ('/api/search?keywords=' + encodeURIComponent(q) + '&limit=18'));
-    return mergeSongSearchResults(neOnly.songs || [], [], 18, q);
+  if (mode === 'song') {
+    /* 混合搜索：两平台各自成败分开记，不再让「QQ 挂了」静默吞掉 */
+    var settled = await Promise.allSettled([
+      fetchProvider('netease', MUSIC_SEARCH_MIXED_PAGE_SIZES.netease),
+      fetchProvider('qq', MUSIC_SEARCH_MIXED_PAGE_SIZES.qq)
+    ]);
+    var providerPages = {};
+    var failures = [];
+    settled.forEach(function (r) {
+      if (r.status === 'fulfilled') providerPages[r.value.provider] = r.value;
+      else if (r.reason && !r.reason.__searchCancelled) {
+        failures.push(r.reason.searchProvider || 'unknown');
+        console.warn('Music search provider failed:', r.reason.searchProvider, (r.reason && (r.reason.message || r.reason)) || r.reason);
+      }
+    });
+    return { songs: [], failures: failures, providerPages: providerPages };
   }
-  if (mode === 'qishui') {
-    var qsOnly = await apiJson(searchUrl ? searchUrl('qishui', q, 18, 0) : ('/api/qishui/search?keywords=' + encodeURIComponent(q) + '&limit=18'));
-    return (qsOnly.songs || []).slice(0, 18);
+  var limit = MUSIC_SEARCH_PAGE_SIZES[mode] || 18;
+  var one = await fetchProvider(mode, limit);
+  var pages = {};
+  pages[mode] = one;
+  return { songs: [], failures: [], providerPages: pages };
+}
+/* 把一页结果吸收进会话状态：去重累积、推进 offset、判定各平台是否还有下一页 */
+function absorbMusicSearchPage(state, page) {
+  if (!state || !page) return;
+  state.failures = state.failures || [];
+  var pages = page.providerPages || {};
+  var providers = Object.keys(pages);
+  /* 本轮成功返回的平台视为已恢复，撤销上一轮的失败标记（否则永远判不了到底） */
+  providers.forEach(function (provider) {
+    var fi = state.failures.indexOf(provider);
+    if (fi >= 0) state.failures.splice(fi, 1);
+  });
+  (page.failures || []).forEach(function (p) {
+    if (state.failures.indexOf(p) < 0) state.failures.push(p);
+  });
+  state.moreByProvider = state.moreByProvider || {};
+  providers.forEach(function (provider) {
+    var p = pages[provider];
+    var raw = state.raw[provider] || (state.raw[provider] = []);
+    var added = appendUniqueSongs(raw, p.songs);
+    /* 只给成功返回的平台推进 offset；失败平台保留当前页供重试 */
+    state.offsets[provider] = (state.offsets[provider] || 0) + (p.limit || 0);
+    /* 拿满一页才可能有更多；翻页拿回的全是重复（上游不支持 offset）也算到底 */
+    state.moreByProvider[provider] = (p.songs || []).length >= (p.limit || 1) && added > 0;
+  });
+  state.songs = musicSearchCombinedSongs(state);
+  /* 参与本模式的**全部**平台都要明确「没有更多」且没有失败才能判定到底。
+     旧实现只遍历本轮成功返回的平台：网易云返回最后一页 + QQ 本轮失败时
+     会被误判结束，QQ 的重试机会就这样丢了（2026-11-12 复核复现）。
+     失败平台 / 从未成功过的平台一律返回 false，保留「加载更多」重试入口。 */
+  state.exhausted = musicSearchProvidersForMode(state.mode).every(function (provider) {
+    if (state.failures.indexOf(provider) >= 0) return false;
+    return state.moreByProvider[provider] === false;
+  });
+}
+function searchResultFooterHtml(state) {
+  if (!state || !state.songs || !state.songs.length) return '';
+  var html = '';
+  if (state.failures && state.failures.length) {
+    var labels = state.failures.map(function (p) {
+      return (typeof providerLabel === 'function') ? providerLabel(p) : p;
+    }).join('、');
+    html += '<div class="search-empty" style="padding:10px 0"><div class="search-empty-text">部分平台搜索失败（' +
+      escHtml(labels) + '），仅显示部分结果' + (state.exhausted ? '' : '，可点「加载更多」重试') + '</div></div>';
   }
-  if (mode === 'kugou') {
-    var kgOnly = await apiJson(searchUrl ? searchUrl('kugou', q, 18, 0) : ('/api/kugou/search?keywords=' + encodeURIComponent(q) + '&limit=18'));
-    return (kgOnly.songs || []).slice(0, 18);
+  if (!state.exhausted) {
+    html += '<div style="display:flex;justify-content:center;padding:12px 0 16px">' +
+      '<button type="button" class="search-load-more" onclick="loadNextMusicSearchPage()" ' +
+      'style="padding:7px 22px;border-radius:16px;border:1px solid rgba(255,255,255,0.22);background:rgba(255,255,255,0.07);color:inherit;cursor:pointer;font-size:13px">加载更多</button></div>';
   }
-  if (mode === 'spotify') {
-    var spOnly = await apiJson(searchUrl ? searchUrl('spotify', q, 18, 0) : ('/api/spotify/search?keywords=' + encodeURIComponent(q) + '&limit=18'));
-    return (spOnly.songs || []).slice(0, 18);
+  return html;
+}
+function setMusicSearchLoadMoreButtonLoading(loading) {
+  var btn = document.querySelector('.search-load-more');
+  if (!btn) return;
+  btn.disabled = !!loading;
+  btn.textContent = loading ? '加载中…' : '加载更多';
+  btn.style.opacity = loading ? '0.6' : '1';
+}
+/* 「加载更多」：按会话里记录的 offset 取下一页，陈旧会话（输入已变 / 已切模式）直接忽略 */
+async function loadNextMusicSearchPage(expectedKey) {
+  var state = searchPageState;
+  if (!state || state.loading || state.exhausted) return;
+  var key = searchResultKey(state.q, state.mode);
+  if (expectedKey && expectedKey !== key) return;
+  if ($input && $input.value.trim() !== state.q) return;
+  if (searchMode !== state.mode) return;
+  var requestSeq = ++searchRequestSeq;
+  if (searchAbort) { try { searchAbort.abort(); } catch (_) {} }
+  var controller = (typeof AbortController === 'function') ? new AbortController() : null;
+  searchAbort = controller;
+  state.loading = true;
+  setMusicSearchLoadMoreButtonLoading(true);
+  try {
+    var page = await fetchMusicSearchResults(state.q, state.mode, state, controller ? controller.signal : null);
+    if (requestSeq !== searchRequestSeq || searchPageState !== state) return;
+    /* 返回后核对当前输入与模式（2026-11-12 复核：fetch 期间用户清空 / 改词 /
+       切标签，晚到的分页结果不得重新渲染旧列表）。 */
+    if ($input && $input.value.trim() !== state.q) return;
+    if (searchMode !== state.mode) return;
+    absorbMusicSearchPage(state, page);
+    renderSongSearchResults(state.songs);
+    /* 本轮所有参与平台都失败：结果没变化，但必须让用户知道刚才那次点击失败了 */
+    if (page.failures && page.failures.length && !Object.keys(page.providerPages || {}).length) {
+      showToast('加载更多失败，请稍后重试');
+    }
+  } catch (err) {
+    if (requestSeq !== searchRequestSeq || searchPageState !== state) return;
+    if ($input && $input.value.trim() !== state.q) return;
+    if (err && err.__searchCancelled) return;
+    console.warn('[Search] load more failed:', err);
+    showToast('加载更多失败，请稍后重试');
+  } finally {
+    state.loading = false;
+    if (searchPageState === state) setMusicSearchLoadMoreButtonLoading(false);
+    if (searchAbort === controller) searchAbort = null;
   }
-  var result = await Promise.allSettled([
-    apiJson(searchUrl ? searchUrl('netease', q, 14, 0) : ('/api/search?keywords=' + encodeURIComponent(q) + '&limit=14')),
-    apiJson(searchUrl ? searchUrl('qq', q, 12, 0) : ('/api/qq/search?keywords=' + encodeURIComponent(q) + '&limit=12'))
-  ]);
-  var neteaseSongs = result[0].status === 'fulfilled' ? ((result[0].value && result[0].value.songs) || []) : [];
-  var qqSongs = result[1].status === 'fulfilled' ? ((result[1].value && result[1].value.songs) || []) : [];
-  if (result[1].status === 'rejected') console.warn('QQ search failed:', result[1].reason);
-  return mergeSongSearchResults(neteaseSongs, qqSongs, 18, q);
+}
+/* 失败占位里的「重新搜索」：回到最近一次搜索的词与模式 */
+function retryMusicSearch() {
+  var ctx = searchRetryContext;
+  if (!ctx || !ctx.q) return;
+  if ($input) $input.value = ctx.q;
+  if (searchMode !== ctx.mode) setSearchMode(ctx.mode);
+  else doSearch(ctx.q);
 }
 function renderSongSearchResults(songs) {
   playlist = songs || [];
@@ -875,7 +1056,7 @@ function renderSongSearchResults(songs) {
     var sourceClass = songProviderKey(s) + '-source';
     var thumb = songCoverSrc(s, 80);
     var imgTag = thumb
-      ? imgTagFromSrc(thumb, 'loading="lazy" onerror="this.style.opacity=0.2"')
+      ? imgTagFromSrc(thumb, 'loading="lazy" onerror="mineradioCoverFallback(this)"')
       : '<div style="width:40px;height:40px;border-radius:6px;background:rgba(255,255,255,0.06);flex-shrink:0"></div>';
     return '<div class="search-result ' + sourceClass + '">' +
       '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" onclick="playSearchResult(' + i + ')">' +
@@ -889,7 +1070,7 @@ function renderSongSearchResults(songs) {
       '<button class="song-action-btn" title="收藏到歌单" onclick="event.stopPropagation();collectSearchResult(' + i + ')">' + playlistPlusIconSvg() + '</button>' +
       '<button class="add-btn" title="下一首播放" onclick="event.stopPropagation();queueSearchResult(' + i + ')">+</button>' +
     '</div>';
-  }).join('');
+  }).join('') + searchResultFooterHtml(searchPageState);
   $results.classList.add('show');
   syncLikeStatusForSongs(playlist);
   if (window.gsap) animateListItems($results, '.search-result', { x: 0, y: 6, stagger: 0.012, duration: 0.18, limit: 18 });
@@ -899,6 +1080,7 @@ async function doSearch(q, opts) {
   opts = opts || {};
   q = String(q || '').trim();
   if (!q) {
+    invalidatePendingMusicSearch();
     if (searchMode === 'podcast') loadPodcastHot();
     else renderSearchHistory();
     return;
@@ -907,22 +1089,53 @@ async function doSearch(q, opts) {
     doPodcastSearch(q);
     return;
   }
+  /* 新搜索开始：取消在飞的旧请求（输入变化 / 连续搜索不再互相拖尾） */
+  if (searchAbort) { try { searchAbort.abort(); } catch (_) {} }
+  var controller = (typeof AbortController === 'function') ? new AbortController() : null;
+  searchAbort = controller;
   var requestSeq = ++searchRequestSeq;
+  var mode = searchMode;
+  searchRetryContext = { q: q, mode: mode };
+  searchPageState = { q: q, mode: mode, raw: {}, offsets: {}, songs: [], failures: [], exhausted: false, loading: true };
   try {
-    var mode = searchMode;
-    var songs = await fetchMusicSearchResults(q, mode);
+    var page = await fetchMusicSearchResults(q, mode, searchPageState, controller ? controller.signal : null);
     if (requestSeq !== searchRequestSeq || $input.value.trim() !== q) return;
-    if (!songs.length) {
+    absorbMusicSearchPage(searchPageState, page);
+    if (!searchPageState.songs.length) {
       playlist = [];
       searchLastResultQuery = '';
-      $results.innerHTML = searchEmptyHtml('没有找到相关歌曲');
+      var allFailed = searchPageState.failures.length > 0;
+      var failedLabels = searchPageState.failures.map(function (p) {
+        return (typeof providerLabel === 'function') ? providerLabel(p) : p;
+      }).join('、');
+      $results.innerHTML = allFailed
+        ? searchEmptyHtml('搜索失败（' + escHtml(failedLabels) + '）：网络异常或服务不可用', { retry: true })
+        : searchEmptyHtml('没有找到相关歌曲');
       $results.classList.add('show');
+      syncSearchAreaResultState();
       return;
     }
     searchLastResultQuery = searchResultKey(q, mode);
     rememberSearchQuery(q);
-    renderSongSearchResults(songs);
+    renderSongSearchResults(searchPageState.songs);
+    syncSearchAreaResultState();
     if (opts.autoPlayFirst) playSearchResult(0);
-  } catch (err) { console.error('Search:', err); }
+  } catch (err) {
+    /* 已被更新的搜索 / 清空取代：静默退场（取消引发的 AbortError 也走这里） */
+    if (requestSeq !== searchRequestSeq || $input.value.trim() !== q) return;
+    if (err && err.__searchCancelled) return;
+    console.error('Search:', err);
+    playlist = [];
+    searchLastResultQuery = '';
+    /* 单平台搜索失败：给出明确失败态 + 重试，不再永远停在「正在搜索」 */
+    var providerNote = (err && err.searchProvider && typeof providerLabel === 'function')
+      ? '（' + providerLabel(err.searchProvider) + '）' : '';
+    $results.innerHTML = searchEmptyHtml('搜索失败' + providerNote + '：网络异常或服务不可用', { retry: true });
+    $results.classList.add('show');
+    syncSearchAreaResultState();
+  } finally {
+    if (searchPageState && searchPageState.mode === mode && searchPageState.q === q) searchPageState.loading = false;
+    if (searchAbort === controller) searchAbort = null;
+  }
 }
 

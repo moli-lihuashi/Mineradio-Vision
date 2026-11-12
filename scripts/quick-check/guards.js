@@ -2481,6 +2481,172 @@ function checkNonCurrentAudioPrefetchGuard() {
   console.log('[OK] Non-current audio URL prefetch stays disabled by default.');
 }
 
+function checkLoginProviderTabGuard() {
+  logStep('Login provider single-selection guard');
+  const flowPath = path.join(appRoot, 'public', 'js', 'modules', '08-account', '03-login-modal-flows.js');
+  const raw = fs.readFileSync(flowPath, 'utf8');
+  // 注释里必然引用这些历史字面量，先剥行注释
+  const code = raw.replace(/^\s*\/\/.*$/gm, '');
+  const fnIdx = code.indexOf('function updateLoginProviderUi()');
+  if (fnIdx < 0) fail('updateLoginProviderUi is missing');
+  const endIdx = code.indexOf('\nasync function refreshQr()', fnIdx);
+  const body = code.slice(fnIdx, endIdx > fnIdx ? endIdx : undefined);
+
+  // 五个按钮的 active 必须在一处、按 data-login-provider === loginProvider 推导，
+  // 且必须在 Qishui / Spotify 两个提前 return 的分支之前。
+  const unifiedIdx = body.search(/\[neteaseBtn,\s*qqBtn,\s*kugouBtn,\s*qishuiBtn,\s*spotifyBtn\]\.forEach/);
+  if (unifiedIdx < 0) fail('login provider tabs must be synchronised once in a single place');
+  if (!/btn\.getAttribute\('data-login-provider'\)\s*===\s*loginProvider/.test(body)) {
+    fail('tab active state must be derived from loginProvider, not hardcoded per branch');
+  }
+  const qishuiBranchIdx = body.indexOf('if (isQishui)');
+  const spotifyBranchIdx = body.indexOf('if (isSpotify)');
+  if (qishuiBranchIdx >= 0 && unifiedIdx > qishuiBranchIdx) fail('unified tab sync must run before the early-return Qishui branch');
+  if (spotifyBranchIdx >= 0 && unifiedIdx > spotifyBranchIdx) fail('unified tab sync must run before the early-return Spotify branch');
+  // 分支里散落的 toggle 是第二套状态来源：历史上通用尾部漏了 qishuiBtn，
+  // 「汽水 → 网易云 / QQ / 酷狗」就同时留下两个 .active 行（两个选中框）。
+  if (/qishuiBtn\)\s*qishuiBtn\.classList\.toggle\('active'/.test(body)
+    || /neteaseBtn\)\s*neteaseBtn\.classList\.toggle\('active'/.test(body)) {
+    fail('per-branch active toggles must not coexist with the unified sync');
+  }
+  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', '08-account', 'account.css'), 'utf8');
+  if (!/login-platform-list button:not\(\.active\)\s*\{/.test(cssText)) {
+    fail('unselected login platform rows must stay borderless/backgroundless, otherwise hover leaves a second frame');
+  }
+  console.log('[OK] login platform tabs keep exactly one active row on every provider switch.');
+}
+
+function checkUserModalTabGuard() {
+  logStep('User modal tab single-selection guard');
+  const raw = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '04-user-modal-logout.js'), 'utf8');
+  const code = raw.replace(/^\s*\/\/.*$/gm, '');
+  // 旧实现：['netease','qq','kugou','both'].forEach + getElementById('user-provider-' + key)
+  // → qishui / spotify 两个按钮的 .active 从不同步，切到它们时左列一个高亮都没有。
+  if (!/querySelectorAll\('#user-platform-tabs button'\)/.test(code)) {
+    fail('user modal tabs must be derived from the actual DOM buttons so new providers are included automatically');
+  }
+  if (/getElementById\('user-provider-'\s*\+/.test(code)
+    || /\[\s*'netease'\s*,\s*'qq'\s*,\s*'kugou'\s*,\s*'both'\s*\]\s*\.forEach/.test(code)) {
+    fail('hardcoded provider whitelist is back: qishui / spotify tabs would never receive .active');
+  }
+  if (!/\.replace\(\/\^user-provider-\//.test(code)) fail('tab key must be derived from the button id');
+  if (!/key === 'both' \? dualAccountMode/.test(code)) fail('All (dual account) tab must keep its own active rule');
+  // 退出按钮原来写死三家英文名，切到汽水/Spotify 会显示「Logout Netease」
+  if (/Logout Netease|Logout Kugou|Logout QQ Music/.test(code)) fail('logout label must follow the active provider, not a three-platform hardcoded string');
+  if (!/logoutBtn\.textContent = '退出' \+ meta\.label/.test(code)) fail('logout label must be derived from platformMeta(activeAccountProvider).label');
+  const html = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  ['netease', 'qq', 'kugou', 'qishui', 'spotify', 'both'].forEach(function (key) {
+    if (!new RegExp('id="user-provider-' + key + '"').test(html)) fail('user-platform-tabs is missing the ' + key + ' button');
+  });
+  console.log('[OK] user modal tabs stay single-selected and the logout label follows the active provider.');
+}
+
+function checkPlatformPanelStyleGuard() {
+  logStep('Platform recommend panel styling guard');
+  const nfPath = path.join(appRoot, 'public', 'css', '05-playback', 'netease-features.css');
+  const nfCss = fs.readFileSync(nfPath, 'utf8');
+  const shellCss = fs.readFileSync(path.join(appRoot, 'public', 'css', '10-shell', 'shell.css'), 'utf8');
+
+  // 输入行：.netease-features-inputs 里的 select/input 必须走自定义外观。
+  // 曾经只有 .netease-features-toolbar 有样式，这一行是原生控件（白底黑字、0 圆角），
+  // 在深色玻璃面板上像一块白补丁。
+  if (!/\.netease-features-inputs\s*>\s*\*/.test(nfCss)) fail('netease-features input row lost its styling hook (.netease-features-inputs > *)');
+  if (!/appearance:\s*none/.test(nfCss)) fail('select must reset native appearance, otherwise it renders as a white system control');
+  if (!/background-image:\s*url\("data:image\/svg\+xml/.test(nfCss)) fail('select must keep the inline SVG chevron');
+  if (!/\.netease-features-inputs input::placeholder/.test(nfCss)) fail('input placeholder colour must be themed');
+  if (!/\.netease-features-inputs\s*>\s*\*[^{]*\{[^}]*border-radius/s.test(nfCss)) fail('input row must keep its rounded glass chrome');
+
+  // 滚动条：两处容器都要细药丸 + 透明轨道 + 无箭头；标准属性只能在 @supports 里，
+  // 否则 Chromium 会整组忽略 ::-webkit-scrollbar-*（见 index.css 同名注释）。
+  const scrollbars = [
+    { name: 'netease-features-panel', css: nfCss },
+    { name: 'home-platform-recommend-list', css: shellCss }
+  ];
+  scrollbars.forEach(function (entry) {
+    const sel = '\\.' + entry.name + '::-webkit-scrollbar';
+    if (!new RegExp(sel + '\\b').test(entry.css)) fail(entry.name + ' lost its custom scrollbar');
+    if (!new RegExp(sel + '-thumb[^}]*border-radius', 's').test(entry.css)) fail(entry.name + ' scrollbar thumb must stay a rounded pill');
+    if (!new RegExp(sel + '-button[^}]*display:\\s*none', 's').test(entry.css)) fail(entry.name + ' scrollbar must hide the arrow buttons');
+    if (!new RegExp(sel + '-track\\s*\\{[^}]*background:\\s*transparent', 's').test(entry.css)) fail(entry.name + ' scrollbar track must stay transparent');
+  });
+  [nfCss, shellCss].forEach(function (css) {
+    const stdIdx = css.indexOf('scrollbar-width:');
+    if (stdIdx < 0) return;
+    const supportsIdx = css.indexOf('@supports not selector(::-webkit-scrollbar)');
+    if (supportsIdx < 0 || stdIdx < supportsIdx) {
+      fail('scrollbar-width/scrollbar-color must sit inside @supports not selector(::-webkit-scrollbar), otherwise Chromium drops the webkit pseudo-elements');
+    }
+  });
+  if (!/\.home-platform-recommend-list\s*\{[^}]*scrollbar-gutter:\s*stable/s.test(shellCss)) {
+    fail('recommend list must reserve the scrollbar gutter, otherwise the two-column grid shifts when it appears');
+  }
+  console.log('[OK] platform recommend panel keeps themed inputs and pill scrollbars.');
+}
+
+function checkCoverFallbackGuard() {
+  logStep('Cover load fallback guard');
+  const apiText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-api', '00-mineradio-api.js'), 'utf8');
+  const qualityText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '00a-api-quality.js'), 'utf8');
+  if (!/function mineradioCoverFallback\(img\)/.test(apiText)) fail('mineradioCoverFallback must stay defined in 01-api/00-mineradio-api.js');
+  if (!/mineradioCoverFallback:\s*mineradioCoverFallback/.test(apiText)) fail('mineradioCoverFallback must be exported on Mineradio.api');
+  if (!/var mineradioCoverFallback = Mineradio\.api\.mineradioCoverFallback;/.test(qualityText)) {
+    fail('mineradioCoverFallback must be promoted to a global in 05-playback/00a-api-quality.js (all modules use it inline)');
+  }
+  // 关键判据：src 必须换成 1x1 透明图，不能只是 opacity / removeAttribute
+  if (!/data:image\/gif;base64,R0lGODlhAQABAIAAAAAAAP/.test(apiText)) fail('cover fallback must swap src to the transparent 1x1 GIF (opacity keeps the broken-image icon)');
+  if (!/img\.src = MINERADIO_BLANK_IMAGE/.test(apiText)) fail('cover fallback must assign the blank image');
+  if (!/dataset\.coverBroken = '1'/.test(apiText)) fail('cover fallback must mark data-cover-broken so probes/tests can assert it');
+
+  // 全站 <img> 的 onerror 都必须指向这个函数：内联 this.style.opacity 会留下破图图标
+  const offenders = [];
+  walk(path.join(appRoot, 'public', 'js', 'modules')).forEach(function (file) {
+    if (!file.endsWith('.js')) return;
+    const text = fs.readFileSync(file, 'utf8');
+    if (/onerror="this\.style\.opacity/.test(text)) offenders.push(rel(file));
+  });
+  if (offenders.length) {
+    fail('inline onerror="this.style.opacity=…" leaves the browser broken-image icon: ' + offenders.join(', '));
+  }
+  console.log('[OK] every cover <img> falls back to a blank image and a grey placeholder block.');
+}
+
+function checkPlaylistCoverMarkGuard() {
+  logStep('Playlist cover placeholder mark guard');
+  const detailText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '02-playlist-detail.js'), 'utf8');
+  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', '06-lyrics', 'playlist.css'), 'utf8');
+
+  // 判据：喜欢=爱心、收藏=五角星，其余无封面保持灰块
+  if (!/function playlistCoverMarkKind\(pl\)/.test(detailText)) fail('playlistCoverMarkKind is missing');
+  if (!/function playlistCoverMarkHtml\(pl, size, radius\)/.test(detailText)) fail('playlistCoverMarkHtml is missing');
+  if (!/isLikedPlaylistContext\(/.test(detailText)) fail('liked playlists must reuse isLikedPlaylistContext instead of a new ad-hoc name match');
+  if (!/PLAYLIST_COVER_MARK_PATHS\s*=\s*\{[^}]*liked:[^}]*collected:/.test(detailText)) fail('both heart and star paths must be defined');
+  if (!/function playlistCoverHtml\(pl, thumb, size, radius\)/.test(detailText)) fail('playlistCoverHtml (cover slot) is missing');
+  if (!/playlistCoverHtml\(pl, thumb, 44, 8\)/.test(detailText)) fail('the playlist card must render its cover through playlistCoverHtml');
+  if (!/\.pl-cover-slot\{/.test(cssText)) fail('.pl-cover-slot styles are missing (img + hidden mark must share one box)');
+  // 封面加载失败也要落到标记上，不能留一块灰 —— 用户那张「Ta在抖音收藏的音乐」就是有 URL 但拉不到
+  const apiText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-api', '00-mineradio-api.js'), 'utf8');
+  if (!/classList\.contains\('pl-cover-mark'\)/.test(apiText)) {
+    fail('mineradioCoverFallback must reveal the sibling cover mark when a real cover fails to load');
+  }
+
+  // 样式：颜色走 currentColor、标记不吃指针事件、hover 动画由卡片驱动
+  // 必须限定在这个规则块内（[^}] 不跨块）——用 [\s\S]*? 会匹配到文件后面别处的
+  // pointer-events:none，等于守卫失效（这条第一次就踩了，突变自证才暴露）。
+  if (!/\.pl-cover-mark\{[^}]*pointer-events:none/.test(cssText)) {
+    fail('.pl-cover-mark must be pointer-events:none: it sits over the card and would eat the card hover/click');
+  }
+  if (!/\.pl-cover-mark\.is-liked\{color:#ff2d55\}/.test(cssText)) fail('liked mark colour is missing');
+  if (!/\.pl-cover-mark\.is-collected\{color:#ffc93c\}/.test(cssText)) fail('collected mark colour is missing');
+  if (!/\.pl-card:hover \.pl-cover-mark\.is-liked svg\{animation:pl-cover-beat/.test(cssText)) {
+    fail('heart beat animation must be driven by .pl-card:hover (the pointer rests on the card, not the 25px icon)');
+  }
+  if (!/\.pl-card:hover \.pl-cover-mark\.is-collected svg\{animation:pl-cover-twinkle/.test(cssText)) {
+    fail('star twinkle animation must be driven by .pl-card:hover');
+  }
+  if (!/@keyframes pl-cover-beat/.test(cssText) || !/@keyframes pl-cover-twinkle/.test(cssText)) fail('mark keyframes are missing');
+  console.log('[OK] coverless playlists show a heart / star placeholder that keeps the card hover intact.');
+}
+
 function checkSplashBootGuard() {
   logStep('Splash boot / WebGL fail-open guard');
   const rendererText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-scene', '00-renderer-quality.js'), 'utf8');
@@ -3196,5 +3362,5 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
 }
 
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
 };

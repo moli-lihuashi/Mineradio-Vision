@@ -18,6 +18,8 @@ const {
   readLiquidGlassPluginScripts,
 } = require('./liquidglass-plugins');
 const secretStore = require('./secret-store');
+// QQ 登录窗口的收尾判定（纯函数，单测覆盖；见 tests/qq-login-decision.test.js）
+const { decideQQLoginOutcome } = require('../server/lib/qq-login-decision');
 
 // WE 协议必须在 app ready 前注册；库实例/运行时改为按需加载
 const { registerWallpaperEngineScheme } = require('./wallpaper-engine-library');
@@ -181,6 +183,9 @@ const APP_ICON_ICO = path.join(__dirname, '..', 'build', 'icon.ico');
 let tray = null;
 let closeBehavior = 'exit';
 let appQuitting = false;
+// 强制全退出状态：关闭按钮一旦触发就不再允许任何 preventDefault / hide() 拦截。
+let forceQuitting = false;
+let forceExitTimer = null;
 // 主窗口渲染进程崩溃时间戳（近 5 分钟内），用于崩溃风暴退避
 const mainWindowCrashTimes = [];
 const CACHE_SETTINGS_FILE = 'cache-settings.json';
@@ -587,7 +592,7 @@ function createOrUpdateTray() {
       { label: '上一首', click: () => send('if(typeof prevTrack==="function")prevTrack();') },
       { label: '下一首', click: () => send('if(typeof nextTrack==="function")nextTrack();') },
       { type: 'separator' },
-      { label: '退出', click: () => { appQuitting = true; app.quit(); } }
+      { label: '退出', click: () => forceExitApp('tray-menu-exit') }
     ]);
     tray.setContextMenu(menu);
   } catch (e) {
@@ -1169,6 +1174,9 @@ async function openQQMusicLoginWindow(owner, options) {
     let settled = false;
     let pollTimer = null;
     let warmupStarted = false;
+    // 播放态 key（qm_keyst）要等播放页补发；记下 warmup 时间，超宽限仍没有就按 partial 收尾，
+    // 否则 Promise 永不 resolve → QQ 音乐窗口停在 player 页、Mineradio 登录弹窗也不退。
+    let warmupAt = 0;
 
     const loginWindow = new BrowserWindow({
       width: 900,
@@ -1203,15 +1211,36 @@ async function openQQMusicLoginWindow(owner, options) {
     const checkCookies = async () => {
       try {
         const cookie = await readQQLoginCookieHeader(cookieSession);
-        if (qqCookieHasPlaybackLogin(cookie)) {
+        const decision = decideQQLoginOutcome({
+          hasPlaybackKey: qqCookieHasPlaybackLogin(cookie),
+          hasLogin: qqCookieHasLogin(cookie),
+          warmupStarted,
+          warmupAt,
+          now: Date.now(),
+        });
+        if (decision === 'done') {
           finish({ ok: true, cookie });
-        } else if (qqCookieHasLogin(cookie) && !warmupStarted) {
+          return;
+        }
+        if (decision === 'warmup') {
           warmupStarted = true;
+          warmupAt = Date.now();
           setTimeout(() => {
             if (!settled && loginWindow && !loginWindow.isDestroyed()) {
               loginWindow.loadURL('https://y.qq.com/n/ryqq/player').catch((e) => console.warn('QQ login warmup navigation failed:', e.message));
             }
           }, 900);
+          return;
+        }
+        if (decision === 'partial') {
+          console.log('[QQLogin] playback key not issued within grace; resolving partial');
+          finish({
+            ok: true,
+            cookie,
+            partial: true,
+            playbackReady: false,
+            message: 'QQ 账号已登录，但播放态凭据（qm_keyst）未下发：播放授权不完整，部分需登录的接口可能不可用。可稍后在账号面板重新登录续期。',
+          });
         }
       } catch (e) {
         console.warn('QQ login cookie check failed:', e.message);
@@ -2167,7 +2196,10 @@ function startSpotifyOAuthCallbackServer(redirectUri, onCallback) {
   });
 }
 
-async function openSpotifyMusicLoginWindow(owner) {
+async function openSpotifyMusicLoginWindow(owner, options) {
+  /* external=true：借鉴 Folia 的「打开浏览器」方式 —— 用系统浏览器完成授权，
+     本机 43879 回调服务器照常接 code，PKCE / state / token 加密存储链路完全复用。 */
+  const external = !!(options && options.external);
   const config = spotifyApi().getSpotifyOAuthConfig();
   if (!config.configured) {
     return {
@@ -2205,10 +2237,12 @@ async function openSpotifyMusicLoginWindow(owner) {
     let exchangeStarted = false;
     let callbackServer = null;
     let loginWindow = null;
+    let externalTimer = null;
 
     const finish = (result) => {
       if (settled) return result;
       settled = true;
+      if (externalTimer) clearTimeout(externalTimer);
       if (callbackServer && typeof callbackServer.close === 'function') callbackServer.close();
       if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close();
       resolve(result);
@@ -2272,9 +2306,25 @@ async function openSpotifyMusicLoginWindow(owner) {
         error: e.code || e.message || 'SPOTIFY_CALLBACK_SERVER_FAILED',
         redirectUri: config.redirectUri,
         message: (e.code || e.message) === 'SPOTIFY_CALLBACK_PORT_BUSY'
-          ? 'Spotify 本地回调端口被占用，请关闭占用 43879 端口的程序后重试。'
+          ? 'Spotify 本地回调端口被占用，请关闭占用该端口的程序后重试（' + config.redirectUri + '）。'
           : 'Spotify 本地回调端口启动失败：' + (e.message || e.code || ''),
       });
+      return;
+    }
+
+    /* 系统浏览器路径：不开 Electron 登录窗，浏览器跳回本机回调时由 callbackServer
+       触发同一个 exchangeFromRedirect → finish()。没有窗口可关，用 10 分钟超时兜底。 */
+    if (external) {
+      try {
+        await shell.openExternal(authUrl);
+      } catch (e) {
+        finish({ ok: false, provider: 'spotify', error: e.message || 'SPOTIFY_EXTERNAL_BROWSER_FAILED', message: '无法打开系统浏览器：' + (e.message || '') });
+        return;
+      }
+      externalTimer = setTimeout(() => finish({
+        ok: false, provider: 'spotify', cancelled: true,
+        message: 'Spotify 授权超时（10 分钟），请重新点击打开浏览器。'
+      }), 10 * 60 * 1000);
       return;
     }
 
@@ -2413,6 +2463,12 @@ ipcMain.handle('desktop-window-minimize', (event) => {
   if (win === mainWindow && fullDesktopModeRuntime && fullDesktopModeRuntime.getStatus('window-minimize').enabled === true) {
     return getWindowState(win);
   }
+  /* 「后台托盘」语义搬到这里：想驻留就点最小化，关闭按钮永远完全退出。 */
+  if (win === mainWindow && closeBehavior === 'tray') {
+    createOrUpdateTray();
+    win.hide();
+    return getWindowState(win);
+  }
   win?.minimize();
   return getWindowState(win);
 });
@@ -2449,8 +2505,9 @@ ipcMain.handle('desktop-window-get-state', (event) => {
 
 ipcMain.handle('desktop-window-close', (event, behavior) => {
   if (behavior) closeBehavior = normalizeCloseBehavior(behavior);
-  const win = getSenderWindow(event);
-  if (win) win.close();
+  /* 关闭按钮 = 完全退出。不再 win.close() 后干等 window-all-closed：
+     只要还有登录窗 / 桌面歌词 / 壁纸层活着，那个事件就永远不来。 */
+  forceExitApp('window-close-button');
 });
 
 ipcMain.handle('desktop-window-get-close-behavior', () => {
@@ -2598,6 +2655,11 @@ ipcMain.handle('qishui-music-clear-login', async () => {
 
 ipcMain.handle('spotify-music-open-login', async (event) => {
   return openSpotifyMusicLoginWindow(getSenderWindow(event));
+});
+
+/* Folia 式「打开浏览器」授权：同一个 PKCE / 回调服务器，只是把授权页交给系统浏览器 */
+ipcMain.handle('spotify-music-open-login-external', async (event) => {
+  return openSpotifyMusicLoginWindow(getSenderWindow(event), { external: true });
 });
 
 ipcMain.handle('spotify-music-clear-login', async () => {
@@ -3974,18 +4036,11 @@ async function createWindow() {
   mainWindow.on('blur', () => sendWindowState(mainWindow));
   mainWindow.on('move', () => scheduleWindowStateSend(mainWindow));
   mainWindow.on('resize', () => scheduleWindowStateSend(mainWindow));
-  mainWindow.on('close', (event) => {
-    if (!appQuitting && closeBehavior === 'tray') {
-      event.preventDefault();
-      createOrUpdateTray();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        if (typeof appMemory !== 'undefined' && appMemory && typeof appMemory.trimAppWorkingSets === 'function') {
-          appMemory.trimAppWorkingSets([process.pid]).catch(() => {});
-        }
-        mainWindow.hide();
-      }
-    }
-  });
+  /* 不再注册 'close' 拦截：旧逻辑在 closeBehavior==='tray' 时
+     event.preventDefault() + mainWindow.hide()，窗口藏了、进程全部留着，
+     用户看到「托盘和任务栏都没窗口，播放器却还在后台跑」。
+     现在关闭按钮 / Alt+F4 都让窗口真正关闭，随后 window-all-closed
+     走 forceExitApp 收掉整个进程树；「后台托盘」只由最小化按钮承担。 */
   mainWindow.on('closed', () => {
     if (mainWindowStateTimer) {
       clearTimeout(mainWindowStateTimer);
@@ -4484,29 +4539,75 @@ if (!gotSingleInstanceLock) {
     ensureMainWindowCreated().then(() => focusMainWindow()).catch((e) => reportWindowCreationFailure('Activate', e));
   });
 
+  /* ===== 强制全退出（2026-11-11） =====
+   * 实测残留：用户点关闭按钮后托盘和任务栏都没有窗口了，7 个 Mineradio.exe
+   * （主 + crashpad + gpu + 3×utility + renderer）仍挂了近 1.5 小时。
+   * 三条会把退出卡住的老路径：
+   *   ① closeBehavior==='tray' 时 mainWindow.on('close') 会 preventDefault + hide()；
+   *   ② 其它 BrowserWindow（登录窗 / 桌面歌词 / 壁纸层）还活着，
+   *      window-all-closed 永远不触发；
+   *   ③ before-quit 里壁纸 runtime.dispose() 若挂起，退出被永久 preventDefault。
+   * 修法：关闭按钮不再等「窗口自然关完」，而是显式销毁所有窗口 + 起超时兜底，
+   * 让 Electron 主进程连同 GPU / renderer / utility / crashpad 子进程一起结束。
+   */
+  function killAppChildProcesses() {
+    try { stopDesktopLyricsMousePoller(); } catch (_) {}
+    try { stopDesktopLyricsCursorWatcher(); } catch (_) {}
+  }
+
+  function destroyAllAppWindows() {
+    let all = [];
+    try { all = BrowserWindow.getAllWindows() || []; } catch (_) {}
+    for (const win of all) {
+      try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
+    }
+  }
+
+  function forceExitApp(reason) {
+    if (forceQuitting) return;
+    forceQuitting = true;
+    appQuitting = true;
+    try { runAppShutdownCleanup(); } catch (_) {}
+    try { killAppChildProcesses(); } catch (_) {}
+    try { destroyAllAppWindows(); } catch (_) {}
+    try { app.quit(); } catch (_) { try { app.exit(0); } catch (_) {} }
+    /* app.quit() 仍可能被 before-quit 的 preventDefault 或未决 Promise 顶住。
+       3 秒后无条件 app.exit(0)：不触发 before-quit，绕过一切拦截。 */
+    if (!forceExitTimer) {
+      forceExitTimer = setTimeout(() => {
+        try { app.exit(0); } catch (_) { try { process.exit(0); } catch (_) {} }
+      }, 3000);
+      if (typeof forceExitTimer.unref === 'function') forceExitTimer.unref();
+    }
+  }
+
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    if (process.platform !== 'darwin') forceExitApp('window-all-closed');
   });
 
   function runAppShutdownCleanup() {
-  if (memoryAutoTimer) clearInterval(memoryAutoTimer);
-  // 二维码同步服务监听局域网且持有登录包凭据，退出时必须主动关掉。
-  try { stopLoginPackQrSession(); } catch (_) {}
-  clearWallpaperEngineCaptureGrant();
-  if (wallpaperEngineLibrary && typeof wallpaperEngineLibrary.dispose === 'function') {
-    try { wallpaperEngineLibrary.dispose(); } catch (_) {}
+    if (memoryAutoTimer) clearInterval(memoryAutoTimer);
+    // 二维码同步服务监听局域网且持有登录包凭据，退出时必须主动关掉。
+    try { stopLoginPackQrSession(); } catch (_) {}
+    clearWallpaperEngineCaptureGrant();
+    if (wallpaperEngineLibrary && typeof wallpaperEngineLibrary.dispose === 'function') {
+      try { wallpaperEngineLibrary.dispose(); } catch (_) {}
+    }
+    unregisterMineradioGlobalHotkeys();
+    closeOverlayWindows();
+    destroyTray();
+    if (localServer && localServer.close) localServer.close();
+    // powershell 鼠标轮询 / 光标监视是独立 OS 进程，主进程退出不一定带走。
+    try { killAppChildProcesses(); } catch (_) {}
   }
-  unregisterMineradioGlobalHotkeys();
-  closeOverlayWindows();
-  destroyTray();
-  if (localServer && localServer.close) localServer.close();
-}
 
-app.on('before-quit', (event) => {
+  app.on('before-quit', (event) => {
     appQuitting = true;
+    try { killAppChildProcesses(); } catch (_) {}
     /* 壁纸模式下主窗口还挂在桌面上，必须先等 runtime 把窗口摘回顶层再退出，
-     * 否则进程一死桌面就少了图标层的共存窗口。 */
-    if (fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled() && !fullDesktopQuitDisposePending) {
+     * 否则进程一死桌面就少了图标层的共存窗口。
+     * 但强制退出（关闭按钮 / 托盘退出）不再等 dispose —— 那正是残留成因之一。 */
+    if (!forceQuitting && fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled() && !fullDesktopQuitDisposePending) {
       event.preventDefault();
       fullDesktopQuitDisposePending = true;
       Promise.resolve(fullDesktopModeRuntime.dispose('app-before-quit'))
@@ -4518,5 +4619,10 @@ app.on('before-quit', (event) => {
       return;
     }
     runAppShutdownCleanup();
+  });
+
+  app.on('will-quit', () => {
+    try { killAppChildProcesses(); } catch (_) {}
+    if (forceExitTimer) { clearTimeout(forceExitTimer); forceExitTimer = null; }
   });
 }
