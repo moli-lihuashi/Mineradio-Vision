@@ -15,6 +15,9 @@ win-unpacked/
 *.7z
 *.asar
 
+# native addon 构建产物（node-gyp 生成，含本机绝对路径，不入库）
+native/**/build/
+
 # User data and private state
 .cookie
 .qq-cookie
