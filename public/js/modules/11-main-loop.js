@@ -990,13 +990,27 @@ function updateLiquidGlassBackdropMirror() {
   }
   _lgMirrorCtx.fillStyle = _lgMirrorBgColor;
   _lgMirrorCtx.fillRect(0, 0, W, H);
-  var vid = liquidGlassBgVideoEl();
-  if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {
-    var vscale = Math.max(W / vid.videoWidth, H / vid.videoHeight);
-    var vsw = W / vscale, vsh = H / vscale;
+  // Wallpaper Engine 壁纸激活时，玻璃的背景就是它 —— 不加这一源，
+  // LiquidGlass 面板在 WE 壁纸上永远透出黑（2026-11-13 用户实测：
+  // 手动导入/DIY 视频正常、WE 库点选的壁纸全黑，根因即此名单缺源）。
+  // WE 玻璃镜像 canvas 本身就是逐帧重绘的 WebGL 画布，drawImage 取的是
+  // 它的已渲染位图（preserveDrawingBuffer:true 保证位图可读）。
+  var weMirrorReady = document.body.classList.contains('wallpaper-engine-active')
+    && document.body.classList.contains('wallpaper-engine-video-ready');
+  var weMirror = weMirrorReady ? document.getElementById('wallpaper-engine-glass-mirror') : null;
+  if (weMirror && weMirror.width >= 2 && weMirror.height >= 2) {
     try {
-      _lgMirrorCtx.drawImage(vid, (vid.videoWidth - vsw) / 2, (vid.videoHeight - vsh) / 2, vsw, vsh, 0, 0, W, H);
+      _lgMirrorCtx.drawImage(weMirror, 0, 0, W, H);
     } catch (_) {}
+  } else {
+    var vid = liquidGlassBgVideoEl();
+    if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {
+      var vscale = Math.max(W / vid.videoWidth, H / vid.videoHeight);
+      var vsw = W / vscale, vsh = H / vscale;
+      try {
+        _lgMirrorCtx.drawImage(vid, (vid.videoWidth - vsw) / 2, (vid.videoHeight - vsh) / 2, vsw, vsh, 0, 0, W, H);
+      } catch (_) {}
+    }
   }
   try {
     _lgMirrorCtx.drawImage(src, 0, 0, W, H);

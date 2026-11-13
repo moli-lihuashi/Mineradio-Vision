@@ -85,8 +85,10 @@ try {
   <img id="wallpaper-engine-image" alt="">
   <canvas id="wallpaper-engine-freeze" aria-hidden="true"></canvas>
   <video id="wallpaper-engine-video" muted loop playsinline preload="metadata"></video>
-  <canvas id="wallpaper-engine-glass-mirror" aria-hidden="true"></canvas>
 </div>
+<!-- 玻璃镜像 canvas 必须挂在 body 层（壁纸层内部会被合成面/裁剪拖累，
+     backdrop-filter 回读不到 —— 2026-11-13 实机实验定案，J2/K 实验） -->
+<canvas id="wallpaper-engine-glass-mirror" aria-hidden="true"></canvas>
 <div id="desktop-window-shell">
 <div id="desktop-titlebar" aria-label="window controls">
   <div class="desktop-drag-region">

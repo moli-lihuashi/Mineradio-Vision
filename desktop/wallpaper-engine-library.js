@@ -865,6 +865,9 @@ class WallpaperEngineLibrary {
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'private, max-age=300',
       'Cross-Origin-Resource-Policy': 'cross-origin',
+      // 前端 video.crossOrigin='anonymous' 依赖此头：没有它媒体能播但镜像 canvas
+      // 被污染，backdrop-filter 背景回读拿到的是黑（2026-11-13 真机复现）
+      'Access-Control-Allow-Origin': '*',
       'X-Content-Type-Options': 'nosniff',
     };
     if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;

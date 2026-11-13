@@ -98,4 +98,111 @@ test('媒体视频必须有玻璃镜像 canvas，且壁纸层不得被隔进独�
   const mirrorRule = shellCss.match(/#wallpaper-engine-glass-mirror\{[^}]*\}/);
   assert.ok(mirrorRule, 'shell.css 必须有镜像 canvas 规则');
   assert.doesNotMatch(mirrorRule[0], /clip-path/, '镜像 canvas 自己也不许带 clip-path（同理会被回读跳过）');
+
+  // 镜像必须挂在 body 层：J2/K 实验（2026-11-13）证明壁纸层内部的镜像
+  // 无法被普通 backdrop-filter 玻璃回读，body 直挂的同一画布可以
+  const layerBlock = indexSrc.match(/<div id="wallpaper-engine-layer"[\s\S]*?<\/div>/);
+  assert.ok(layerBlock, 'index.html 必须有壁纸层');
+  assert.doesNotMatch(layerBlock[0], /glass-mirror/, '镜像 canvas 必须移出壁纸层（body 直挂）');
+  assert.match(shellCss, /body\.wallpaper-engine-video-ready #wallpaper-engine-glass-mirror/,
+    '镜像显示开关必须走 body 级 class（canvas 已不在层内，层选择器够不着）');
+});
+
+test('镜像 canvas 不得被污染：媒体必须 CORS 模式加载且协议响应带 ACAO', () => {
+  // 第三层坑（2026-11-13 真机复现：叠加层关了、镜像画了，玻璃仍黑）：
+  // mineradio-wallpaper:// 响应没有 Access-Control-Allow-Origin，<video> 非 CORS
+  // 模式加载 → drawImage 把镜像 canvas 污染（getImageData 抛 SecurityError）。
+  // 两处必须同时成立，缺一视频直接加载失败。
+  const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
+
+  const crossOriginIdx = fnsSrc.indexOf("video.crossOrigin = 'anonymous'");
+  const srcIdx = fnsSrc.indexOf('video.src = wallpaperEngineMediaUrl(item, \'media\')');
+  assert.ok(crossOriginIdx > -1, '必须设置 video.crossOrigin = \'anonymous\'（CORS 模式加载）');
+  assert.ok(srcIdx > -1, '必须存在 video.src 赋值');
+  assert.ok(crossOriginIdx < srcIdx,
+    'crossOrigin 必须在 video.src 赋值之前设置：src 设置后改 crossOrigin 不会重新协商 CORS');
+
+  assert.match(
+    librarySrc,
+    /'Access-Control-Allow-Origin': '\*'/,
+    'mediaResponse 成功响应必须带 Access-Control-Allow-Origin：*，'
+    + '否则 crossOrigin=anonymous 的媒体加载直接失败',
+  );
+});
+
+test('视频必须退居解码角色：镜像激活时 display:none，回读链里不许有视频层', () => {
+  // 第四层坑（2026-11-13 真机实验定案）：只要 backdrop-filter 的采样链里有
+  // <video> 层（哪怕 visibility:hidden），整块回读就是黑的；把视频
+  // display:none、只留干净 2D canvas，玻璃立刻透出画面（红 canvas 对照实验）。
+  // 因此镜像激活期间视频必须 display:none，由 rAF 驱动画帧。
+  const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
+
+  assert.match(
+    fnsSrc,
+    /video\.style\.display = 'none'/,
+    'wallpaperEngineGlassMirrorStart 必须把视频 display:none 移出渲染树',
+  );
+  assert.match(
+    fnsSrc,
+    /wallpaperEngineGlassMirrorStop[\s\S]{0,600}video\.style\.display = ''/,
+    '镜像停止时必须恢复视频 display，避免普通播放路径拿不到视频',
+  );
+  assert.match(
+    fnsSrc,
+    /display:none 时 rVFC 不会触发，用 rAF/,
+    '画帧循环必须走 rAF：display:none 的视频不触发 rVFC，用 rVFC 驱动会卡在首帧',
+  );
+});
+
+test('镜像必须是 WebGL + CPU 像素拷贝：视频帧直传与重绘 2D canvas 都无法被玻璃回读', () => {
+  // 第五层坑（2026-11-13 实机实验矩阵定案）：backdrop-filter 回读对
+  // 「每帧重绘的 2D canvas」返回黑（GPU 与 willReadFrequently CPU 均如此），
+  // 对「texImage2D 直接上传视频元素」也返回黑（视频帧 GPU 资源回读不了）；
+  // 静态 2D canvas 与「CPU 拷贝像素（drawImage→getImageData→9 参 texImage2D）」
+  // 均正常 —— 粒子背景一直正常正是因为它是 WebGL。所以镜像必须走
+  // WebGL + 离屏 2D 中转的 CPU 像素上传；WebGL 不可用时回退 2D（壁纸可见优先）。
+  const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
+
+  assert.match(
+    fnsSrc,
+    /getContext\('webgl',\s*\{[\s\S]*?preserveDrawingBuffer:\s*true/,
+    '镜像必须优先取 WebGL 上下文（preserveDrawingBuffer:true 保障回读稳定）',
+  );
+  assert.match(
+    fnsSrc,
+    /willReadFrequently:\s*true/,
+    '中转画布必须 willReadFrequently（每帧 getImageData）',
+  );
+  assert.match(
+    fnsSrc,
+    /m\.gl\.texImage2D\(m\.gl\.TEXTURE_2D, 0, m\.gl\.RGBA, canvas\.width, canvas\.height, 0,/,
+    '必须用 9 参形式从 CPU 像素上传（6 参视频元素直传的纹理回读不了）',
+  );
+  assert.match(
+    fnsSrc,
+    /m\.ctx2d = canvas\.getContext\('2d'\)/,
+    'WebGL 不可用时必须回退 2D 绘制（壁纸可见优先于玻璃可采样）',
+  );
+
+  // body 级显示开关（镜像挂在 body 层后的接线）
+  assert.match(
+    fnsSrc,
+    /wallpaperEngineGlassMirrorStart[\s\S]{0,600}classList\.add\('wallpaper-engine-video-ready'\)/,
+    'Start 必须先开 body 级显示开关再读 rect，否则拿到 0×0 会把背存缩到 2×2',
+  );
+  assert.match(
+    fnsSrc,
+    /wallpaperEngineGlassMirrorStop[\s\S]{0,600}classList\.remove\('wallpaper-engine-video-ready'\)/,
+    'Stop 必须撤掉 body 级显示开关',
+  );
+
+  // LiquidGlass 面板玻璃不走 backdrop-filter：主循环合成名单必须包含 WE 镜像
+  const mainLoopSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/11-main-loop.js'), 'utf8');
+  assert.match(
+    mainLoopSrc,
+    /wallpaper-engine-active[\s\S]{0,200}wallpaper-engine-video-ready[\s\S]{0,300}wallpaper-engine-glass-mirror/,
+    'updateLiquidGlassBackdropMirror 必须把 WE 玻璃镜像纳入采样源：'
+    + '面板玻璃只认 __lgBackdropCanvas 合成名单（custom-bg-video 在名单里、WE 不在），'
+    + '缺源就是「手动导入正常、页面点选的 WE 壁纸全黑」的根因',
+  );
 });

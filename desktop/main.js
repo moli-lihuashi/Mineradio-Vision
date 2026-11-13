@@ -109,7 +109,12 @@ let loginEasterEggGate = null;
 function ensureWallpaperEngineLibrary() {
   if (wallpaperEngineLibrary) return wallpaperEngineLibrary;
   const { WallpaperEngineLibrary } = require('./wallpaper-engine-library');
-  wallpaperEngineLibrary = new WallpaperEngineLibrary({ userDataPath: app.getPath('userData') });
+  // 诊断环境（无注册表访问权限）可设 MINERADIO_WE_NO_AUTODISCOVER=1 跳过 Steam 注册表发现，
+  // 只用手动导入目录（wallpaper-engine-library.json 的 manualRoots）
+  wallpaperEngineLibrary = new WallpaperEngineLibrary({
+    userDataPath: app.getPath('userData'),
+    autoDiscover: process.env.MINERADIO_WE_NO_AUTODISCOVER !== '1',
+  });
   return wallpaperEngineLibrary;
 }
 

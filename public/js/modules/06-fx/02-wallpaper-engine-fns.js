@@ -269,12 +269,24 @@ function clearWallpaperEngineLayerMedia(delay) {
 }
 
 // ===== 媒体视频的玻璃镜像 =====
-// backdrop-filter 的背景回读读不到 <video> 的帧：Chromium 会把视频层跳过
-// （十年未修的已知限制，关掉硬件叠加层也救不了）。把每帧画进同位 canvas，
-// 玻璃采样的是 canvas 纹理（普通合成路径，回读正常）。canvas 内容与视频
-// 逐帧一致，视觉无差别；drawImage 走 GPU，代价可忽略。
+// backdrop-filter 的背景回读对「每帧都在重绘的内容」有硬限制 —— 2026-11-13
+// 真机实验矩阵（全部实机截图取证）：
+//   视频 <video> 在回读链里（哪怕 visibility:hidden）      → 黑
+//   2D canvas 连续重绘（GPU 或 willReadFrequently CPU）      → 黑
+//   2D canvas 静态（画一次不再动）                         → 正常
+//   WebGL canvas 连续重绘 + texImage2D(视频元素)             → 黑（视频帧 GPU 资源回读不了）
+//   WebGL canvas 连续重绘 + texImage2D(CPU 像素拷贝)        → 正常（J2 实验实锤）
+// 所以最终形态：视频退居解码角色（display:none，rVFC 对不可见视频不触发，
+// 用 rAF ~30fps 驱动），每帧把视频 drawImage 进离屏 2D canvas，getImageData
+// 拿到 CPU 像素，再 texImage2D(9 参形式) 上传到 WebGL 绘制 —— 这是唯一
+// 「连续重绘 + 视频内容也能被玻璃回读」的路径。
+// WebGL 不可用时回退 2D 绘制（壁纸可见，玻璃可能黑，但不至于空屏）。
 // 背存上限 1600px：玻璃自带 18~38px 模糊，更高分辨率没有视觉收益。
-var wallpaperEngineGlassMirror = { video: null, canvas: null, ctx: null, token: 0, vfcId: 0, rafId: 0, lastRaf: 0, boxKey: '' };
+var wallpaperEngineGlassMirror = {
+  video: null, canvas: null, token: 0, rafId: 0, lastRaf: 0, boxKey: '',
+  gl: null, program: null, buffer: null, texture: null, uUVScale: null, uUVOffset: null,
+  mid: null, midCtx: null, ctx2d: null, mode: '',
+};
 
 function wallpaperEngineGlassMirrorElement() {
   var m = wallpaperEngineGlassMirror;
@@ -282,63 +294,180 @@ function wallpaperEngineGlassMirrorElement() {
   var canvas = document.getElementById('wallpaper-engine-glass-mirror');
   if (!canvas) return null;
   m.canvas = canvas;
-  m.ctx = canvas.getContext('2d');
   return canvas;
+}
+
+function wallpaperEngineGlassMirrorInitGl(canvas) {
+  var m = wallpaperEngineGlassMirror;
+  var gl = canvas.getContext('webgl', {
+    preserveDrawingBuffer: true,
+    alpha: false,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    powerPreference: 'low-power',
+  });
+  if (!gl) return null;
+  var vsSrc = 'attribute vec2 aPos;varying vec2 vUv;void main(){vUv=aPos*0.5+0.5;gl_Position=vec4(aPos,0.0,1.0);}';
+  var fsSrc = 'precision mediump float;varying vec2 vUv;uniform sampler2D uTex;uniform vec2 uScale;uniform vec2 uOffset;'
+    + 'void main(){gl_FragColor=vec4(texture2D(uTex,clamp(uOffset+vUv*uScale,vec2(0.0),vec2(1.0))).rgb,1.0);}';
+  function compile(type, src) {
+    var sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
+  }
+  var vs = compile(gl.VERTEX_SHADER, vsSrc);
+  var fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+  if (!vs || !fs) return null;
+  var program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+  gl.useProgram(program);
+  var buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(program, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  var texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  m.gl = gl;
+  m.program = program;
+  m.buffer = buffer;
+  m.texture = texture;
+  m.uUVScale = gl.getUniformLocation(program, 'uScale');
+  m.uUVOffset = gl.getUniformLocation(program, 'uOffset');
+  m.mode = 'webgl';
+  return gl;
 }
 
 function wallpaperEngineGlassMirrorStop() {
   var m = wallpaperEngineGlassMirror;
   m.token = 0;
-  if (m.video && m.vfcId && typeof m.video.cancelVideoFrameCallback === 'function') {
-    try { m.video.cancelVideoFrameCallback(m.vfcId); } catch (e) { }
-  }
   if (m.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(m.rafId);
+  if (m.video) {
+    try { m.video.style.display = ''; } catch (e) { }
+  }
   m.video = null;
-  m.vfcId = 0;
   m.rafId = 0;
   m.boxKey = '';
-  if (m.ctx && m.canvas) {
-    try { m.ctx.clearRect(0, 0, m.canvas.width, m.canvas.height); } catch (e2) { }
+  try { document.body.classList.remove('wallpaper-engine-video-ready'); } catch (e4) { }
+  if (m.gl && m.canvas) {
+    try {
+      m.gl.viewport(0, 0, m.canvas.width, m.canvas.height);
+      m.gl.clearColor(0, 0, 0, 1);
+      m.gl.clear(m.gl.COLOR_BUFFER_BIT);
+    } catch (e2) { }
+  }
+  if (m.ctx2d && m.canvas) {
+    try { m.ctx2d.clearRect(0, 0, m.canvas.width, m.canvas.height); } catch (e3) { }
   }
 }
 
 function wallpaperEngineGlassMirrorStart(video, token) {
   var m = wallpaperEngineGlassMirror;
   var canvas = wallpaperEngineGlassMirrorElement();
-  if (!canvas || !m.ctx || !video) return;
+  if (!canvas || !video) return;
   wallpaperEngineGlassMirrorStop();
   m.video = video;
   m.token = token;
-  var ctx = m.ctx;
+  // 关键一：视频必须移出渲染树。留在树里（哪怕 visibility:hidden / opacity:0）
+  // 玻璃的背景回读就还是黑的 —— 只有 display:none 才能让回读链干净。
+  try { video.style.display = 'none'; } catch (e0) { }
+  // 先让镜像 canvas 显示（body 级开关），再读 rect——否则拿到 0×0 会把
+  // 背存缩到 2×2（实测踩过）
+  try { document.body.classList.add('wallpaper-engine-video-ready'); } catch (e5) { }
+  // 关键二：连续重绘的画布只有 WebGL 能被 backdrop-filter 回读（见顶部实验矩阵）。
+  // canvas 尺寸变化会重置上下文状态，所以先定尺寸再取上下文。
+  var rect = canvas.getBoundingClientRect();
+  var scale = Math.min(1, 1600 / Math.max(rect.width, 1));
+  var bw = Math.max(2, Math.round(rect.width * scale));
+  var bh = Math.max(2, Math.round(rect.height * scale));
+  if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
+  m.boxKey = bw + 'x' + bh;
+  // 注意：不能用裸 getContext('webgl') 探测——首次调用不带属性会固定上下文，
+  // 之后带 preserveDrawingBuffer 的属性会被忽略，回读必需的该属性就丢了。
+  var gl = m.gl || wallpaperEngineGlassMirrorInitGl(canvas);
+  if (!gl) {
+    canvas.width = bw; canvas.height = bh;
+    m.ctx2d = canvas.getContext('2d');
+    m.mode = '2d';
+  } else {
+    // CPU 拷贝中转画布：视频帧先 drawImage 到这里，getImageData 后以原始像素
+    // texImage2D 上传（视频元素直接上传的 GPU 纹理回读不了，见顶部实验矩阵）
+    if (!m.mid || m.mid.width !== bw || m.mid.height !== bh) {
+      m.mid = document.createElement('canvas');
+      m.mid.width = bw; m.mid.height = bh;
+      m.midCtx = m.mid.getContext('2d', { willReadFrequently: true });
+    }
+    gl.uniform2f(m.uUVScale, 1, 1);
+    gl.uniform2f(m.uUVOffset, 0, 0);
+  }
   var layer = document.getElementById('wallpaper-engine-layer');
   function paint() {
     if (m.token !== token) return;
-    var rect = canvas.getBoundingClientRect();
-    if (rect.width >= 2 && rect.height >= 2) {
-      var scale = Math.min(1, 1600 / Math.max(rect.width, 1));
-      var bw = Math.max(2, Math.round(rect.width * scale));
-      var bh = Math.max(2, Math.round(rect.height * scale));
-      var boxKey = bw + 'x' + bh;
-      if (boxKey !== m.boxKey) { canvas.width = bw; canvas.height = bh; m.boxKey = boxKey; }
+    var rectNow = canvas.getBoundingClientRect();
+    if (rectNow.width >= 2 && rectNow.height >= 2) {
+      var scaleNow = Math.min(1, 1600 / Math.max(rectNow.width, 1));
+      var bwNow = Math.max(2, Math.round(rectNow.width * scaleNow));
+      var bhNow = Math.max(2, Math.round(rectNow.height * scaleNow));
+      var boxKeyNow = bwNow + 'x' + bhNow;
+      if (boxKeyNow !== m.boxKey) {
+        canvas.width = bwNow; canvas.height = bhNow; m.boxKey = boxKeyNow;
+        if (m.mode === 'webgl' && m.gl) {
+          // 尺寸变化会重置 GL 状态：重绑 program/纹理/attrib
+          m.gl.useProgram(m.program);
+          m.gl.bindTexture(m.gl.TEXTURE_2D, m.texture);
+          m.gl.bindBuffer(m.gl.ARRAY_BUFFER, m.buffer);
+          var aPos = m.gl.getAttribLocation(m.program, 'aPos');
+          m.gl.enableVertexAttribArray(aPos);
+          m.gl.vertexAttribPointer(aPos, 2, m.gl.FLOAT, false, 0, 0);
+        }
+      }
       var vw = video.videoWidth, vh = video.videoHeight;
       if (vw && vh) {
-        // engine 捕获态（engine-ready）是 object-fit:fill，直接铺满；
-        // 媒体态与 CSS 的 object-fit:cover 用同一套居中放大算法
         var isFill = !!(layer && layer.classList.contains('engine-ready'));
-        if (isFill) {
-          ctx.drawImage(video, 0, 0, bw, bh);
-        } else {
-          var s = Math.max(bw / vw, bh / vh);
-          var dw = vw * s, dh = vh * s;
-          ctx.drawImage(video, (bw - dw) / 2, (bh - dh) / 2, dw, dh);
+        if (m.mode === 'webgl' && m.gl && m.midCtx) {
+          // cover 裁切在 2D 中转画布上完成，上传后直接铺满
+          var sCover = Math.max(canvas.width / vw, canvas.height / vh);
+          var dwCover = vw * sCover, dhCover = vh * sCover;
+          if (isFill) {
+            m.midCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          } else {
+            m.midCtx.drawImage(video, (canvas.width - dwCover) / 2, (canvas.height - dhCover) / 2, dwCover, dhCover);
+          }
+          var pixels = m.midCtx.getImageData(0, 0, canvas.width, canvas.height);
+          m.gl.viewport(0, 0, canvas.width, canvas.height);
+          m.gl.useProgram(m.program);
+          m.gl.bindTexture(m.gl.TEXTURE_2D, m.texture);
+          try {
+            m.gl.texImage2D(m.gl.TEXTURE_2D, 0, m.gl.RGBA, canvas.width, canvas.height, 0,
+              m.gl.RGBA, m.gl.UNSIGNED_BYTE, new Uint8Array(pixels.data.buffer));
+          } catch (eUp) { }
+          m.gl.uniform2f(m.uUVScale, 1, 1);
+          m.gl.uniform2f(m.uUVOffset, 0, 0);
+          m.gl.drawArrays(m.gl.TRIANGLE_STRIP, 0, 4);
+        } else if (m.ctx2d) {
+          if (isFill) {
+            m.ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+          } else {
+            var s = Math.max(canvas.width / vw, canvas.height / vh);
+            var dw = vw * s, dh = vh * s;
+            m.ctx2d.drawImage(video, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+          }
         }
       }
     }
     if (m.token !== token) return;
-    if (video && typeof video.requestVideoFrameCallback === 'function') {
-      m.vfcId = video.requestVideoFrameCallback(function () { paint(); });
-    } else if (typeof requestAnimationFrame === 'function') {
-      // 无 rVFC 的环境按 ~30fps 节流，避免空烧 rAF
+    if (typeof requestAnimationFrame === 'function') {
+      // 视频 display:none 时 rVFC 不会触发，用 rAF 按 ~30fps 节流驱动
       m.rafId = requestAnimationFrame(function (ts) {
         if (m.token !== token) return;
         if (ts - m.lastRaf < 33) { m.rafId = requestAnimationFrame(paint); return; }
@@ -348,19 +477,6 @@ function wallpaperEngineGlassMirrorStart(video, token) {
     }
   }
   paint();
-  function schedule() {
-    if (m.token !== token) return;
-    if (video && typeof video.requestVideoFrameCallback === 'function') {
-      m.vfcId = video.requestVideoFrameCallback(function () { paint(); });
-    } else if (typeof requestAnimationFrame === 'function') {
-      m.rafId = requestAnimationFrame(function (ts) {
-        if (m.token !== token) return;
-        if (ts - m.lastRaf < 33) { m.rafId = requestAnimationFrame(paint); return; }
-        m.lastRaf = ts;
-        paint();
-      });
-    }
-  }
 }
 
 function restoreOriginalBackgroundAfterWallpaperEngine() {
@@ -565,6 +681,10 @@ function applyWallpaperEngineBackground(item, quiet) {
         requestWallpaperEngineVideoPlayback(video, item, kind, token, true, 0);
       };
       video.onerror = function () { wallpaperEngineLayerFailed(item, kind, token); };
+      // 必须 CORS 模式加载：否则 drawImage 会污染镜像 canvas，backdrop-filter
+      // 的背景回读拒绝污染层 → 玻璃透出来是黑的（2026-11-13 真机复现）。
+      // 协议响应带 Access-Control-Allow-Origin:*（wallpaper-engine-library.js）。
+      video.crossOrigin = 'anonymous';
       video.src = wallpaperEngineMediaUrl(item, 'media');
       video.load();
     } else {

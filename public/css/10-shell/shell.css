@@ -13,8 +13,11 @@ body.wallpaper-engine-dwm-active.wallpaper-engine-glass-sampler-ready #wallpaper
    被合成器跳过，Chromium 已知限制，叠加层开关也救不了），把每帧画进同位
    canvas 供玻璃采样 —— canvas 是普通合成纹理，回读正常。绘制逻辑在
    02-wallpaper-engine-fns.js 的 wallpaperEngineGlassMirror* 三个函数里。 */
-#wallpaper-engine-glass-mirror{position:absolute;inset:0;width:100%;height:100%;z-index:1;border-radius:inherit;pointer-events:none;background:transparent;opacity:0;transition:opacity 300ms ease;display:none}
-#wallpaper-engine-layer.video-ready #wallpaper-engine-glass-mirror{display:block;opacity:1}
+/* 玻璃镜像 canvas：挂在 body 层（不在壁纸层内），位置与壁纸层重合。
+   显示开关用 body.wallpaper-engine-video-ready（由 wallpaperEngineLayerReady/Stop 维护），
+   不带 clip-path（会被 backdrop-filter 回读跳过）。 */
+#wallpaper-engine-glass-mirror{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;background:transparent;opacity:0;transition:opacity 300ms ease;display:none}
+body.wallpaper-engine-video-ready #wallpaper-engine-glass-mirror{display:block;opacity:1}
 #wallpaper-engine-image,#wallpaper-engine-video{z-index:1}
 #wallpaper-engine-freeze{z-index:2;object-fit:fill;visibility:hidden;transition:opacity 160ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 160ms}
 #wallpaper-engine-layer.freeze-ready #wallpaper-engine-freeze{opacity:1;visibility:visible;transition-delay:0s}
