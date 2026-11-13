@@ -2923,7 +2923,7 @@ ipcMain.handle('mineradio-wallpaper-engine-list', async (event, payload = {}) =>
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
     const library = ensureWallpaperEngineLibrary();
     const snapshot = await library.list({ force: payload && payload.force === true });
-    const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(payload && payload.force === true) : { available: false };
+    const runtime = await ensureWallpaperEngineRuntime().probe(payload && payload.force === true);
     return { ...snapshot, runtime };
   } catch (error) {
     return { ok: false, projects: [], count: 0, error: error.message || 'WALLPAPER_ENGINE_SCAN_FAILED' };
@@ -2954,7 +2954,7 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-directory', async (event) => {
       : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths || !result.filePaths[0]) return { ok: true, canceled: true };
     const snapshot = await library.addManualRoot(result.filePaths[0]);
-    const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
+    const runtime = await ensureWallpaperEngineRuntime().probe(false);
     return { ...snapshot, runtime, canceled: false };
   } catch (error) {
     return { ok: false, canceled: false, projects: [], count: 0, error: error.message || 'WALLPAPER_ENGINE_IMPORT_FAILED' };
@@ -2979,7 +2979,7 @@ ipcMain.handle('mineradio-wallpaper-engine-choose-project-file', async (event) =
     if (result.canceled || !result.filePaths || !result.filePaths[0]) return { ok: true, canceled: true };
     const selected = path.resolve(result.filePaths[0]);
     const snapshot = await library.addManualProjectFile(selected);
-    const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
+    const runtime = await ensureWallpaperEngineRuntime().probe(false);
     return { ...snapshot, runtime, canceled: false };
   } catch (error) {
     return { ok: false, canceled: false, projects: [], count: 0, error: error.message || 'WALLPAPER_ENGINE_IMPORT_PROJECT_FAILED' };
@@ -2991,7 +2991,7 @@ ipcMain.handle('mineradio-wallpaper-engine-remove-directory', async (event, root
     if (!isTrustedWallpaperEngineIpc(event)) return { ok: false, projects: [], count: 0, error: 'WALLPAPER_ENGINE_UNTRUSTED_CALLER' };
     const library = ensureWallpaperEngineLibrary();
     const snapshot = await library.removeManualRoot(rootId);
-    const runtime = wallpaperEngineRuntime ? await wallpaperEngineRuntime.probe(false) : { available: false };
+    const runtime = await ensureWallpaperEngineRuntime().probe(false);
     return { ...snapshot, runtime };
   } catch (error) {
     return { ok: false, projects: [], count: 0, error: error.message || 'WALLPAPER_ENGINE_REMOVE_ROOT_FAILED' };
@@ -4503,6 +4503,13 @@ if (!gotSingleInstanceLock) {
       await localMusicLibrary.installProtocol(protocol);
     } catch (error) {
       console.warn('[LocalMusic] media protocol unavailable:', (error && error.message) || error);
+    }
+    // mineradio-wallpaper:// 同理：只注册特权 scheme 而不挂处理器，
+    // 壁纸网格缩略图与视频/预览会全部加载失败（表现为「壁纸媒体不可用」）
+    try {
+      await ensureWallpaperEngineLibrary().installProtocol(protocol);
+    } catch (error) {
+      console.warn('[WallpaperEngine] media protocol unavailable:', (error && error.message) || error);
     }
     const handleDisplayLayoutChanged = () => {
       positionDesktopLyricsWindow();
