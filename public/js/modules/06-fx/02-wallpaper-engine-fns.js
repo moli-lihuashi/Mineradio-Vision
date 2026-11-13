@@ -210,6 +210,10 @@ function wallpaperEngineLayerReady(kind, token) {
     if (kind === 'video' && wallpaperEngineSelection.kind === 'engine') layer.classList.add('engine-ready');
   }
   document.body.classList.add('wallpaper-engine-active');
+  if (kind === 'video') {
+    var layerVideo = document.getElementById('wallpaper-engine-video');
+    if (layerVideo) wallpaperEngineGlassMirrorStart(layerVideo, token);
+  }
   suspendOriginalBackgroundForWallpaperEngine();
   wallpaperEngineRuntimeError = '';
   updateWallpaperEngineEntryUi();
@@ -242,6 +246,7 @@ function clearWallpaperEngineLayerMedia(delay) {
   function release() {
     if (token !== wallpaperEngineLayerToken) return;
     if (layer) layer.classList.remove('ready', 'image-ready', 'video-ready', 'engine-ready', 'freeze-ready');
+    wallpaperEngineGlassMirrorStop();
     if (image) {
       image.onload = null;
       image.onerror = null;
@@ -261,6 +266,101 @@ function clearWallpaperEngineLayerMedia(delay) {
   }
   if (delay) setTimeout(release, delay);
   else release();
+}
+
+// ===== 媒体视频的玻璃镜像 =====
+// backdrop-filter 的背景回读读不到 <video> 的帧：Chromium 会把视频层跳过
+// （十年未修的已知限制，关掉硬件叠加层也救不了）。把每帧画进同位 canvas，
+// 玻璃采样的是 canvas 纹理（普通合成路径，回读正常）。canvas 内容与视频
+// 逐帧一致，视觉无差别；drawImage 走 GPU，代价可忽略。
+// 背存上限 1600px：玻璃自带 18~38px 模糊，更高分辨率没有视觉收益。
+var wallpaperEngineGlassMirror = { video: null, canvas: null, ctx: null, token: 0, vfcId: 0, rafId: 0, lastRaf: 0, boxKey: '' };
+
+function wallpaperEngineGlassMirrorElement() {
+  var m = wallpaperEngineGlassMirror;
+  if (m.canvas) return m.canvas;
+  var canvas = document.getElementById('wallpaper-engine-glass-mirror');
+  if (!canvas) return null;
+  m.canvas = canvas;
+  m.ctx = canvas.getContext('2d');
+  return canvas;
+}
+
+function wallpaperEngineGlassMirrorStop() {
+  var m = wallpaperEngineGlassMirror;
+  m.token = 0;
+  if (m.video && m.vfcId && typeof m.video.cancelVideoFrameCallback === 'function') {
+    try { m.video.cancelVideoFrameCallback(m.vfcId); } catch (e) { }
+  }
+  if (m.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(m.rafId);
+  m.video = null;
+  m.vfcId = 0;
+  m.rafId = 0;
+  m.boxKey = '';
+  if (m.ctx && m.canvas) {
+    try { m.ctx.clearRect(0, 0, m.canvas.width, m.canvas.height); } catch (e2) { }
+  }
+}
+
+function wallpaperEngineGlassMirrorStart(video, token) {
+  var m = wallpaperEngineGlassMirror;
+  var canvas = wallpaperEngineGlassMirrorElement();
+  if (!canvas || !m.ctx || !video) return;
+  wallpaperEngineGlassMirrorStop();
+  m.video = video;
+  m.token = token;
+  var ctx = m.ctx;
+  var layer = document.getElementById('wallpaper-engine-layer');
+  function paint() {
+    if (m.token !== token) return;
+    var rect = canvas.getBoundingClientRect();
+    if (rect.width >= 2 && rect.height >= 2) {
+      var scale = Math.min(1, 1600 / Math.max(rect.width, 1));
+      var bw = Math.max(2, Math.round(rect.width * scale));
+      var bh = Math.max(2, Math.round(rect.height * scale));
+      var boxKey = bw + 'x' + bh;
+      if (boxKey !== m.boxKey) { canvas.width = bw; canvas.height = bh; m.boxKey = boxKey; }
+      var vw = video.videoWidth, vh = video.videoHeight;
+      if (vw && vh) {
+        // engine 捕获态（engine-ready）是 object-fit:fill，直接铺满；
+        // 媒体态与 CSS 的 object-fit:cover 用同一套居中放大算法
+        var isFill = !!(layer && layer.classList.contains('engine-ready'));
+        if (isFill) {
+          ctx.drawImage(video, 0, 0, bw, bh);
+        } else {
+          var s = Math.max(bw / vw, bh / vh);
+          var dw = vw * s, dh = vh * s;
+          ctx.drawImage(video, (bw - dw) / 2, (bh - dh) / 2, dw, dh);
+        }
+      }
+    }
+    if (m.token !== token) return;
+    if (video && typeof video.requestVideoFrameCallback === 'function') {
+      m.vfcId = video.requestVideoFrameCallback(function () { paint(); });
+    } else if (typeof requestAnimationFrame === 'function') {
+      // 无 rVFC 的环境按 ~30fps 节流，避免空烧 rAF
+      m.rafId = requestAnimationFrame(function (ts) {
+        if (m.token !== token) return;
+        if (ts - m.lastRaf < 33) { m.rafId = requestAnimationFrame(paint); return; }
+        m.lastRaf = ts;
+        paint();
+      });
+    }
+  }
+  paint();
+  function schedule() {
+    if (m.token !== token) return;
+    if (video && typeof video.requestVideoFrameCallback === 'function') {
+      m.vfcId = video.requestVideoFrameCallback(function () { paint(); });
+    } else if (typeof requestAnimationFrame === 'function') {
+      m.rafId = requestAnimationFrame(function (ts) {
+        if (m.token !== token) return;
+        if (ts - m.lastRaf < 33) { m.rafId = requestAnimationFrame(paint); return; }
+        m.lastRaf = ts;
+        paint();
+      });
+    }
+  }
 }
 
 function restoreOriginalBackgroundAfterWallpaperEngine() {
@@ -461,6 +561,7 @@ function applyWallpaperEngineBackground(item, quiet) {
       if (item.hasPreview) video.poster = wallpaperEngineMediaUrl(item, 'preview');
       video.onloadeddata = function () {
         if (token !== wallpaperEngineLayerToken) return;
+        wallpaperEngineGlassMirrorStart(video, token);
         requestWallpaperEngineVideoPlayback(video, item, kind, token, true, 0);
       };
       video.onerror = function () { wallpaperEngineLayerFailed(item, kind, token); };

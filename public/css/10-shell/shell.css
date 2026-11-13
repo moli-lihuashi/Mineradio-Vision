@@ -1,17 +1,26 @@
 /* ===== Wallpaper Engine ===== */
-#wallpaper-engine-layer{position:fixed;inset:0;z-index:0;overflow:hidden;isolation:isolate;border-radius:0;clip-path:inset(0);background:#000;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 420ms cubic-bezier(.16,1,.3,1),visibility 0s linear 420ms;contain:strict}
+/* 注意：本层不能用 isolation / contain:paint / clip-path —— 这些都会把整层
+   隔进独立合成面，backdrop-filter 的背景回读就读不到它，玻璃折射区全黑。
+   圆角交给 border-radius + overflow:hidden；contain 只保留 layout。 */
+#wallpaper-engine-layer{position:fixed;inset:0;z-index:0;overflow:hidden;border-radius:0;background:#000;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 420ms cubic-bezier(.16,1,.3,1),visibility 0s linear 420ms;contain:layout}
 #wallpaper-engine-layer.ready{opacity:1;visibility:visible;transition-delay:0s}
 body.wallpaper-engine-dwm-active #wallpaper-engine-layer{opacity:0!important;visibility:hidden!important;transition:none!important}
 #wallpaper-engine-glass-sampler{position:fixed;z-index:0;left:0;top:0;width:1px;height:1px;overflow:hidden;border-radius:0;clip-path:inset(0 round var(--wallpaper-engine-glass-radius,0px));opacity:0;visibility:hidden;pointer-events:none;background:transparent;contain:strict}
 #wallpaper-engine-glass-sampler-video{position:absolute;left:0;top:0;display:block;width:100vw;height:100vh;object-fit:fill;opacity:1;pointer-events:none;background:transparent}
 body.wallpaper-engine-dwm-active.wallpaper-engine-glass-sampler-ready #wallpaper-engine-glass-sampler.bar-visible{opacity:1;visibility:visible}
-#wallpaper-engine-image,#wallpaper-engine-video,#wallpaper-engine-freeze{position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;clip-path:inherit;object-fit:cover;object-position:center;opacity:0;transition:opacity 300ms ease;pointer-events:none;background:#000}
+#wallpaper-engine-image,#wallpaper-engine-video,#wallpaper-engine-freeze{position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;object-fit:cover;object-position:center;opacity:0;transition:opacity 300ms ease;pointer-events:none;background:#000}
+/* 媒体视频的玻璃镜像：backdrop-filter 的背景回读读不到 <video> 的帧（视频层
+   被合成器跳过，Chromium 已知限制，叠加层开关也救不了），把每帧画进同位
+   canvas 供玻璃采样 —— canvas 是普通合成纹理，回读正常。绘制逻辑在
+   02-wallpaper-engine-fns.js 的 wallpaperEngineGlassMirror* 三个函数里。 */
+#wallpaper-engine-glass-mirror{position:absolute;inset:0;width:100%;height:100%;z-index:1;border-radius:inherit;pointer-events:none;background:transparent;opacity:0;transition:opacity 300ms ease;display:none}
+#wallpaper-engine-layer.video-ready #wallpaper-engine-glass-mirror{display:block;opacity:1}
 #wallpaper-engine-image,#wallpaper-engine-video{z-index:1}
 #wallpaper-engine-freeze{z-index:2;object-fit:fill;visibility:hidden;transition:opacity 160ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 160ms}
 #wallpaper-engine-layer.freeze-ready #wallpaper-engine-freeze{opacity:1;visibility:visible;transition-delay:0s}
 #wallpaper-engine-layer.image-ready #wallpaper-engine-image,#wallpaper-engine-layer.video-ready #wallpaper-engine-video{opacity:1}
 #wallpaper-engine-layer.engine-ready #wallpaper-engine-video{inset:0;width:100%;height:100%;object-fit:fill}
-body.desktop-shell #wallpaper-engine-layer,body.desktop-shell #wallpaper-engine-image,body.desktop-shell #wallpaper-engine-video,body.desktop-shell #wallpaper-engine-freeze{border-radius:34px;clip-path:inset(0 round 34px)}
+body.desktop-shell #wallpaper-engine-layer,body.desktop-shell #wallpaper-engine-image,body.desktop-shell #wallpaper-engine-video,body.desktop-shell #wallpaper-engine-freeze{border-radius:34px}
 body.desktop-shell.desktop-maximized #wallpaper-engine-layer,body.desktop-shell.desktop-maximized #wallpaper-engine-image,body.desktop-shell.desktop-maximized #wallpaper-engine-video,body.desktop-shell.desktop-maximized #wallpaper-engine-freeze,body.desktop-shell.desktop-fullscreen #wallpaper-engine-layer,body.desktop-shell.desktop-fullscreen #wallpaper-engine-image,body.desktop-shell.desktop-fullscreen #wallpaper-engine-video,body.desktop-shell.desktop-fullscreen #wallpaper-engine-freeze,body.desktop-shell.desktop-wallpaper-mode #wallpaper-engine-layer,body.desktop-shell.desktop-wallpaper-mode #wallpaper-engine-image,body.desktop-shell.desktop-wallpaper-mode #wallpaper-engine-video,body.desktop-shell.desktop-wallpaper-mode #wallpaper-engine-freeze,html:fullscreen body.desktop-shell #wallpaper-engine-layer,html:fullscreen body.desktop-shell #wallpaper-engine-image,html:fullscreen body.desktop-shell #wallpaper-engine-video,html:fullscreen body.desktop-shell #wallpaper-engine-freeze{border-radius:0!important;clip-path:none!important}
 body.wallpaper-engine-active #custom-bg,body.wallpaper-engine-active #album-bg,body.wallpaper-engine-active #album-bg-next{opacity:0!important}
 .wallpaper-engine-row{border-color:rgba(97,185,255,.13);background:linear-gradient(135deg,rgba(65,142,255,.075),rgba(255,255,255,.022))}
