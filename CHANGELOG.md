@@ -1,5 +1,42 @@
 # Changelog
 
+## 未发布 · 桌面宠物接入 Petdex
+
+- **挑选交给 petdex 网站，应用只负责导入**：桌宠卡片新增 🐾 按钮 → 面板里「在浏览器里挑宠物」用系统浏览器打开 `petdex.dev/zh`（那边有动画预览、精选、合集与排行榜），挑好复制宠物页地址粘回面板即可导入；装过几只可以在面板里切换 / 移除，移除只删本地缓存。
+  - **为什么不在应用内做列表**：petdex **没有缩略图服务**（实测 `?w=96` / `?width=96` 都返回原尺寸 2.4MB 图集），24 条列表就是 57MB；只用 `dominantColor` 色块又根本没法挑（第一版就是这样，实际不可用）。
+  - **为什么导入要解析宠物页、不能走搜索接口**：搜索是**按显示名/标签匹配**的，用 slug 搜不到目标——实测 `q=hachiware-2` 返回 total=0，而 `q=小八` 能搜到它；`/api/pets/<slug>` 又需要登录（401）。所以只能抓宠物页 HTML 里的 `--sprite-url` 变量（实测 `/pets/<slug>` 与 `/zh/pets/<slug>` 返回同一地址）。
+- **协议是按实测取证接的，不是猜的**：
+  - 列表走 `GET petdex.dev/api/pets/search?q=&limit=`（公开，返回 `{ pets[], nextCursor, total }`，实测 total 5208）。
+  - 元数据 `assets.petdex.dev/curated/<slug>/pet.json` **只有 4 个字段**（id / displayName / description / spritesheetPath），不含任何帧信息。帧布局是固定网格约定：**classic 8×9、v2 8×11，每帧 192×208，一个状态占一行、帧从第 0 列连续排**。
+  - 精灵表是整张 WebP（boba 实测 1536×2288、2.4MB）。**没有缩略图服务**（`?w=` / `?width=` 都不缩放），所以应用里不做列表、挑选交给 petdex 网页，下载只发生在导入那一刻。
+- **每行帧数是解码后测出来的，不是假定 8 列**：Electron 无头探针实测两种网格——boba（v2）`8×11`、`rowFrames=[7,8,8,4,5,8,6,6,6,8,8]`；hachiware-2（classic）`8×9`、`rowFrames=[6,8,8,4,5,8,6,6,6]`。各行帧数确实不同，按 8 列硬播会闪空白帧。算法：把该行画到离屏 canvas，逐列统计非透明采样点，命中 ≥4 的最后一列即该行帧数（阈值 1/4/12 实测一致）。classic 的 9 行正好对应 petdex i18n 的 9 个状态，行序映射因此对齐。
+- **9 个动作都用上了（原来只看到一个）**：第一版映射表只写了 `idle` 与 `walk`，`sleep`/`yawn`/`stretch` 因为**没有对应键而静默回落到行 0**，观感就是「只有一个动作」。现在抽成 `16a-pet-petdex-map.js`（纯数据 + 纯函数，可单测）：
+  - 行序与行帧数取自站点 State Viewer 的权威表，并与 Electron 探针实测吻合：`Idle·6 / RunRight·8 / RunLeft·8 / Waving·4 / Jumping·5 / Failed·8 / Waiting·6 / Running·6 / Review·6`。
+  - 状态映射：`idle→Idle`、`walk→Run Right/Run Left`（按朝向）、`sleep→Waiting`（打盹最接近安静待机）、`yawn→Waiting`、`stretch→Waving`（伸懒腰≈挥手伸展）、点击跳→`Jumping`。
+  - **每个动作有自己的帧间隔**：idle 170ms（慢才像呼吸）、走 95ms、跳 85ms、Waiting 230ms（最慢），不再是统一 140ms。
+  - **待机小动作从 2 个扩到 4 个、频率翻倍**：原来只有 `yawn`/`stretch` 两个、且 20~50 秒才来一次，白天（不触发 `sleep`）几乎只看到 idle，观感就是「只有待机和点击两个动作」。现在轮换池是 `yawn / stretch / wave / review`，7~16 秒一次、每次播 2.4~4 秒；正在放歌时更常进入 `review`（沉浸聆听）。
+  - **`Review` 接成「沉浸聆听」**：在陪着听歌的语境里说得通，也正好补足白天的动作变化。**`Running` 仍不接**——纯位移语义（原地跑），和「安静陪你」的定位冲突；表里保留行号，以后有语义再启用。
+  - 状态优先级：点击跳 > 伸懒腰/打哈欠 > 走路 > 睡觉 > idle。跳放最前，是为了睡觉时戳它也有反馈。
+- **不再满框乱跑、也不会跑出框**：两个独立缺陷。
+  - **一直左右走**：`nextWalkAt` 初值 0 且**走完从不推进**，于是「走完 → 下一帧立刻又满足条件」，散步变成永不停歇。现在走完歇 9~24 秒，首次散步也有 7 秒延迟。
+  - **右侧跑出框**：行走上限写成 `cols-16`，漏了居中偏移 `offX`（`offX = floor((cols-16)/2)`）。`cols=24` 时宠物右缘到第 28 格、溢出 4 格，被卡片 `overflow:hidden` 裁掉；下限又写 0，等于从不往左走。正确范围是 `walkX ∈ [-offX, cols-16-offX]`，即 `petX ∈ [0, cols-16]`，左右都能贴边且不溢出。
+  - 边界算法抽到 `16b-pet-walk-bounds.js`（纯函数 + 8 条单测，含「遍历 cols=16..64 两个端点都不溢出」）；画布窄到 17 格时判定为不可散步，免得贴边抖动。
+- **宠物统一收进「皮肤」弹层，切换语义重写**：之前首页卡片上并排三个按钮（🐾 Petdex / 📷 照片 / ⇄ 换伙伴），三套入口各管一半，而且**装了 Petdex 之后 ⇄ 完全失效**——它只改 `homePet.character`，但绘制层 `if (homePet.petdex) 走图片精灵` 优先级更高，按了等于没按。现在：
+  - 顶栏「皮肤」弹层新增**桌面宠物**板块：内置 7 只 / 照片生成 / Petdex 已装，全部列成格子（3 列、深色玻璃、当前项高亮），点一格立即换；下面两个动作按钮分别是「用照片生成」「从 Petdex 导入」。
+  - 卡片只留一个 ⇄，做**跨类型轮换**（内置 → 照片 → Petdex → 内置），清单顺序稳定，不会跳来跳去。
+  - 切换统一走 `homePetSelectSkin(kind, id)`：切到非 Petdex 时必须让 Petdex 模块 `deactivate()`（置空 `homePet.petdex` 并清掉它的选择记忆），否则新选的宠物会被旧精灵盖住。照片生成后也走同一条路。
+  - 皮肤弹层的宠物格**刻意不复用 `.heart-fx-grid`**：`07-fx/05d` 拿那个类当宿主选择器，复用会被它的 `innerHTML` 覆盖。用独立的 `pet-skin-grid` / `pet-skin-tile`。
+- **动作调度对所有 petdex 宠物统一生效，但个体差异被正确吸收**：
+  - 动作池、行序、帧间隔都在模块里，不区分宠物；哪只宠物当前生效只由「装了哪只」决定。
+  - **每只宠物的行帧数各自实测**（`rowFrames`），不是写死 8：boba（v2）`[7,8,8,4,5,8,6,6,6,8,8]`、hachiware-2（classic）`[6,8,8,4,5,8,6,6,6]`、yuexinmiao `[6,8,8,4,5,8,6,6,6]`。
+  - **某行没画东西时会回落到 idle 行**：不同提交者的精灵表可能缺行（比如没画 `Failed` 那排）。第一版把空行的帧数当成 8，于是播 8 帧全透明——宠物看起来直接消失。现在 `pickRow()` 检测到该行 0 帧就回 idle；连 idle 行也空则交回内置像素伙伴兜底。
+  - **内置像素伙伴不受益也不出错**：它只有 `idle/walk/sleep/yawn/stretch` 五套字符帧，`wave`/`review` 在它身上会回落到 idle 帧（`framesFor` 的兜底），所以观感是「idle 播得更久」，不会报错也不会变空白。
+- **渲染**：`14-home-pet.js` 的绘制循环优先走 `HomePetPetdex.draw()`（`drawImage` 切帧、`≈140ms/帧`），失败才退回内置字符像素。帧索引按时间算——内置的 `homePet.frameIdx` 只在切换状态时重置、从不自增（内置伙伴实际是静态帧 + 眨眼），拿它驱动精灵不会动。
+- **安全边界**：slug 走白名单（`^[a-z0-9][a-z0-9-]{0,63}$` + 显式拒绝 `/`、`\`、`..`），因为它直接拼磁盘路径；下载地址只接受 `https://assets.petdex.dev/*.webp|png`（拒绝其他域、域名前缀伪装、路径伪装、带凭据、非标准端口），因为它来自客户端 POST body。两条都抽成 `server/lib/petdex-uri.js` 纯函数并配单测。
+- **踩坑记录**：精灵表回传一开始用 `fs.createReadStream(file).pipe(res)`，结果 `res.writableEnded` 不同步为真，分发器继续走到静态资源处理器再 `writeHead` 一次，直接 `ERR_HTTP_HEADERS_SENT` 崩进程。改成读完 `res.end(buf)` 才对——分发器就是靠 `res.writableEnded` 判断「这个 matcher 处理完了」。
+- **验证**：真起服务全链路通过（搜索 total 14 / 安装 2440892B / 本地列表 / 回传 `image/webp` 字节一致）；路径穿越与 SSRF 均被拦；83/83 测试、29/29 变异全判红；Electron 探针实测解码与行帧数。**未验证**：真实点击 UI 的完整交互（需要人工在窗口里操作），以及 5208 个宠物中未逐一抽样（只验了 boba/mallow 等几个）。
+
+
 ## v3.3.1 安全加固
 
 ### 安全加固（补齐 2026-10-17 代码审查漏记的 #20 / #21 / #27 / #29）
@@ -17,15 +54,21 @@
 - **#16 已修**：`Access-Control-Allow-Origin` 由 `*` 改为只回显本页自己的 origin，并同时注入 `Access-Control-Allow-Credentials: true`（组件内部 axios 硬编码 `withCredentials:true`，`*` + 凭据是非法组合）。
 - 配套补齐：`Allow-Headers` 写全组件会发的 5 个自定义头；注入前按小写名删光上游自带的 `access-control-*` / `vary`（否则 `verify.zijieapi.com` 会留两个 ACAO，带凭据判定失败）；`decision.url` 走 https + 域名白名单；组件脚本补 `.js` 后缀回退。
 - **安全加固的连带修复**：把同源策略装回去之后，原本靠「门全拆」掩盖的链路问题全部暴露，逐一补齐——主进程轮询 XHR 开 `withCredentials`、从 `Set-Cookie` 响应头直接留存登录 cookie（跨站 `SameSite` 会拒写 cookie jar）、二次验证窗口去重三态与代际防重入锁、host 页版本自愈重载、登录弹窗状态类前置清理。
-- 真实链路结论：`error_code 7` 的「限流」解读已被多组探针证伪，语义仍未确认；`routes/qishui.js` 的 `status === '2'` 分支因上游真实状态是 `new`/`scanned`/`confirmed`/`expired` 而死代码化（详见「仍未收口」）。
+- 真实链路结论：`error_code 7` 的「限流」解读已被多组探针证伪。**原「仍未收口」的前两项已于 2026-11-13 收口**，其中一项结论被纠正：`routes/qishui.js` 的 `status === '2'` **不是死代码**——`qishui-auth-v6.js:828` 判确认态时同时写过 `String(data.status) === '3'` 与 `=== 'confirmed'`，说明上游数字与字面量两种形态都出现过，删掉 `'2'` 会让「已扫码」退化成「等待扫码」。现在改为双形态统一映射 + 单测锁定；`error_code 7` 不再断言为限流，改为中性状态 `upstream_code_7`，只保留保守降频。详见下方「本轮收口」。
 - 守卫：本批共新增 15 个真实 Electron 探针与 7 组静态守卫（`tests/*.test.js`），关键项均已反向自证；全量 `node scripts/run-tests.js` 通过。
+
+### 本轮收口（2026-11-13，原「仍未收口」的前两项）
+
+- **汽水扫码状态（原记「`status === '2'` 是死代码」——结论纠正，不删）**：新增 `server/qishui/qr-status.js` 的 `mapQishuiQrStatus()` 纯函数，把数字形态（`1` 新 / `2` 已扫 / `3` 已确认）与字面量（`new` / `scanned` / `confirmed` / `expired`）收敛成同一套前端状态词，未知值原样透传。`routes/qishui.js` 原来的 4 行 if 链换成一次调用。
+  - 为什么不删：原判断「上游只回字面量」没有出处，且有反证——`qishui-auth-v6.js:828` 判确认态时同时写了 `String(data.status) === '3'` 和 `=== 'confirmed'`。上游只要真的回过数字，删掉 `'2'` 就会让已扫码的界面退回「等待扫码」。
+  - 守卫：`tests/qishui-qr-status.test.js` 9 条单测（含「数字 2 必须映射成 scanned」这条回归）；变异 M28（删 `'2'`）与 M29（把状态名改回 `rate_limited`）均被判红。
+- **`error_code 7`（语义未确认，不再假装是限流）**：状态名由 `rate_limited` 改为中性的 `upstream_code_7`；`retryAfterMs` 保留 60s **仅作保守降频**，不再声称它是「限流窗口」。前端 `03-login-modal-flows.js` 改认新状态名，文案改为「确认接口暂时不可用（错误码 7），N 秒后自动重试」；`server/qishui/auth.js`（未启用链路）与 `qishui-auth-v6.js` 注释里的「限流」措辞同步改掉。
+  - 守卫：`platform-api-parity.test.js` ⑨ 断言 `rate_limited` 不再出现在路由与映射模块里。
 
 ### 仍未收口（不影响登录，属清理项）
 
-- `error_code === 7` 仍沿用 `rate_limited` + 60s 重试的映射，仅为兼容前端既有文案；真实触发条件在离线探针里复现不出来，需真实链路取证后再定。
-- `routes/qishui.js` 的 `status === '2' → scanned` 分支已不命中（上游用 `scanned` 字面量），是死代码。
 - `_mfaDone` 之后无条件 `isResend` 重发会每轮打 2 个上游请求；不能简单跳过（会让响应停在 2046、前端退回「请扫码」），属已知但有意保留。
-- `server/qishui/auth.js` 把 7 当 `'wait'`，与路由的 `rate_limited` 并存；它的导出函数只在 `qishui-api.js` 再导出、无路由调用，是另一套未启用链路。
+- `server/qishui/auth.js` 把 `error_code 7` 当 `'wait'`，与路由的中性 `upstream_code_7` 并存；它的导出函数只在 `qishui-api.js` 再导出、无路由调用，是另一套未启用链路。
 - `server/lib/media-proxy.js` 的音频流仍用 `ACAO: *`（`<audio>` 跨源需要，且已过 token 门禁 + Host 白名单），与 #16 不是同一处。
 - 4 个测试列在 `KUGOU_SKIP_TESTS`（用户裁定保持原 Home 布局），是有意跳过，非回归。
 

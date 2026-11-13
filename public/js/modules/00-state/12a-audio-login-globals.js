@@ -107,20 +107,21 @@ Mineradio.auth.configure({
   }
 });
 var qrPollTimer = null, qrKey = null;
-// 上游限流（rate_limited）后的延迟重试定时器；与 qrPollTimer 分开持有，
+// 上游返回 error_code 7 后的延迟重试定时器；与 qrPollTimer 分开持有，
 // 由 stopQrPoll() 一并清理，避免关窗后仍残留一次重试。
 var qrRetryTimer = null;
 // checkQr 的防重入标志。startQrPoll() 是 setInterval(checkQr, 2000)，
 // 而 checkQr 是 async：汽水分支要等主进程跑完 check_qrconnect，一旦上游回
 // 2046 触发二次验证，这次 await 会挂到用户操作完（可达数分钟）。
-// 没有这个锁，每 2 秒仍会点火 → 在途请求并发叠加 → 上游判 error_code 7
-// （rate_limited）→ 停轮询等 60 秒 → 用户继续操作再叠加，形成死循环。
+// 没有这个锁，每 2 秒仍会点火 → 在途请求并发叠加，界面状态来回跳，
+// 也会把上游打成无意义的重复请求。（上游回 error_code 7 的具体触发条件未确认，
+// 不要把它当成「并发就会限流」的依据。）
 var qrCheckInFlight = false;
 // 轮询「代际」。每开一轮新的 checkQr 就 +1，并在闭包里记下自己那一代。
 // 作用有两个，都是单纯一个布尔锁解决不了的：
 //   1) 防死锁：某次 checkQr 可能永久不落定（二次验证窗被关掉但 promise 没 settle）。
 //      布尔锁会永远卡在 true，用户点「刷新二维码」换了新 token 也照样被跳过，
-//      状态栏从此一动不动 —— 这比限流更难排查。代际变化时允许直接接管。
+//      状态栏从此一动不动 —— 这比一次降频等待更难排查。代际变化时允许直接接管。
 //   2) 防误清：用户刷新后旧的那一轮才姗姗落定，它的 finally 若无条件写
 //      qrCheckInFlight = false，会把新一轮正在持有的锁清掉，防重入当场失效。
 var qrCheckSerial = 0;
@@ -227,7 +228,9 @@ var FX_FAB_AUTO_HIDE_STORE_KEY = 'mineradio-fx-fab-auto-hide-v1';
 var CONTROLS_AUTO_HIDE_STORE_KEY = 'mineradio-controls-auto-hide-v1';
 var FREE_CAMERA_STORE_KEY = 'mineradio-free-camera-v1';
 var HOTKEY_SETTINGS_STORE_KEY = 'mineradio-hotkey-settings-v1';
-var VISUAL_GUIDE_SEEN_STORE_KEY = 'mineradio-visual-guide-seen-v2';
+// v3：2026-11-13 引导内容重写（平台推荐 / 我的音乐 / 受限说明）。版本号一变，
+// 看过旧版的用户也会再看一次新内容，不会永远停在过时的那一版。
+var VISUAL_GUIDE_SEEN_STORE_KEY = 'mineradio-visual-guide-seen-v3';
 var LOCAL_BEATMAP_STORE_KEY = 'mineradio-local-beatmaps-v1';
 var LOCAL_BEAT_PREF_STORE_KEY = 'mineradio-local-beatmap-prefs-v1';
 var LOCAL_BEAT_COMBOS = ['', 'downbeat', 'push', 'drop', 'rebound', 'accent'];

@@ -186,7 +186,7 @@ class QishuiAuthRuntime {
     this._mfaToken = '';
     this._mfaDone = false;
     // 终止态（组件失败 / 用户取消）：同一 token 不再重弹，也不再打上游，
-    // 否则 2 秒轮询会反复弹窗并把上游打到 rate_limited。
+    // 否则 2 秒轮询会反复弹窗并把上游打成重复请求。
     this._mfaStopToken = '';
     this._mfaStopCode = '';
     this._mfaStopMessage = '';
@@ -780,8 +780,8 @@ class QishuiAuthRuntime {
           verified = { status: true };
         } else if (this._mfaStopToken && this._mfaStopToken === tokenKey) {
           // 该 token 的二次验证已终止（组件失败 / 用户取消）：不再重弹、也不再
-          // 请求上游。否则每 2 秒轮询都会重新触发 2046，上游按频率判
-          // error_code 7（rate_limited），限流窗口永远不结束。
+          // 请求上游。否则每 2 秒轮询都会重新触发 2046，把上游打成重复请求。
+          // （上游会回 error_code 7，但它的语义未确认，不要据此认定「限流」。）
           const cached = new Error(this._mfaStopMessage || '二次验证未完成');
           cached.code = this._mfaStopCode || 'QISHUI_MFA_CANCELLED';
           cached.cached = true;
@@ -939,6 +939,6 @@ module.exports = {
   __getRuntime: () => runtime,
   // 仅供探针/诊断使用：只把 host 页拉起来（装 CORS hook + 就绪 bdms），
   // 不发起任何业务请求。这样探针验证「组件内 withCredentials 请求能否拿到
-  // 响应」时，不会被一次真实的 get_qrcode 调用打上游、也不会触发限流。
+  // 响应」时，不会被一次真实的 get_qrcode 调用打上游、也不会引来多余的上游请求。
   __initialize: initSignEngine,
 };

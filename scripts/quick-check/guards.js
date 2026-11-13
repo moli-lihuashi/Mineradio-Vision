@@ -2647,6 +2647,139 @@ function checkPlaylistCoverMarkGuard() {
   console.log('[OK] coverless playlists show a heart / star placeholder that keeps the card hover intact.');
 }
 
+function checkPlatformPanelPlaybackGuard() {
+  logStep('Platform panel playback semantics guard');
+  const nfText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '20-netease-features.js'), 'utf8');
+  const pfxText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '21-platform-extras.js'), 'utf8');
+  const fallbackText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '11-provider-fallback.js'), 'utf8');
+  const coverText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '03-beat', '05-cover-depth.js'), 'utf8');
+  const progressText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '04-progress-seek.js'), 'utf8');
+  const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', '05-playback', 'playback.css'), 'utf8');
+
+  // 语义三分：点行=单曲，右侧按钮=连播整批，文案必须说「正在播放」而不是「加入队列」
+  if (!/function nfPlaySongs\(songs, index, name, all\)/.test(nfText)) fail('nfPlaySongs must take an `all` flag (row click = single, button = whole batch)');
+  if (!/nfPlaySongs\(nfState\.songs,[\s\S]{0,220}?'网易云', true\)/.test(nfText)) fail('the 「全部」 button must pass all=true');
+  if (!/nfPlaySongs\(nfState\.songs,[\s\S]{0,220}?'网易云'\)/.test(nfText)) fail('row click must call nfPlaySongs WITHOUT all=true (single-track play)');
+  if (!/data-nf-act="play"[^>]*>全部</.test(nfText)) fail('the row button label must say 全部 (not 播放), otherwise it reads as single-track play');
+  if (/已把 '\s*\+\s*songs\.length\s*\+\s*' 首加入播放队列/.test(nfText)) fail('the old misleading status text ("已把 N 首加入播放队列") must stay gone');
+  if (!/function pfxPlaySong\(item, all\)/.test(pfxText)) fail('pfxPlaySong must take an `all` flag');
+  if (!/data-pfx-all="1"/.test(pfxText)) fail('the platform panel row button must carry data-pfx-all');
+  if (!/pfxPlaySong\(item, row\.hasAttribute\('data-pfx-all'\)\)/.test(pfxText)) fail('row click must play one track; only the 全部 button plays the batch');
+  if (/已把 '\s*\+\s*pfxState\.songs\.length\s*\+\s*' 首加入播放队列/.test(pfxText)) fail('the old misleading status text must stay gone (platform panel)');
+
+  // 播放被限制时底栏必须给出原因，而不是停在 0:00
+  if (!/var playbackBlockedNotice = null;/.test(fallbackText)) fail('playbackBlockedNotice state is missing');
+  if (!/function syncPlaybackBlockedNoticeForSong\(/.test(fallbackText)) fail('syncPlaybackBlockedNoticeForSong is missing');
+  if (!/playbackBlockedNotice = \{[\s\S]{0,220}?\};\s*applyPlaybackBlockedToControlBar\(\)/.test(fallbackText)) {
+    fail('handlePlaybackUnavailable must record the notice AND write it into the control bar');
+  }
+  if (!/typeof syncPlaybackBlockedNoticeForSong === 'function'/.test(coverText)) fail('updateControlTrackInfo must keep the blocked reason instead of overwriting it with the artist name');
+  if (!/blocked \? '--:-- \/ --:--'/.test(progressText)) fail('blocked playback must show --:-- instead of 0:00 / 0:00');
+  if (!/\.control-artist\.is-playback-blocked\{/.test(cssText)) fail('the blocked state needs its own colour');
+  console.log('[OK] panel rows play a single track, the 全部 button plays the batch, and blocked playback explains itself in the control bar.');
+}
+
+function checkVisualGuideGuard() {
+  logStep('Onboarding guide guard');
+  const toastText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '08-account', '06-toast.js'), 'utf8');
+  const globalsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '12a-audio-login-globals.js'), 'utf8');
+
+  // 引导要跟着功能走：平台推荐 / 平台能力 / 我的歌单 / 导入 / 受限说明都得在里面
+  const simpleBlock = toastText.slice(toastText.indexOf('var visualGuideSteps = ['), toastText.indexOf('var visualGuideStepsDiy = ['));
+  const diyBlock = toastText.slice(toastText.indexOf('var visualGuideStepsDiy = ['), toastText.indexOf('function activeVisualGuideSteps()'));
+  if (!simpleBlock || !diyBlock) fail('guide step tables are missing');
+  const simpleSteps = (simpleBlock.match(/kicker:/g) || []).length;
+  const diySteps = (diyBlock.match(/kicker:/g) || []).length;
+  if (simpleSteps < 7) fail('simple-mode guide must cover the new entries (at least 7 steps), got ' + simpleSteps);
+  if (diySteps < 6) fail('DIY guide lost steps, got ' + diySteps);
+  [
+    ['平台推荐卡片', '.home-card[data-card-id="discover"]'],
+    ['我的歌单卡片', '.home-card[data-card-id="library"]'],
+    ['底栏', '#bottom-bar'],
+    ['账号', '#user-btn'],
+    ['搜索', '#search-box']
+  ].forEach(function (entry) {
+    if (simpleBlock.indexOf(entry[1]) < 0) fail('simple guide is missing the ' + entry[0] + ' step (' + entry[1] + ')');
+  });
+  ['平台能力', '我的歌单', '导入'].forEach(function (word) {
+    if (simpleBlock.indexOf(word) < 0) fail('simple guide never mentions 「' + word + '」 — that is the part that went stale');
+  });
+  ['#playlist-panel', '#fx-panel'].forEach(function (sel) {
+    if (diyBlock.indexOf(sel) < 0) fail('DIY guide is missing ' + sel);
+  });
+
+  // 内容版本号：改了引导就要能重新展示一次
+  if (!/VISUAL_GUIDE_SEEN_STORE_KEY = 'mineradio-visual-guide-seen-v3'/.test(globalsText)) {
+    fail('guide content changed — bump VISUAL_GUIDE_SEEN_STORE_KEY so existing users see the new version once');
+  }
+  // 「?」入口看过即收起 —— 这是产品有意为之（首启提示一次，不让它长期占位）。
+  // 别把它改成常驻，也别删掉这个隐藏逻辑。
+  if (!/classList\.add\('visual-guide-btn-hidden'\)/.test(toastText)) {
+    fail('the guide entry must hide itself once seen (explicit product decision)');
+  }
+  // 图标是自绘 SVG（细线圆环 + 问号），和相邻「发现新版本」同构；别再退回纯文本问号
+  const htmlText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  if (!/id="visual-guide-btn"[\s\S]{0,320}?class="visual-guide-glyph"/.test(htmlText)) {
+    fail('the guide entry must use the SVG glyph, not a text question mark');
+  }
+  console.log('[OK] onboarding guide covers the new entries, hides after first run, and uses the circular help glyph.');
+}
+
+function checkDesktopLyricsMotionGuard() {
+  logStep('Desktop lyrics line-motion guard');
+  const html = fs.readFileSync(path.join(appRoot, 'public', 'desktop-lyrics.html'), 'utf8');
+
+  // 面板四档：上浮 / 3D 翻转 / 呼吸 / 静止。单行（默认行数 1）与多行栈都要各自有分支，
+  // 只写多行的话，默认配置下四个选项看起来一模一样（用户就是这么发现「没效果」的）。
+  if (!/body\.motion-slide \.line\.in\{animation:lyr-motion-slide/.test(html)) {
+    fail('single-line slide motion is missing: the default 1-line layout would fall back to the fixed lyr-in');
+  }
+  if (!/body\.motion-flip \.line\.in\{animation:lyr-motion-flip/.test(html)) fail('single-line flip motion is missing');
+  if (!/body\.motion-float:not\(\.paused\) \.line\{/.test(html)) {
+    fail('single-line float motion is missing (and it must skip .paused so it does not override the paused opacity)');
+  }
+  if (!/body\.motion-none \.line\.in\{animation:none;opacity:1\}/.test(html)) {
+    fail('single-line "static" must cancel the entrance animation AND force opacity:1, otherwise the lyric disappears');
+  }
+  ['lyr-motion-slide', 'lyr-motion-flip', 'lyr-motion-breathe'].forEach(function (name) {
+    if (html.indexOf('@keyframes ' + name) < 0) fail('missing keyframes ' + name);
+  });
+  // 多行栈那条老分支不能丢
+  if (!/body\.motion-slide \.line-row\.enter\{animation:row-slide/.test(html)) fail('multi-row slide motion regressed');
+  if (!/body\.motion-flip \.line-row\.enter\{animation:row-flip/.test(html)) fail('multi-row flip motion regressed');
+  if (!/body\.motion-float:not\(\.paused\) \.line-row\.active\{animation:row-breathe/.test(html)) fail('multi-row float motion regressed');
+  /* 呼吸幅度不能小到看不见：3px / 1.5% 缩放在正常字号下肉眼不可见，
+   * 用户实测反馈「呼吸没有效果」（其余三档都有明显入场）。 */
+  if (!/-7px,0\) scale\(1\.04\)/.test(html)) fail('row-breathe amplitude is too subtle to see (needs ~7px / 1.04)');
+  if (!/-8px,0\) scale\(1\.04\)/.test(html)) fail('lyr-motion-breathe amplitude is too subtle to see (needs ~8px / 1.04)');
+  /* 呼吸也要有「换行反馈」：其他三档换行都有入场动画，只有呼吸在换行瞬间毫无变化，
+   * 盯着换行看就是「没效果」。入场用短促弹一下 + 呼吸从入场结束接续。 */
+  if (!/body\.motion-float:not\(\.paused\) \.line-row\.active\.enter\{animation:row-float-in/.test(html)) {
+    fail('float motion has no line-change feedback in stacked layout (row-float-in on .active.enter)');
+  }
+  if (!/body\.motion-float:not\(\.paused\) \.line\.in\{animation:lyr-float-in/.test(html)) {
+    fail('float motion has no line-change feedback in single-line layout (lyr-float-in on .line.in)');
+  }
+  /* 多行「换行」的触发条件：payload 里 active 恒定落在窗口正中（desktopLyricWindow 的
+   * k === half），所以 activeIdx 永远是同一个数字。只比 activeIdx 的话 remove/add .enter
+   * 一次都不会执行，enter 类只是首次渲染的残留 —— 换行时四档动效看起来完全一样，
+   * 面板上选什么都没反应。必须比整窗文本签名（换行时整窗文本都会变），
+   * 再用「进度回退」兜住连续两句歌词字面相同的情况。 */
+  if (/var lineChanged = activeChanged;/.test(html)) {
+    fail('stacked layout decides the entrance on activeIdx alone: active always sits on the middle row, so a line change never replays');
+  }
+  if (!/var lineChanged = activeChanged \|\| signature !== stackSignature/.test(html)) {
+    fail('stacked layout must detect a line change from the whole-window text signature');
+  }
+  if (!/activeProgress \+ \.5 < stackActiveProgress/.test(html)) {
+    fail('stacked layout must treat a progress rewind as a line change, otherwise two identical consecutive lines replay nothing');
+  }
+  if (!/state\.lyricMotion !== 'none'/.test(html)) {
+    fail('stacked layout must skip the replay in "static" mode instead of forcing a reflow every line');
+  }
+  console.log('[OK] desktop lyrics honour all four line-motion presets in both single-line and stacked layouts.');
+}
+
 function checkSplashBootGuard() {
   logStep('Splash boot / WebGL fail-open guard');
   const rendererText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-scene', '00-renderer-quality.js'), 'utf8');
@@ -3362,5 +3495,5 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
 }
 
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
 };

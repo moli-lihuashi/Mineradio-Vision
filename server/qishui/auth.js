@@ -231,9 +231,12 @@ async function checkQishuiPcQrLogin(token, cookieText, qrOptions) {
   const sessionObj = qishuiCookieObject(loginCookie || baseCookie);
   const sessionid = normalizeText(sessionObj.sessionid || sessionObj.sessionid_ss || sessionObj.sid_guard || sessionObj.sid_tt || '');
   const needsSms = status === 'verify' || errorCode === 2046 || /verify|mfa|sms/.test(accountFlow);
+  // error_code 7 的语义未确认（「限流」解读已被探针证伪）。这里保留降频间隔
+  // 只是保守防御，文案不再声称它是限流。实际启用的是 routes/qishui.js，
+  // 那条链已改为调用 server/qishui/qr-status.js 的统一映射。
   const retryAfterMs = errorCode === 7 ? 60000 : 0;
   let message = qishuiPcQrStatusMessage(status, !!loginCookie);
-  if (errorCode === 7) message = '汽水确认接口临时限流，已自动降频继续确认当前二维码';
+  if (errorCode === 7) message = '汽水确认接口返回错误码 7（含义未确认），已自动降频继续确认当前二维码';
   else if (needsSms) message = '汽水已确认扫码，但账号要求短信或二次验证，当前二维码不能直接换到登录态';
   else if (/confirm|confirmed|success|login/i.test(status) && !loginCookie) message = '汽水已确认扫码，正在等待登录态下发';
   else if (errorCode) message = '汽水扫码返回 error_code=' + errorCode + (errorDescription ? ('：' + errorDescription) : '，保留当前二维码继续确认');

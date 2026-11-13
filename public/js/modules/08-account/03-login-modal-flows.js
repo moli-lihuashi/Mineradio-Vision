@@ -604,7 +604,7 @@ async function refreshQr() {
     var qsImg = document.getElementById('qr-img');
     var qsStatus = document.getElementById('qr-status');
     qishuiQrToken = '';
-    // 不要在这里先清 src：请求失败（尤其上游 rate_limited）时会把二维码留成
+    // 不要在这里先清 src：请求失败（上游返回错误时）会把二维码留成
     // 永久空白，且没有任何恢复路径。只在拿到新图后覆盖。
     if (qsImg) qsImg.style.display = '';
     try {
@@ -698,7 +698,7 @@ function stopQrPoll() {
   if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
   if (qrRetryTimer) { clearTimeout(qrRetryTimer); qrRetryTimer = null; }
   // 推进代际并让出锁：凡是「停止轮询」都意味着上一轮的语义已经作废
-  // （换二维码 / 登录完成 / 关窗 / 限流等待）。此时若不主动放锁，
+  // （换二维码 / 登录完成 / 关窗 / 错误码 7 降频等待）。此时若不主动放锁，
   // 一个永不落定的在途 checkQr 会把 qrCheckInFlight 永久钉在 true，
   // 之后哪怕重新 startQrPoll() 也会被入口直接 return，界面彻底不动。
   qrCheckSerial++;
@@ -1051,8 +1051,7 @@ checkQr = async function() {
   // 防重入：startQrPoll() 是 setInterval(checkQr, 2000)，而本函数是 async。
   // 汽水分支要等主进程跑完 check_qrconnect；上游回 2046 触发二次验证时，
   // 这次 await 会一直挂到用户操作完（可达数分钟）。没有这把锁，每 2 秒仍会
-  // 点火一次 → 在途请求并发叠加 → 上游判 error_code 7（rate_limited）→
-  // 停轮询等 60 秒 → 用户回来继续叠加，永远登不上。
+  // 点火一次 → 在途请求并发叠加、界面状态来回跳，也把上游打成重复请求。
   // 注意：必须在入口就 return，不能只靠 finally 收尾。
   if (qrCheckInFlight) return;
   qrCheckInFlight = true;
@@ -1137,14 +1136,14 @@ checkQr = async function() {
         stopQrPoll();
       } else if (qsStatus === 'scanned') {
         if (qsSt) { qsSt.textContent = '已扫码，请在 App 中确认登录…'; qsSt.className = 'scan'; }
-      } else if (qsStatus === 'rate_limited') {
-        // 上游限流时不能继续每 2 秒打 check_qrconnect（限流窗口会永远不结束），
-        // 但也不能就此彻底停掉：手机端可能已经确认，只是这一次轮询被限流挡住。
-        // 因此停掉高频轮询，改为按 retryAfterMs（服务端给 60000）延迟重试一次，
-        // 让「手机已确认 → 桌面端补拾取」这条路还能走通。
+      } else if (qsStatus === 'upstream_code_7') {
+        // 上游返回 error_code 7。它到底是什么语义**没有确认**——「限流」这个解读
+        // 已被多轮探针证伪（200ms 连打 60 次、伪造/作废 token、_mfaDone 态重发都只回 0）。
+        // 这里保留「停高频轮询、延迟重试一次」只是保守防御，不是因为认定它是限流：
+        // 手机端可能已经确认，只是这一次轮询被上游挡了，彻底停掉会丢这条补拾取路径。
         var retryMs = Math.max(5000, Number(qr.retryAfterMs) || 60000);
         if (qsSt) {
-          qsSt.textContent = '扫码过于频繁，' + Math.round(retryMs / 1000) + ' 秒后自动重试…';
+          qsSt.textContent = '确认接口暂时不可用（错误码 7），' + Math.round(retryMs / 1000) + ' 秒后自动重试…';
           qsSt.className = 'fail';
         }
         stopQrPoll();
@@ -1175,7 +1174,7 @@ checkQr = async function() {
   return await baseCheckQr();
   } finally {
     // 只释放自己持有的那一把锁。
-    // 若期间 stopQrPoll() 推进过代际（用户刷新二维码 / 关窗 / 限流等待），
+    // 若期间 stopQrPoll() 推进过代际（用户刷新二维码 / 关窗 / 错误码 7 降频等待），
     // 说明这一轮已经作废，绝不能去清新一代的锁 —— 否则新一轮刚建立的
     // 防重入会被旧一轮的收尾直接抹掉，缺陷原地复活。
     if (qrCheckHolder === mySerial) {

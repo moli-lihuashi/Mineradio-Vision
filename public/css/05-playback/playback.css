@@ -8,6 +8,11 @@
 #visual-guide-btn{font-size:18px;font-weight:780;line-height:1;color:rgba(255,255,255,.68);border-color:rgba(255,255,255,.10);background:rgba(255,255,255,.04)}
 #visual-guide-btn:hover{color:#fff;border-color:rgba(255,83,103,.40);background:rgba(255,83,103,.10);box-shadow:0 14px 38px rgba(255,83,103,.08)}
 .visual-guide-btn-hidden{display:none !important}
+/* 「?」图标：细线圆环 + 问号（与相邻的「发现新版本」同构：按钮是圆形容器，SVG 是图标本体）。
+   以前这里是一个纯文本问号，字号吃继承，和右边那枚自绘 SVG 圆环放一起明显不是一套。 */
+#visual-guide-btn .visual-guide-glyph{width:20px;height:20px;display:block;transform-origin:50% 50%;transition:transform .22s ease,opacity .22s ease}
+#visual-guide-btn:hover .visual-guide-glyph{transform:scale(1.08)}
+#visual-guide-btn:active .visual-guide-glyph{transform:scale(.94)}
 #upload-actions{position:relative;display:flex;align-items:center;gap:8px;height:58px}
 body.desktop-shell:not(.desktop-fullscreen) #upload-actions{margin-top:0}
 html:fullscreen body.desktop-shell #upload-actions,
@@ -243,6 +248,9 @@ body.home-controls-locked #bottom-bar{opacity:0!important;pointer-events:none!im
 .control-title{position:relative;display:flex;align-items:center;gap:6px;min-width:0;font-size:13.5px;font-weight:700;color:rgba(255,255,255,.92);line-height:1.2;white-space:nowrap;overflow:visible;cursor:pointer}
 .control-artist{font-size:11.5px;color:rgba(255,255,255,.48);line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .control-title:hover,.control-artist:hover{color:#fff;text-shadow:0 0 16px rgba(0,245,212,.20)}
+/* 播放被限制（需要登录 / 会员不足）时，底栏第二行改显原因；用暖色区分「这是状态」而非歌手名 */
+.control-artist.is-playback-blocked{color:rgba(255,196,120,.92);cursor:default;text-shadow:none}
+.control-artist.is-playback-blocked:hover{color:rgba(255,214,150,.98);text-shadow:0 0 14px rgba(255,170,80,.22)}
 .ctrl-btn{flex:0 0 auto;width:36px;height:36px;background:transparent;border:0;border-radius:11px;color:rgba(255,255,255,0.70);cursor:pointer;transition:color .18s,transform .18s,text-shadow .18s,background .18s,box-shadow .18s;display:flex;align-items:center;justify-content:center;padding:0;will-change:transform}
 .ctrl-btn:focus{outline:none}
 .ctrl-btn:focus-visible{outline:1px solid rgba(var(--fc-accent-rgb),.34);outline-offset:2px}

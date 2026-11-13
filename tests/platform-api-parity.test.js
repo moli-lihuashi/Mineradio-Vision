@@ -266,3 +266,23 @@ test('⑤ 代码侧防回退：已实现的能力不许被删、标不适用的�
   assert.ok(!/pn === '\/api\/kugou\/mv/.test(read('server/routes/kugou.js')),
     '酷狗 MV 属不适用，不该有路由');
 });
+
+test('⑨ 汽水扫码状态收敛：双形态统一映射，error_code 7 不再被断言成限流', () => {
+  const route = read('server/routes/qishui.js');
+  const front = read('public/js/modules/08-account/03-login-modal-flows.js');
+  const qrStatus = read('server/qishui/qr-status.js');
+
+  // 路由必须走统一映射，不许再手写 if 链
+  assert.match(route, /mapQishuiQrStatus\(\{\s*status:\s*data\.status,\s*errorCode\s*\}\)/,
+    'routes/qishui.js 必须调用 mapQishuiQrStatus 做状态归一');
+
+  // 数字形态必须保留（qishui-auth-v6.js:828 同时判过 '3'，说明数字真实存在）
+  assert.match(qrStatus, /'2':\s*'scanned'/, '数字 2 → scanned 不是死代码，必须保留');
+  assert.match(qrStatus, /'3':\s*'confirmed'/, '数字 3 → confirmed 必须保留');
+
+  // 「限流」这个被证伪的语义不许再作为状态名出现
+  assert.ok(!/rate_limited/.test(route), 'routes/qishui.js 不许再产出 rate_limited');
+  assert.ok(!/'rate_limited'/.test(qrStatus), 'qr-status.js 不许再造 rate_limited 状态名');
+  assert.match(front, /qsStatus === 'upstream_code_7'/, '前端必须认新的中性状态名');
+  assert.ok(!/qsStatus === 'rate_limited'/.test(front), '前端不该再认 rate_limited');
+});

@@ -20,7 +20,28 @@ var homePet = {
 
 var HOME_PET_CHAR_NAMES = { cat: '小橘', dog: '柴柴', bear: '布朗', rabbit: '团子', fox: '小狐', penguin: 'QQ', star: '小克' };
 var HOME_PET_CLICK_LINES = ['陪你听歌~', '今天也想你', '❤', '嗯哼？', '音乐是最好的陪伴'];
-var HOME_PET_MICRO_LINES = { yawn: '哈啊~ 有点困…', stretch: '唔~ 伸个懒腰!' };
+var HOME_PET_MICRO_LINES = {
+  yawn: '哈啊~ 有点困…',
+  stretch: '唔~ 伸个懒腰!',
+  wave: '嗨，我在呢',
+  review: '这段好听…'
+};
+
+// 待机时会轮换的小动作。第一版只有 yawn/stretch 且 20~50 秒才来一次，
+// 白天（不触发 sleep）几乎只看到 idle，用户反馈「只有待机和点击两个动作」。
+// 池子放在 16a-pet-petdex-map.js（有单测保证每个动作都能映射到合法行号）。
+var HOME_PET_IDLE_ACTS = (typeof HomePetPetdexMap !== 'undefined' && HomePetPetdexMap.IDLE_ACTS)
+  ? HomePetPetdexMap.IDLE_ACTS
+  : ['yawn', 'stretch', 'wave', 'review'];
+
+function homePetPickIdleAct() {
+  // 正在放歌时更常进入「沉浸聆听」（review）
+  var playingNow = (typeof audio !== 'undefined' && audio && !audio.paused);
+  var pool = playingNow
+    ? ['review', 'review', 'review', 'wave', 'yawn']
+    : ['yawn', 'stretch', 'wave', 'review'];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 var HOME_PET_STORE_KEY = 'mineradio-home-pet-char';
 
@@ -80,16 +101,72 @@ function homePetInteract() {
   homePetSetStatus(lines[Math.floor(Math.random() * lines.length)], true);
 }
 
-function homePetCycleCharacter() {
-  var keys = Object.keys(HOME_PET_CHAR_NAMES).filter(function (key) {
-    return typeof SPRITES === 'object' && SPRITES.frames && SPRITES.frames[key];
+// ---- 宠物皮肤：内置 / 照片生成 / Petdex 三类，统一在这里切换 ----
+
+// 所有可选的同伴。顺序稳定：内置（按 HOME_PET_CHAR_NAMES 声明序）→ 照片（按存储序）→
+// Petdex（按已装列表），这样 ⇄ 每次前进到下一只，不会因集合重排跳来跳去。
+function homePetSkinRing() {
+  var ring = [];
+  var frames = (typeof SPRITES === 'object' && SPRITES.frames) || {};
+  Object.keys(HOME_PET_CHAR_NAMES).forEach(function (key) {
+    if (frames[key]) ring.push({ kind: 'builtin', id: key, name: HOME_PET_CHAR_NAMES[key], label: '内置' });
   });
-  var index = keys.indexOf(homePet.character);
-  homePet.character = keys[(index + 1) % keys.length] || keys[0];
-  try { localStorage.setItem(HOME_PET_STORE_KEY, homePet.character); } catch (_error) { }
+  homePetLoadBuddies().forEach(function (buddy) {
+    if (buddy && buddy.id && frames[buddy.id]) {
+      ring.push({ kind: 'photo', id: buddy.id, name: buddy.name || '照片伙伴', label: '照片' });
+    }
+  });
+  var dex = (typeof HomePetPetdex !== 'undefined' && HomePetPetdex.state && HomePetPetdex.state.installed) || [];
+  dex.forEach(function (pet) {
+    if (pet && pet.slug) {
+      ring.push({ kind: 'petdex', id: pet.slug, name: pet.displayName || pet.slug, label: 'Petdex' });
+    }
+  });
+  return ring;
+}
+
+function homePetCurrentSkin() {
+  if (homePet.petdex && homePet.petdex.slug) return { kind: 'petdex', id: homePet.petdex.slug };
+  var chr = homePet.character || '';
+  return { kind: /^buddy-/.test(chr) ? 'photo' : 'builtin', id: chr };
+}
+
+// 统一切皮肤。三类互斥：切到非 Petdex 时必须让 Petdex 模块清掉自己的状态与记忆，
+// 否则 homePet.petdex 仍然存在，绘制层继续优先走图片精灵 —— 表现就是「换了没反应」。
+// 第一版的 ⇄ 只改 homePet.character，所以在 Petdex 宠物上按它完全无效。
+function homePetSelectSkin(kind, id, label) {
+  if (!id) return false;
+  if (kind === 'petdex') {
+    if (typeof HomePetPetdex === 'undefined' || typeof HomePetPetdex.activate !== 'function') return false;
+    HomePetPetdex.activate(id, label || '');
+    if (typeof HomePetSkin !== 'undefined' && HomePetSkin.refresh) HomePetSkin.refresh();
+    return true;
+  }
+  if (typeof HomePetPetdex !== 'undefined' && typeof HomePetPetdex.deactivate === 'function') {
+    HomePetPetdex.deactivate();   // 置空 homePet.petdex，并清掉它的选择记忆
+  } else {
+    homePet.petdex = null;
+  }
+  homePet.character = id;
+  try { localStorage.setItem(HOME_PET_STORE_KEY, id); } catch (_error) { }
+  homePet.curAnim = 'idle';
   homePet.frameIdx = 0;
-  homePetSetStatus(HOME_PET_CHAR_NAMES[homePet.character] + ' 来啦！', true);
+  homePetSetStatus((label || HOME_PET_CHAR_NAMES[id] || '伙伴') + ' 来啦！', true);
   if (typeof notifyListeningTodayGlass === 'function') notifyListeningTodayGlass();
+  if (typeof HomePetSkin !== 'undefined' && HomePetSkin.refresh) HomePetSkin.refresh();
+  return true;
+}
+
+function homePetCycleCharacter() {
+  var ring = homePetSkinRing();
+  if (!ring.length) return;
+  var cur = homePetCurrentSkin();
+  var index = -1;
+  for (var i = 0; i < ring.length; i++) {
+    if (ring[i].kind === cur.kind && ring[i].id === cur.id) { index = i; break; }
+  }
+  var next = ring[(index + 1) % ring.length];
+  homePetSelectSkin(next.kind, next.id, next.name);
 }
 
 function homePetResize() {
@@ -128,6 +205,8 @@ function homePetEvaluateMood(now) {
 
 function homePetTick(now) {
   homePetEvaluateMood(now);
+  // 首次散步给个延迟：nextWalkAt 初值是 0，不设的话第一次 tick 立刻就走
+  if (!homePet.nextWalkAt) homePet.nextWalkAt = now + 7000;
   var dt = 1 / 30;
 
   // 眨眼
@@ -149,33 +228,50 @@ function homePetTick(now) {
     homePet.walkUntil = now + 2200 + Math.random() * 2600;
     homePet.dir = Math.random() < 0.5 ? -1 : 1;
   }
-  if (homePet.walkActive && now > homePet.walkUntil) homePet.walkActive = false;
+  if (homePet.walkActive && now > homePet.walkUntil) {
+    homePet.walkActive = false;
+    // 第一版漏了这句：nextWalkAt 恒为 0，一轮走完下一帧立刻又满足条件，
+    // 于是宠物看起来一直在左右走。现在走完歇 9~24 秒。
+    homePet.nextWalkAt = now + 9000 + Math.random() * 15000;
+  }
 
-  // 微动作：打哈欠 / 伸懒腰
+  // 待机小动作：打哈欠 / 伸懒腰 / 挥手 / 沉浸聆听，7~16 秒来一次（原来 20~50 秒）
   if (!sleeping && !homePet.walkActive && now > homePet.nextMicro && homePet.curAnim === 'idle') {
-    homePet.microState = Math.random() < 0.42 ? 'yawn' : 'stretch';
-    homePet.microUntil = now + 2600;
-    homePet.nextMicro = now + 20000 + Math.random() * 30000;
+    homePet.microState = homePetPickIdleAct();
+    homePet.microUntil = now + 2400 + Math.random() * 1600;
+    homePet.nextMicro = now + 7000 + Math.random() * 9000;
     homePet.curAnim = homePet.microState;
     homePet.frameIdx = 0;
     var line = HOME_PET_MICRO_LINES[homePet.microState];
     if (line && Math.random() < 0.35) homePetSetStatus(line, true);
   } else if (homePet.microState && now > homePet.microUntil) {
+    var wasAct = homePet.microState;
     homePet.microState = null;
-    if (homePet.curAnim === 'yawn' || homePet.curAnim === 'stretch') {
+    if (homePet.curAnim === wasAct) {
       homePet.curAnim = 'idle';
       homePet.frameIdx = 0;
     }
   }
 
-  // 行走位移（卡内单元格），撞边折返
-  var maxWalk = Math.max(0, homePet.cols - 16);
-  if (homePet.walkActive && !sleeping) {
+  // 行走位移（卡内单元格），撞边折返。
+  // 边界由 16b-pet-walk-bounds.js 算（纯函数、有单测）：walkX ∈ [-offX, cols-16-offX]，
+  // 保证 petX ∈ [0, cols-16]，宠物整体始终在框内。
+  var bounds = (typeof HomePetWalkBounds !== 'undefined' && HomePetWalkBounds.walkLimits)
+    ? HomePetWalkBounds.walkLimits(homePet.cols, homePet.offX, 16)
+    : { left: -homePet.offX, right: Math.max(-homePet.offX, homePet.cols - 16 - homePet.offX), span: 0, canWalk: false };
+  if (homePet.walkActive && !sleeping && bounds.canWalk) {
     homePet.walkX += homePet.dir * 0.16;
-    if (homePet.walkX < 0) { homePet.walkX = 0; homePet.dir = 1; homePet.walkUntil = Math.max(homePet.walkUntil, now + 1500); }
-    if (homePet.walkX > maxWalk) { homePet.walkX = maxWalk; homePet.dir = -1; homePet.walkUntil = Math.max(homePet.walkUntil, now + 1500); }
-  } else if (!homePet.walkActive) {
-    homePet.walkX += (maxWalk / 2 - homePet.walkX) * 0.06;
+    if (homePet.walkX <= bounds.left) {
+      homePet.walkX = bounds.left; homePet.dir = 1;
+      homePet.walkUntil = Math.max(homePet.walkUntil, now + 1500);
+    } else if (homePet.walkX >= bounds.right) {
+      homePet.walkX = bounds.right; homePet.dir = -1;
+      homePet.walkUntil = Math.max(homePet.walkUntil, now + 1500);
+    }
+  } else {
+    // 不走动（或画布太窄走不了）时回到居中：walkX=0 就是居中，因为 petX = offX + walkX
+    homePet.walkX += (0 - homePet.walkX) * 0.06;
+    if (Math.abs(homePet.walkX) < 0.02) homePet.walkX = 0;
   }
 }
 
@@ -194,7 +290,23 @@ function homePetDraw(now) {
   // 画布纵向恰好 16 格：原点平移 0 即站在地面；jump 为向上跳（负 Y）
   ctx.setTransform(flip ? -px : px, 0, 0, px, flip ? (petX + 16) * px : petX * px, -(jump * px));
   var blinking = now < homePet.blinkUntil;
-  PetCore.drawPet(ctx, homePet.character, homePet.curAnim, homePet.frameIdx, blinking);
+  // Petdex 精灵优先：装了图片宠物就用 drawImage 播放序列帧，否则退回内置字符像素。
+  // 帧索引按时间算（≈140ms/帧），不依赖 homePet.frameIdx —— 那个值只在切换状态时
+  // 重置、从不自增，内置像素伙伴实际是静态帧 + 眨眼，拿它驱动精灵会不动。
+  var petdexDrawn = false;
+  if (homePet.petdex && typeof HomePetPetdex !== 'undefined' && HomePetPetdex.draw) {
+    // 状态优先级：点击跳 > 微动作（伸懒腰/打哈欠）> 走路 > 睡觉 > idle。
+    // 跳放最前，是为了睡觉时戳它也有反馈。
+    var dexState = 'idle';
+    if (now < homePet.jumpUntil) dexState = 'jump';
+    else if (homePet.curAnim === 'sleep') dexState = 'sleep';
+    else if (homePet.microState) dexState = homePet.microState;
+    else if (homePet.walkActive) dexState = 'walk';
+    // 帧间隔按动作区分（idle 慢、跑跳快），见 16a-pet-petdex-map.js
+    var dexStep = typeof HomePetPetdex.frameMs === 'function' ? HomePetPetdex.frameMs(dexState) : 140;
+    petdexDrawn = HomePetPetdex.draw(ctx, dexState, Math.floor(now / dexStep), homePet.dir);
+  }
+  if (!petdexDrawn) PetCore.drawPet(ctx, homePet.character, homePet.curAnim, homePet.frameIdx, blinking);
 }
 
 function homePetLoop(now) {
@@ -310,12 +422,9 @@ function homePetPixelatePhoto(file) {
         });
         homePetSaveBuddies(list);
         if (typeof PetCore !== 'undefined' && PetCore.mergeCustomPets) PetCore.mergeCustomPets(list);
-        homePet.character = id;
-        try { localStorage.setItem(HOME_PET_STORE_KEY, id); } catch (_) { }
-        homePet.curAnim = 'idle';
-        homePet.frameIdx = 0;
+        // 走统一切换：会顺带清掉 Petdex 状态（只改 character 的话，Petdex 精灵仍然优先绘制）
+        homePetSelectSkin('photo', id, list[list.length - 1].name);
         homePetSetStatus('新伙伴上线！', true);
-        if (typeof notifyListeningTodayGlass === 'function') notifyListeningTodayGlass();
       } catch (error) {
         console.warn('[HomePetPhoto]', error);
         if (typeof showToast === 'function') showToast('照片像素化失败');

@@ -10,42 +10,54 @@ function showToast(msg) {
   toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2600);
 }
 
+// 新手引导（2026-11-13 重写）
+// 旧版停在「搜索 / 底栏 / 登录 / 3D 歌单架 / DIY」五件老事上，这一批新增的
+// 平台推荐 + 平台能力面板、我的歌单（本地库/爱心星标）、播放受限说明都没提到。
+// 现在按「找歌 → 平台推荐 → 我的音乐 → 控制台 → 账号 → 进阶」重排，每步一句话。
+// 说明：selector 必须指向真实可见元素，找不到时 guideTargetRect 会回落到屏幕中央，
+// 所以这里只写启动空场下一定存在的入口。
 var visualGuideSteps = [
   {
     target: 'stage',
-    kicker: '01 / Welcome',
-    title: 'Mineradio 是用来听歌的视觉播放器',
-    body: '它不是单纯歌单页：搜索或导入一首歌后，封面、歌词、粒子和镜头会跟着音乐一起动。'
+    kicker: '01 / 你好',
+    title: 'Mineradio 是「边听边看」的播放器',
+    body: '搜索或导入一首歌之后，封面、歌词、粒子和镜头会跟着音乐动起来。下面几处是新手最常用的入口。'
   },
   {
     selector: '#search-box',
-    kicker: '02 / Play',
-    title: '从搜索或导入开始',
-    body: '输入歌名、歌手或关键词即可播放；如果有本地音乐，也可以用导入入口直接放进舞台。'
+    kicker: '02 / 找歌',
+    title: '顶部搜索，多平台一起找',
+    body: '输入歌名、歌手或关键词就能播放。同一首歌会给出多个平台版本，哪家能播就用哪家；本地文件也能直接拖进窗口。'
+  },
+  {
+    selector: '.home-card[data-card-id="discover"]',
+    kicker: '03 / 平台推荐',
+    title: '四个平台的热门集中在这里',
+    body: '「平台推荐」里可以看网易云、汽水、酷狗、Spotify 的热门与个性化推荐；底部的「平台能力」还能直接调各家的歌单、会员与推荐功能。'
+  },
+  {
+    selector: '.home-card[data-card-id="library"]',
+    kicker: '04 / 我的音乐',
+    title: '登录后的歌单都在「我的歌单」',
+    body: '各平台歌单、红心和播客集中在一处。没有封面的歌单会显示爱心或星标；本地音乐也能从这里的「导入歌单」进来。'
   },
   {
     selector: '#bottom-bar',
-    kicker: '03 / Control',
+    kicker: '05 / 播放控制',
     title: '播放以后看底部控制台',
-    body: '播放、切歌、进度、队列和歌词都集中在底部，先把它当作一个正常播放器使用就可以。'
+    body: '播放、切歌、进度、音量、音质、队列和歌词都在底部。歌曲需要登录或会员才能播时，这里会直接写明原因，不会只剩一个 0:00。'
   },
   {
     selector: '#user-btn',
-    kicker: '04 / Account',
-    title: '登录只是为了同步你的音乐库',
-    body: '登录后会同步歌单、红心和播客；不登录也可以搜索和播放，不会强制卡住你。'
-  },
-  {
-    target: 'shelf',
-    kicker: '05 / Visual',
-    title: '进阶视觉都放在舞台周围',
-    body: '右侧 3D 歌单架和 DIY 玩家模式是进阶入口；先播放一首歌，再慢慢调视觉效果。'
+    kicker: '06 / 账号',
+    title: '登录只为同步，不登录也能听',
+    body: '登录后同步歌单、红心、播客和会员状态；不登录照样搜索播放，只是有些平台的曲目会提示需要登录。'
   },
   {
     selector: '#diy-mode-btn',
-    kicker: '06 / DIY',
-    title: '高级功能在 DIY 玩家模式',
-    body: '视觉控制台、上传/封面、自定义歌词、音质和更多面板都会在这里展开。'
+    kicker: '07 / 进阶',
+    title: '视觉与歌词动效在 DIY 模式',
+    body: '右侧视觉控制台、3D 歌单架、歌词排版和镜头都在 DIY 模式下展开，随时可以切回简洁界面。'
   }
 ];
 var visualGuideStepsDiy = [
@@ -53,37 +65,37 @@ var visualGuideStepsDiy = [
     selector: '#diy-mode-btn',
     kicker: '01 / DIY',
     title: 'DIY 玩家模式已展开',
-    body: '这里可以随时切回默认模式。DIY 模式会显示完整控制台、上传、视觉面板和高级调参。'
+    body: '这里可以随时切回默认模式。DIY 会显示完整控制台、上传入口、视觉面板和高级调参。'
   },
   {
     selector: '#search-box',
-    kicker: '02 / Search',
+    kicker: '02 / 搜索',
     title: '搜索源和导入入口会展开',
-    body: '顶部搜索支持更多来源切换，上传歌曲、封面等入口也会在 DIY 模式中显示。'
+    body: '顶部搜索支持更多来源切换，上传歌曲、替换封面等入口也只在 DIY 模式里出现。'
   },
   {
     selector: '#playlist-panel',
-    kicker: '03 / Library',
+    kicker: '03 / 音乐库',
     title: '左侧是完整歌单和队列',
-    body: '靠近左侧边缘可以打开歌单/队列面板，在这里管理队列、个人歌单和播客。'
+    body: '靠近左侧边缘可以打开歌单/队列面板：管理队列、各平台歌单、本地音乐（「导入歌单」）和播客。'
   },
   {
     selector: '#fx-panel',
-    kicker: '04 / Visual Lab',
-    title: '右侧是视觉控制台',
-    body: '靠近右下角或点击视觉按钮，可以调节粒子、歌词、镜头、3D 歌单架和更多视觉参数。'
+    kicker: '04 / 视觉控制台',
+    title: '右侧是视觉与歌词工作台',
+    body: '粒子、歌词排版与配色、镜头、3D 歌单架等参数都在这里调；改坏了可以随时载入预设。'
   },
   {
     selector: '#quality-control',
-    kicker: '05 / Controls',
+    kicker: '05 / 播放控制',
     title: '高级播放控制会补全',
     body: '音质、播放顺序、收藏、歌词源和更多按钮会在 DIY 模式中完整显示。'
   },
   {
     target: 'shelf',
-    kicker: '06 / Shelf',
+    kicker: '06 / 歌单架',
     title: '3D 歌单架支持直接打开',
-    body: '右侧的 3D 歌单架会在靠近时半透明浮现，点击卡片可打开歌单，点卡片里的播放按钮可直接播放整张歌单。'
+    body: '右侧 3D 歌单架会在靠近时半透明浮现，点击卡片打开歌单，卡片里的播放按钮可以直接播放整张。'
   }
 ];
 function activeVisualGuideSteps() {
@@ -98,6 +110,8 @@ function markVisualGuideSeen() {
 function updateVisualGuideButtonVisibility() {
   var btn = document.getElementById('visual-guide-btn');
   if (!btn) return;
+  // 看过就收起入口 —— 产品有意如此（首启提示一次即可，不让「?」长期占位）。
+  // 需要重看的用户仍然可以在看过之后手动执行 startVisualGuide({ manual: true })。
   if (visualGuideWasSeen()) btn.classList.add('visual-guide-btn-hidden');
   else btn.classList.remove('visual-guide-btn-hidden');
 }

@@ -261,6 +261,9 @@ function smokeCoreEvalNoReferenceError() {
       querySelector() { return elStub(); },
       querySelectorAll() { return []; },
       createElement() { return elStub(); },
+      // 视觉涟漪 / 宠物皮肤模块会用 fragment 批量挂节点；缺这个方法会让 core eval 整体
+      // 抛 "document.createDocumentFragment is not a function"，把启动初始化误判为没跑完。
+      createDocumentFragment() { return elStub(); },
       createTextNode(t) { return { textContent: t }; },
       addEventListener() {}, removeEventListener() {},
       createEvent() { return { initEvent() {} }; },

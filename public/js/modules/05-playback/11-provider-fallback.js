@@ -978,6 +978,62 @@ async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
   // 宁可跳过并说明，也不拿原版顶替 —— 用户点的和听到的必须是同一首。
   return await skipFailedQueueItem(skipIdx, token, '没有找到这首歌同一版本（歌手与版本标识都一致）的其它平台音源，正在播放下一首。', skipOpts);
 }
+// ---------- 播放被限制时的底栏状态（2026-11-13）----------
+// 之前只弹 toast + 浮层，然后自动打开登录面板；底栏曲名/歌手照旧、时间停在
+// 「0:00 / 0:00」，看起来像什么都没发生（用户原话：「底栏 0:00 静默」）。
+// 现在把原因写进底栏第二行，并把时间占位改成 --:--，切歌或起播成功时自动恢复。
+var playbackBlockedNotice = null;
+
+function playbackBlockedKeyOf(song) {
+  song = song || {};
+  return String(song.provider || '') + '|' + String(song.id || '') + '|' + String(song.name || '');
+}
+
+function applyPlaybackBlockedToControlBar() {
+  var artist = document.getElementById('control-artist');
+  if (!artist) return;
+  if (playbackBlockedNotice) {
+    var text = playbackBlockedNotice.body || playbackBlockedNotice.title || '当前歌曲无法播放';
+    artist.textContent = text;
+    artist.title = text;
+    artist.classList.add('is-playback-blocked');
+    var timeDisplay = document.getElementById('time-display');
+    if (timeDisplay) timeDisplay.textContent = '--:-- / --:--';
+    return;
+  }
+  artist.classList.remove('is-playback-blocked');
+  artist.title = '';
+}
+
+function clearPlaybackBlockedNotice() {
+  if (!playbackBlockedNotice) return;
+  playbackBlockedNotice = null;
+  var artist = document.getElementById('control-artist');
+  if (artist) {
+    artist.classList.remove('is-playback-blocked');
+    artist.title = '';
+  }
+  var current = typeof playQueue !== 'undefined' && playQueue && currentIdx >= 0 ? playQueue[currentIdx] : null;
+  if (current && typeof updateControlTrackInfo === 'function') updateControlTrackInfo(current);
+}
+
+// updateControlTrackInfo() 每次换歌都会把 #control-artist 重写成歌手名，
+// 所以由它在末尾回调这里：同一首还在被限制 → 保持原因；换了歌 → 清掉限制态。
+function syncPlaybackBlockedNoticeForSong(song) {
+  var artist = document.getElementById('control-artist');
+  if (!artist) return;
+  if (playbackBlockedNotice && playbackBlockedNotice.key === playbackBlockedKeyOf(song)) {
+    var text = playbackBlockedNotice.body || playbackBlockedNotice.title || '当前歌曲无法播放';
+    artist.textContent = text;
+    artist.title = text;
+    artist.classList.add('is-playback-blocked');
+    return;
+  }
+  if (playbackBlockedNotice) playbackBlockedNotice = null;
+  artist.classList.remove('is-playback-blocked');
+  artist.title = '';
+}
+
 function handlePlaybackUnavailable(song, data) {
   hideLoading();
   forcePlaybackControlsInteractive();
@@ -986,6 +1042,14 @@ function handlePlaybackUnavailable(song, data) {
   var category = notice.category;
   showToast(notice.toast || notice.title || playbackRestrictionMessage(song, data));
   showSourceFallbackNotice(notice.title, notice.body);
+  playbackBlockedNotice = {
+    key: playbackBlockedKeyOf(song),
+    title: notice.title,
+    body: notice.body || notice.title,
+    provider: provider,
+    category: category
+  };
+  applyPlaybackBlockedToControlBar();
   if (category === 'login_required') {
     setTimeout(function () {
       var modal = document.getElementById('login-modal');

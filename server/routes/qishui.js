@@ -9,6 +9,7 @@
 //    /api/qishui/search/playlists, /api/qishui/feed/modes
 // ====================================================================
 const createQishuiExtras = require('../qishui/extras');
+const { mapQishuiQrStatus } = require('../qishui/qr-status');
 
 module.exports = function register(ctx) {
   const extras = createQishuiExtras(ctx);
@@ -128,22 +129,19 @@ module.exports = function register(ctx) {
           });
           return;
         }
-        let status = String(data.status || '').trim();
-        if (errorCode === 2) status = 'expired';
-        // error_code 7 的语义尚未确认，这里沿用既有的 rate_limited 映射只是因为
-        // 前端文案依赖它。实测（200ms 连打 60 次 / 伪造与作废 token / _mfaDone 态
-        // 重发）都无法在离线环境复现 7，所以「限流」这个解读很可能是错的。
-        // 真实触发条件需要靠上面的 [QishuiCheck] 埋点在真实链路取证后再定。
-        else if (errorCode === 7) status = 'rate_limited';
-        else if (status === '2') status = 'scanned';
-        else if (!status || status === '1') status = 'waiting';
+        // 状态归一交给纯函数（server/qishui/qr-status.js）：
+        // 上游数字形态（'1'/'2'/'3'）与字面量（new/scanned/confirmed/expired）都出现过，
+        // 这里不再手写 if 链，也不再给 error_code 7 安一个「限流」的语义。
+        const mapped = mapQishuiQrStatus({ status: data.status, errorCode });
         sendJSON(res, {
           provider: 'qishui',
           loggedIn: false,
-          status,
+          status: mapped.status,
           errorCode,
           error_code: errorCode,
-          retryAfterMs: errorCode === 7 ? 60000 : 0,
+          retryAfterMs: mapped.retryAfterMs,
+          // 未知状态或未知错误码时把上游原文一并透出，界面能看见它说了什么
+          rawStatus: mapped.unknown ? mapped.rawStatus : undefined,
           message: result && result.message || data.description || '',
         });
       } catch (err) {

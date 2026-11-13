@@ -329,7 +329,9 @@ function updatePlaybackProgressUi() {
   }
 
   var timeDisplay = document.getElementById('time-display');
-  if (timeDisplay) timeDisplay.textContent = formatProgramTime(currentSec) + ' / ' + (durationSec > 0 ? formatProgramTime(durationSec) : '0:00');
+  // 被限制播放时不要显示「0:00 / 0:00」——那看起来像在播但没声音
+  var blocked = typeof playbackBlockedNotice !== 'undefined' && playbackBlockedNotice;
+  if (timeDisplay) timeDisplay.textContent = blocked ? '--:-- / --:--' : (formatProgramTime(currentSec) + ' / ' + (durationSec > 0 ? formatProgramTime(durationSec) : '0:00'));
   updateBufferProgressUi();
   if (typeof maybeSyncContinueProgressLive === 'function') maybeSyncContinueProgressLive();
 }
@@ -435,6 +437,8 @@ function bindPlaybackProgressEvents(audioEl) {
   audioEl.addEventListener('playing', function () {
     if (audioEl !== audio) return;
     if (typeof setPlaybackBufferingState === 'function') setPlaybackBufferingState(false, 'playing');
+    // 真的出声了就撤掉底栏的限制态（用户补登录后重播同一首就是走这里）
+    if (typeof clearPlaybackBlockedNotice === 'function') clearPlaybackBlockedNotice();
   });
 }
 function emitProgressDragParticles(x, y) {

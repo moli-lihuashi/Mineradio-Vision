@@ -164,6 +164,11 @@
     'js/modules/05-playback/20-netease-features.js',
     // 批次2/3/4 新增接口的统一平台能力面板（IIFE + pfx 前缀，无全局重名函数）
     'js/modules/05-playback/21-platform-extras.js',
+    // 桌面宠物 · Petdex 接入（16a 动作映射表 / 16b 行走边界，都是纯数据模块）
+    'js/modules/05-playback/16a-pet-petdex-map.js',
+    'js/modules/05-playback/16b-pet-walk-bounds.js',
+    'js/modules/05-playback/16-pet-petdex.js',
+    'js/modules/05-playback/16c-pet-skin.js',
     // lyrics / playlists
     'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
     'js/modules/06-lyrics/00-built-in-playlists.js',

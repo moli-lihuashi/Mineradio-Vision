@@ -507,6 +507,8 @@ function updateControlTrackInfo(song) {
     }
   }
   if (artist) artist.textContent = song.artist || '';
+  // 这首歌正被「需要登录 / 会员不足」挡住时，第二行要继续显示原因，别被歌手名盖掉
+  if (typeof syncPlaybackBlockedNoticeForSong === 'function') syncPlaybackBlockedNoticeForSong(song);
   if (typeof updatePlaybackQualityUi === 'function') updatePlaybackQualityUi();
   if (typeof updateLyricTimingOffsetUi === 'function') updateLyricTimingOffsetUi(song);
 }

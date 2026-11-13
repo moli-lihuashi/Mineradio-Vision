@@ -65,18 +65,26 @@
     return node ? String(node.value || '').trim() : '';
   }
 
-  function nfPlaySongs(songs, index, name) {
+  // all=true：整批入队、从这首开始连续播；否则只播这一首。
+  // 旧实现无论点行还是点「播放」都是整批入队，状态却写「已把 N 首加入播放队列」——
+  // 用户点行会以为只加了队列没起播。语义、按钮和文案必须三者对齐：
+  //   点行 = 单曲播放；右侧「全部」= 从这首开始连播整批。
+  function nfPlaySongs(songs, index, name, all) {
     if (!songs || !songs.length) { nfStatus('没有可播放的歌曲', 'error'); return; }
     if (typeof global.playQueueAt !== 'function') { nfStatus('播放链路尚未就绪', 'error'); return; }
-    global.playQueue = songs.map(function (song) {
+    var at = Math.max(0, Math.min(songs.length - 1, Number(index) || 0));
+    var list = all ? songs : [songs[at]];
+    global.playQueue = list.map(function (song) {
       return typeof global.cloneSong === 'function' ? global.cloneSong(song) : Object.assign({}, song);
     });
-    global.currentIdx = Math.max(0, Math.min(global.playQueue.length - 1, Number(index) || 0));
+    global.currentIdx = Math.min(global.playQueue.length - 1, all ? at : 0);
+    var playing = global.playQueue[global.currentIdx] || {};
+    var title = playing.name || playing.title || '这首';
     Promise.resolve(global.playQueueAt(global.currentIdx, {
       manual: true,
       context: { type: 'netease-features', playlistName: name || '网易云' },
     })).catch(function (err) { nfStatus('起播失败：' + (err && err.message || err), 'error'); });
-    nfStatus('已把 ' + songs.length + ' 首加入播放队列', 'ok');
+    nfStatus(all ? ('正在播放「' + title + '」· 队列 ' + list.length + ' 首') : ('正在播放「' + title + '」'), 'ok');
   }
 
   // ---------- 结果渲染 ----------
@@ -97,7 +105,7 @@
         '<small>' + nfEsc(row.sub || row.kind) + '</small></div>';
       var actions = '';
       if (row.kind === 'song') {
-        actions += '<button type="button" data-nf-act="play" data-nf-row="' + index + '">播放</button>';
+        actions += '<button type="button" data-nf-act="play" data-nf-row="' + index + '" title="从这首开始连续播放全部">全部</button>';
         actions += '<button type="button" data-nf-act="dislike" data-nf-row="' + index + '">不喜欢</button>';
         actions += '<button type="button" data-nf-act="fm-trash" data-nf-row="' + index + '">FM 略过</button>';
       } else if (row.action === 'history-date') {
@@ -263,7 +271,7 @@
     var act = button.getAttribute('data-nf-act');
     try {
       if (act === 'play') {
-        nfPlaySongs(nfState.songs, nfState.songs.findIndex(function (s) { return String(s.id) === String(row.id); }), '网易云');
+        nfPlaySongs(nfState.songs, nfState.songs.findIndex(function (s) { return String(s.id) === String(row.id); }), '网易云', true);
         return;
       }
       if (act === 'dislike' || act === 'fm-trash') {

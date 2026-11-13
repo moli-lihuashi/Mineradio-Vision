@@ -97,7 +97,8 @@
       var row = event.target.closest('[data-pfx-row]');
       if (row && panel.contains(row)) {
         var item = pfxState.rows[Number(row.getAttribute('data-pfx-row')) || 0];
-        if (item && item.kind === 'song') pfxPlaySong(item);
+        // 右侧「全部」按钮 = 从这首开始连播整批；点行本身 = 只播这一首。
+        if (item && item.kind === 'song') pfxPlaySong(item, row.hasAttribute('data-pfx-all'));
       }
     });
     return panel;
@@ -170,21 +171,28 @@
     box.innerHTML = rows.map(function (row, i) {
       return '<div class="netease-features-row"><div class="netease-features-row-main" data-pfx-row="' + i + '">' +
         '<strong>' + pfxEsc(row.name || '未命名') + '</strong><small>' + pfxEsc(row.sub || row.kind) + '</small></div>' +
-        (row.kind === 'song' ? '<button type="button" data-pfx-row="' + i + '">播放</button>' : '') + '</div>';
+        (row.kind === 'song' ? '<button type="button" data-pfx-row="' + i + '" data-pfx-all="1" title="从这首开始连续播放全部">全部</button>' : '') + '</div>';
     }).join('');
   }
 
-  function pfxPlaySong(item) {
+  // all=true：整批入队、从这首开始连续播；否则只播这一首。
+  // 旧实现两个入口都是整批入队，状态却写「已把 N 首加入播放队列」—— 点行会以为没起播。
+  function pfxPlaySong(item, all) {
     if (typeof global.playQueueAt !== 'function') { pfxStatus('播放链路尚未就绪', 'error'); return; }
-    global.playQueue = pfxState.songs.map(function (r) {
-      return typeof global.cloneSong === 'function' ? global.cloneSong(r.song) : Object.assign({}, r.song);
+    var at = Math.max(0, pfxState.songs.indexOf(item));
+    var list = all ? pfxState.songs : [pfxState.songs[at]].filter(Boolean);
+    if (!list.length) { pfxStatus('没有可播放的歌曲', 'error'); return; }
+    global.playQueue = list.map(function (r) {
+      var song = r && r.song ? r.song : r;
+      return typeof global.cloneSong === 'function' ? global.cloneSong(song) : Object.assign({}, song);
     });
-    var idx = pfxState.songs.indexOf(item);
-    global.currentIdx = Math.max(0, idx);
+    global.currentIdx = Math.min(global.playQueue.length - 1, all ? at : 0);
+    var playing = global.playQueue[global.currentIdx] || {};
+    var title = playing.name || playing.title || '这首';
     Promise.resolve(global.playQueueAt(global.currentIdx, {
       manual: true, context: { type: 'platform-extras', playlistName: '平台能力' }
     })).catch(function (err) { pfxStatus('起播失败：' + (err && err.message || err), 'error'); });
-    pfxStatus('已把 ' + pfxState.songs.length + ' 首加入播放队列', 'ok');
+    pfxStatus(all ? ('正在播放「' + title + '」· 队列 ' + list.length + ' 首') : ('正在播放「' + title + '」'), 'ok');
   }
 
   async function pfxRun(index) {

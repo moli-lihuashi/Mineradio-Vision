@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   openSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-open-login'),
   openSpotifyMusicLoginExternal: () => ipcRenderer.invoke('spotify-music-open-login-external'),
   clearSpotifyMusicLogin: () => ipcRenderer.invoke('spotify-music-clear-login'),
+  // 打开 Petdex 宠物库（主进程硬编码目标地址，不接受前端传 URL）
+  openPetdex: () => ipcRenderer.invoke('mineradio-open-petdex'),
   exportLoginCookie: (provider) => ipcRenderer.invoke('mineradio-export-login-cookie', provider),
   exportLoginSessionPack: (payload) => ipcRenderer.invoke('mineradio-export-login-pack', payload || {}),
   importLoginSessionPack: (payload) => ipcRenderer.invoke('mineradio-import-login-pack', payload || {}),

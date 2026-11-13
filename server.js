@@ -237,7 +237,10 @@ const PATCH_STATIC_EXTENSIONS = new Set([
 ]);
 const UPDATE_PUBKEY_PEM = String(process.env.MINERADIO_UPDATE_PUBKEY_PEM || '').trim();
 const PROXY_FETCH_TIMEOUT_MS = 30000;
-const API_AUTH_QUERY_TOKEN_PATHS = new Set(['/api/audio', '/api/cover']);
+// 允许用 ?token= 鉴权的路径：这些 URL 会直接进 <img> / <audio> 的 src，
+// 浏览器标签发不了自定义头，只能走 query。
+// /api/pets/local/asset 是桌宠精灵表（同样是 <img> 加载），少它就会 401 → 解码失败。
+const API_AUTH_QUERY_TOKEN_PATHS = new Set(['/api/audio', '/api/cover', '/api/pets/local/asset']);
 const UPDATE_FALLBACK_NOTES = [
   '电影镜头节奏更松',
   '音源失败自动换源',
@@ -2011,6 +2014,8 @@ const routeCtx = {
 const routeMatchers = [
   require('./server/routes/update')(routeCtx),
   require('./server/routes/home')(routeCtx),
+  // 桌面宠物 · Petdex 接入（搜索代理 / 本地安装缓存 / 精灵表回传）
+  require('./server/routes/pets')(routeCtx),
   require('./server/routes/netease')(routeCtx),
   require('./server/routes/qq')(routeCtx),
   require('./server/routes/kugou')(routeCtx),

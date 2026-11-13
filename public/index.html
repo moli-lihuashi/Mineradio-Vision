@@ -93,7 +93,13 @@ try {
     <div class="desktop-app-title" aria-hidden="true"></div>
   </div>
   <div class="desktop-window-controls">
-    <button id="visual-guide-btn" class="icon-btn" type="button" onclick="startVisualGuide({ manual: true })" title="查看使用引导" aria-label="查看使用引导">?</button>
+    <button id="visual-guide-btn" class="icon-btn" type="button" onclick="startVisualGuide({ manual: true })" title="查看使用引导" aria-label="查看使用引导">
+      <svg class="visual-guide-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9.4"/>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+        <path d="M12 17h.01"/>
+      </svg>
+    </button>
     <button id="update-entry" class="update-entry" type="button" onclick="openUpdatePanel()" title="发现新版本" aria-label="发现新版本">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle class="update-ring" cx="12" cy="12" r="8.8"></circle>
@@ -266,9 +272,32 @@ try {
       <div class="home-pet-card" data-home-tone="pet" data-card-id="pet" role="button" tabindex="0" onclick="homePetInteract()" title="戳戳它">
         <div class="home-card-label" id="home-pet-label">Companion</div>
         <canvas class="home-pet-canvas" id="home-pet-canvas" width="192" height="96"></canvas>
-        <button class="home-pet-swap" type="button" onclick="event.stopPropagation(); homePetCycleCharacter()" title="换一只伙伴">⇄</button>
-        <button class="home-pet-swap" type="button" onclick="event.stopPropagation(); homePetPickPhoto()" title="上传照片生成像素伙伴" style="right:44px">📷</button>
+        <!-- 照片生成 / Petdex 导入已收进顶栏「皮肤」弹层的「桌面宠物」板块。
+             这里只留一个 ⇄，做跨类型轮换（内置 → 照片 → Petdex → 内置）。 -->
+        <button class="home-pet-swap" type="button" onclick="event.stopPropagation(); homePetCycleCharacter()" title="换一只伙伴（跨内置/照片/Petdex 轮换）" style="right:44px">⇄</button>
         <div class="home-card-sub" id="home-pet-status">醒来 · 陪着你</div>
+      </div>
+      <!-- Petdex 宠物库面板：模块 05-playback/16-pet-petdex.js。
+           放 fixed 层，避免被 #empty-home 的卡片 overflow 裁掉。 -->
+      <div id="home-pet-dex" class="home-pet-dex" hidden>
+        <div class="home-pet-dex-box" role="dialog" aria-label="Petdex 宠物库">
+          <header class="home-pet-dex-head">
+            <strong>Petdex 宠物库</strong>
+            <button type="button" data-dex-close title="关闭">×</button>
+          </header>
+          <div class="home-pet-dex-search">
+            <button type="button" class="home-pet-dex-browse" data-dex-open>在浏览器里挑宠物 →</button>
+          </div>
+          <div class="home-pet-dex-hint">挑好后复制宠物页地址（形如 petdex.dev/zh/pets/hachiware-2），粘到下面导入。</div>
+          <div class="home-pet-dex-import">
+            <input id="home-pet-dex-input" type="text" placeholder="petdex.dev/zh/pets/xxx 或 hachiware-2" />
+            <button type="button" data-dex-import>导入</button>
+            <button type="button" data-dex-off>用回内置</button>
+          </div>
+          <div class="home-pet-dex-status" id="home-pet-dex-status"></div>
+          <div class="home-pet-dex-installed" id="home-pet-dex-installed"></div>
+          <div class="home-pet-dex-note">宠物来自 petdex.dev 开源宠物库。导入后缓存在本地、离线可用；「移除」只删本地缓存，想用再导入一次。</div>
+        </div>
       </div>
     </div>
 
@@ -574,6 +603,19 @@ try {
       <small>点亮红心时，整屏演一场</small>
     </div>
     <div class="scene-fx-grid" id="skin-scene-fx-grid"></div>
+  </div>
+  <!-- 桌面宠物：内置 / 照片生成 / Petdex 三类统一在这里切换，由 16c-pet-skin.js 渲染 -->
+  <div class="skin-section">
+    <div class="skin-section-head">
+      <strong>桌面宠物</strong>
+      <small>首页卡片的同伴，点一格立即换</small>
+    </div>
+    <div class="pet-skin-grid" id="skin-pet-grid"></div>
+    <div class="pet-skin-actions">
+      <button type="button" class="pet-skin-action" data-pet-act="photo">用照片生成</button>
+      <button type="button" class="pet-skin-action" data-pet-act="petdex">从 Petdex 导入</button>
+    </div>
+    <div class="pet-skin-note" id="skin-pet-note"></div>
   </div>
   <!-- 控制条底层频谱：四格（三套样式 + 关闭），由 07-fx/05f 渲染 -->
   <div class="skin-section">
@@ -1106,7 +1148,7 @@ try {
         </div>
       </div>
       <div class="fx-section-label" id="wallpaper-settings-label" hidden>壁纸模式</div>
-      <div class="fx-section-label" id="wallpaper-fps-label" hidden>壁纸帧数</div>
+      <div class="fx-section-label" id="wallpaper-fps-label" hidden>壁纸模式帧率（作用于壁纸，不是桌面歌词）</div>
       <div class="fx-seg" id="wallpaper-fps-seg" hidden>
         <button data-wallpaper-fps="24">24</button>
         <button data-wallpaper-fps="30">30</button>

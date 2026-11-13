@@ -124,6 +124,38 @@
       background-clip:text;
     }
     .line.in{animation:lyr-in 820ms cubic-bezier(.16,.84,.32,1.02) forwards}
+    /* ---- 单行模式的换行动效 ----
+       以前单行（默认行数 1）换行只播上面那条固定的 lyr-in，四种「换行动效」看起来
+       完全一样 —— 面板上选什么都没反应。这里按 body.motion-* 分支出不同入场，
+       和多行栈（.line-row）用同一套语义：上浮 / 3D 翻转 / 呼吸 / 静止。 */
+    @keyframes lyr-motion-slide{
+      0%{opacity:0;transform:translate3d(0,34px,0) scale(.92);filter:blur(8px)}
+      58%{opacity:1;filter:blur(0)}
+      100%{opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0)}
+    }
+    @keyframes lyr-motion-flip{
+      0%{opacity:0;transform:perspective(620px) rotateX(-74deg) translate3d(0,10px,0);filter:blur(4px)}
+      58%{opacity:1;filter:blur(0)}
+      100%{opacity:1;transform:perspective(620px) rotateX(0deg) translate3d(0,0,0);filter:blur(0)}
+    }
+    @keyframes lyr-motion-breathe{
+      0%,100%{transform:translate3d(0,0,0) scale(1)}
+      /* 幅度不能太小：3px / 1.5% 在 58px 字号下肉眼不可见（实测「呼吸没有效果」） */
+      50%{transform:translate3d(0,-8px,0) scale(1.04)}
+    }
+    /* 呼吸的「换行反馈」：入场短促弹一下，呼吸从入场结束接上。
+       两个动画叠加在同一规则里；float-in 只 fill transform，opacity 交给 breathe 规则，
+       否则 fill 的 opacity:1 会顶掉暂停时的 .84。 */
+    @keyframes lyr-float-in{
+      0%{transform:scale(.94)}
+      100%{transform:scale(1)}
+    }
+    body.motion-slide .line.in{animation:lyr-motion-slide .60s cubic-bezier(.16,.84,.32,1) both}
+    body.motion-flip .line.in{animation:lyr-motion-flip .66s cubic-bezier(.2,.82,.24,1) both}
+    /* :not(.paused) —— 暂停时别继续呼吸，也别把 .paused 的 0.84 透明度顶掉 */
+    body.motion-float:not(.paused) .line{opacity:1;animation:lyr-motion-breathe 4.6s ease-in-out infinite}
+    body.motion-float:not(.paused) .line.in{animation:lyr-float-in .55s cubic-bezier(.2,.8,.24,1) both,lyr-motion-breathe 4.6s .55s ease-in-out infinite}
+    body.motion-none .line.in{animation:none;opacity:1}
     body.paused .line{filter:none;opacity:.84}
     .line-next{
       display:block;
@@ -233,11 +265,20 @@
     }
     @keyframes row-breathe{
       0%,100%{transform:translate3d(0,0,0) scale(1)}
-      50%{transform:translate3d(0,-3px,0) scale(1.015)}
+      /* 幅度不能太小：3px / 1.5% 在 30px 左右的行字号下肉眼不可见（实测「呼吸没有效果」） */
+      50%{transform:translate3d(0,-7px,0) scale(1.04)}
+    }
+    /* 呼吸的「换行反馈」：其他三档换行都有入场，「呼吸」换成短促弹一下 + 呼吸接续。
+       叠在 .active.enter 上（特异性高于单 breathe），fill 只占 transform/opacity，
+       暂停时整条规则不匹配（:not(.paused)），不会顶掉暂停态。 */
+    @keyframes row-float-in{
+      0%{opacity:.15;transform:scale(.94)}
+      100%{opacity:1;transform:scale(1)}
     }
     body.motion-slide .line-row.enter{animation:row-slide .58s cubic-bezier(.16,.84,.32,1) both}
     body.motion-flip .line-row.enter{animation:row-flip .64s cubic-bezier(.2,.82,.24,1) both}
-    body.motion-float .line-row.active{animation:row-breathe 4.6s ease-in-out infinite}
+    body.motion-float:not(.paused) .line-row.active{animation:row-breathe 4.6s ease-in-out infinite}
+    body.motion-float:not(.paused) .line-row.active.enter{animation:row-float-in .55s cubic-bezier(.2,.8,.24,1) both,row-breathe 4.6s .55s ease-in-out infinite}
     body.motion-none .line-row{transition:opacity .18s linear}
     .lock-hint{
       position:absolute;
@@ -366,6 +407,8 @@
     var stackRows = [];
     var stackActiveIdx = -1;
     var stackSignature = '';
+    // 窗口正中那行的进度，用来兜住「连续两句歌词一模一样」时文本签名不变的情况
+    var stackActiveProgress = 0;
     var lockHint = document.getElementById('lockHint');
     var lockText = document.getElementById('lockText');
     var closeLyricsBtn = document.getElementById('closeLyricsBtn');
@@ -964,6 +1007,8 @@
       document.body.classList.toggle('stack-mode', stackMode);
       if (!stackMode) {
         stackActiveIdx = -1;
+        stackSignature = '';
+        stackActiveProgress = 0;
         return;
       }
       ensureStackRows(count);
@@ -973,6 +1018,8 @@
       }
       var activeChanged = activeIdx !== stackActiveIdx;
       var overhang = stackTiltOverhang();
+      var signature = '';
+      var activeProgress = 0;
       for (var j = 0; j < stackRows.length; j++) {
         var row = stackRows[j];
         var data = rows[j] || { text: '', progress: 0, active: false };
@@ -983,11 +1030,23 @@
         row.classList.toggle('future', !!text && j > activeIdx);
         row.classList.toggle('active', !!data.active && !!text);
         row.style.fontSize = fitStackByHeight(count, fitRowText(row, rowFontFor(count, !!data.active), overhang)) + 'px';
-        if (data.active) row.style.setProperty('--row-progress', (clamp(data.progress, 0, 1, 0) * 100).toFixed(2) + '%');
+        if (data.active) {
+          row.style.setProperty('--row-progress', (clamp(data.progress, 0, 1, 0) * 100).toFixed(2) + '%');
+          activeProgress = clamp(data.progress, 0, 1, 0);
+        }
+        signature += text + '\u001f';
       }
       stackActiveIdx = activeIdx;
-      // 只有「换到新的一句」才播入场动效；同一句的进度推进不重播，避免一直闪
-      if (activeChanged && stackRows[activeIdx]) {
+      /* 只有「换到新的一句」才播入场动效；同一句的进度推进不重播，避免一直闪。
+       * 注意：payload 里 active 恒定落在窗口正中（desktopLyricWindow 的 k === half），
+       * 所以 activeIdx 永远是同一个数字 —— 光比 activeIdx 永远不会触发，换行时
+       * 四种动效看起来完全一样。真正的换行信号是「整窗文本签名变了」；
+       * 连续两句歌词字面相同的情况再用「进度回退」兜住。 */
+      var progressReset = activeIdx >= 0 && activeProgress + .5 < stackActiveProgress;
+      var lineChanged = activeChanged || signature !== stackSignature || progressReset;
+      stackSignature = signature;
+      stackActiveProgress = activeProgress;
+      if (lineChanged && activeIdx >= 0 && stackRows[activeIdx] && state.lyricMotion !== 'none') {
         var activeRow = stackRows[activeIdx];
         activeRow.classList.remove('enter');
         void activeRow.offsetWidth;

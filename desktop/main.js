@@ -2666,6 +2666,19 @@ ipcMain.handle('spotify-music-clear-login', async () => {
   return clearSpotifyMusicLoginSession();
 });
 
+// 桌面宠物 · 打开 Petdex 宠物库。
+// 目标地址硬编码：不接收渲染进程传入的 URL，这个 IPC 就不会退化成「任意链接打开器」。
+ipcMain.handle('mineradio-open-petdex', async () => {
+  // 实测：/zh/pets 与 /pets 都是 404（列表页不存在）；/zh 首页可用（含精选、合集、排行榜）
+  const target = 'https://petdex.dev/zh';
+  try {
+    await shell.openExternal(target);
+    return { ok: true, url: target };
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
+});
+
 ipcMain.handle('spotify-status', async (_event) => {
   try {
     return await spotifyApi().handleSpotifyStatus();
@@ -3601,6 +3614,8 @@ async function ensureLocalServerStarted() {
     }
     process.env.LLM_SECRET_FILE = path.join(_stableUserData, '.llm-secret.dat');
     process.env.LLM_CONFIG_FILE = path.join(_stableUserData, '.llm-config.json');
+    // 桌面宠物（Petdex 精灵表）落盘目录：跟着 userData 走，避免写进安装目录
+    process.env.MINERADIO_PET_DIR = path.join(_stableUserData, 'pets');
     process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_FILE = path.join(_stableUserData, LOGIN_EASTER_EGG_STATE_FILE);
     process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_VERSION = LOGIN_EASTER_EGG_GATE_VERSION;
     process.env.MINERADIO_UPDATE_DIR = (cacheSettings && cacheSettings.updatesPath) || getUpdateDownloadDir();
