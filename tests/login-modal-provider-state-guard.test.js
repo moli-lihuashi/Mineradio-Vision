@@ -14,8 +14,8 @@
  *      → 表现为「标题正常、中间空白」。
  *   2) logoutLoginProvider() 的 provider 白名单漏了 qishui，会把 'qishui'
  *      归成 'netease' → 点「退出汽水」实际退的是网易云。
- *   3) refreshQr() 汽水分支在请求前就清空 qsImg.src，且 rate_limited 直接
- *      stopQrPoll() → 一旦上游限流，二维码永久空白且手机端确认再也拾取不到。
+ *   3) refreshQr() 汽水分支在请求前就清空 qsImg.src，且上游回 error_code 7 时
+ *      直接 stopQrPoll() → 二维码永久空白且手机端确认再也拾取不到。
  *
  * 纯静态断言，不启动 Electron。
  */
@@ -132,18 +132,20 @@ test('refreshQr 汽水分支在请求前不清空 qsImg.src', () => {
   );
 });
 
-test('rate_limited 分支保留延迟重试，而非彻底停轮询', () => {
-  const idx = FLOWS.indexOf("qsStatus === 'rate_limited'");
-  assert.ok(idx > -1, '找不到 rate_limited 分支');
+test('上游错误码 7 分支保留延迟重试，而非彻底停轮询', () => {
+  // 状态名在 2026-11-13 由 rate_limited 改为中性的 upstream_code_7（7 的语义未确认，
+  // 不再断言它就是限流）。断言的行为契约不变：停高频轮询 + 按 retryAfterMs 延迟重试一次。
+  const idx = FLOWS.indexOf("qsStatus === 'upstream_code_7'");
+  assert.ok(idx > -1, '找不到 upstream_code_7 分支（上游回 error_code 7 时的处理分支）');
 
   // 取该分支到下一个 else if 之间
   const nextBranch = FLOWS.indexOf('else if (qsStatus ===', idx + 10);
   const branch = FLOWS.slice(idx, nextBranch > -1 ? nextBranch : idx + 900);
 
-  assert.ok(/stopQrPoll\(\)/.test(branch), 'rate_limited 仍须停掉高频轮询');
+  assert.ok(/stopQrPoll\(\)/.test(branch), 'error_code 7 仍须停掉高频轮询');
   assert.ok(
     /setTimeout\(/.test(branch) && /startQrPoll\(\)/.test(branch),
-    'rate_limited 必须安排一次延迟重试（setTimeout + startQrPoll），否则手机端确认后永远拾取不到',
+    'error_code 7 必须安排一次延迟重试（setTimeout + startQrPoll），否则手机端确认后永远拾取不到',
   );
   assert.ok(/retryAfterMs/.test(branch), '重试间隔应取自服务端 retryAfterMs');
 });

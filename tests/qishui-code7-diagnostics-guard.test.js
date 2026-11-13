@@ -86,7 +86,7 @@ check('取证埋点记录 error_code / status / elapsed', () => {
   const block = ROUTE.slice(idx, idx + 900);
   assert.ok(/error_code=/.test(block), '必须记录 error_code');
   assert.ok(/status=/.test(block), '必须记录上游 status（区分 new/scanned/confirmed）');
-  assert.ok(/elapsed=/.test(block), '必须记录耗时（区分「上游慢」与「被限流」）');
+  assert.ok(/elapsed=/.test(block), '必须记录耗时（区分「上游慢」与「上游直接回错误码」）');
 });
 
 // ---- 5. 埋点不得泄露完整 token / cookie ----
@@ -124,16 +124,34 @@ check('取证埋点自身异常不影响登录流程', () => {
   );
 });
 
-// ---- 8. 不得把 7 的语义写成「确定是限流」 ----
+// ---- 8. 不得把 7 的语义写成「确定是限流」，但降频必须保留 ----
 check('7 的语义标注为待确认（不得再断言就是限流）', () => {
-  // 定位「映射成 rate_limited」的那个分支，而不是埋点里的判断。
-  const idx = ROUTE.indexOf("status = 'rate_limited'");
-  assert.ok(idx >= 0, "必须保留 7 → rate_limited 的映射（前端文案依赖它）");
-  const block = ROUTE.slice(Math.max(0, idx - 600), idx + 200);
-  // 允许保留 rate_limited 映射，但旁边必须有「待确认/复现不出/需真实链路取证」说明
+  // 状态映射已从 routes/qishui.js 抽到 server/qishui/qr-status.js（2026-11-13 归一化），
+  // 所以这里改判两个文件：路由不许再自己造状态名，映射函数必须仍然降频且不命名语义。
   assert.ok(
-    /(复现|取证|待确认|真实链路)/.test(block),
-    '7 的语义尚未确认，代码里必须保留「需真实链路取证」的说明，避免后人再次直接当成限流',
+    !/rate_limited/.test(ROUTE),
+    'routes/qishui.js 不得再产出 rate_limited：状态归一已收口到 qr-status.js',
+  );
+  const QR_STATUS = readSource('server/qishui/qr-status.js');
+  const idx = QR_STATUS.indexOf('if (errorCode === 7)');
+  assert.ok(idx >= 0, '必须保留 error_code 7 的映射分支（前端靠 retryAfterMs 决定何时再轮询）');
+  const block = QR_STATUS.slice(idx, idx + 400);
+  assert.ok(
+    /status:\s*'upstream_code_7'/.test(block),
+    "7 应映射成中性状态名 upstream_code_7，不得再造 rate_limited 这种带语义断言的名字",
+  );
+  assert.ok(
+    /retryAfterMs:\s*QR_RETRY_AFTER_MS/.test(block),
+    '7 必须继续返回降频间隔（QR_RETRY_AFTER_MS），否则前端会按 2 秒节奏继续打上游',
+  );
+  assert.ok(
+    !/rate_limited/.test(QR_STATUS),
+    'qr-status.js 不得出现 rate_limited：那个名字本身就是「已确认是限流」的断言',
+  );
+  // 语义说明必须留在代码里：后人看到 7 不会再直接当成限流
+  assert.ok(
+    /(语义|未确认|证伪|取证)/.test(QR_STATUS.slice(Math.max(0, idx - 900), idx)),
+    '7 的语义尚未确认，映射分支上方必须保留「语义未确认 / 已被探针证伪」的说明',
   );
 });
 

@@ -12,9 +12,8 @@
  *      → 脚本一失败就 show 后立刻 hide，用户只看到「一闪」；
  *   3) checkQrConnect() 只在成功时记 _mfaDone，失败后没有任何终止标记
  *      → 每 2 秒轮询都会重新 show 一次窗口；
- *   4) 每次重弹都重新请求 check_qrconnect（带 2046）→ 上游按频率判
- *      error_code 7（rate_limited）；前端 rate_limited 分支又不停轮询
- *      → 限流窗口永远不结束。
+ *   4) 每次重弹都重新请求 check_qrconnect（带 2046）→ 上游回 error_code 7；
+ *      前端若还不停轮询 → 状态来回跳、上游被重复打，7 的等待期永远不结束。
  *
  * 纯静态断言，不启动 Electron。真实链路验证见
  * scripts/probe-qishui-websecurity.js --real-module。
@@ -193,18 +192,19 @@ function testFrontendHandlesMfaStatuses() {
     '前端必须保留 mfa_failed / mfa_cancelled 两个分支',
   );
 
-  // rate_limited 必须停轮询，否则每 2 秒继续打上游，限流窗口永不结束。
-  const rateBlock = block.slice(
-    block.indexOf("qsStatus === 'rate_limited'"),
+  // 上游回 error_code 7 时必须停轮询，否则每 2 秒继续打上游、状态来回跳。
+  // 状态名在 2026-11-13 由 rate_limited 改为中性的 upstream_code_7（7 的语义未确认）。
+  const code7Block = block.slice(
+    block.indexOf("qsStatus === 'upstream_code_7'"),
     block.indexOf("qsStatus === 'mfa_cancelled'"),
   );
-  assert.ok(rateBlock, '前端必须保留 rate_limited 分支');
+  assert.ok(code7Block, '前端必须保留 upstream_code_7 分支（上游回 error_code 7）');
   assert.ok(
-    /stopQrPoll\s*\(/.test(rateBlock),
-    'rate_limited 分支必须 stopQrPoll()：否则每 2 秒继续请求上游，' +
-    'retryAfterMs 60000 的限流窗口永远不结束',
+    /stopQrPoll\s*\(/.test(code7Block),
+    'upstream_code_7 分支必须 stopQrPoll()：否则每 2 秒继续请求上游，' +
+    '服务端给的 retryAfterMs 降频窗口形同虚设',
   );
-  console.log('  [OK] 前端能收到 mfa_* 状态，且限流时停止轮询');
+  console.log('  [OK] 前端能收到 mfa_* 状态，且 error_code 7 时停止轮询');
 }
 
 // ---------------------------------------------------------------------------
