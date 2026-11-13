@@ -34,6 +34,9 @@ function shouldUseIdleWallpaperPreview(ignoreSplash) {
   if (immersiveMode || playing || (audio && !audio.paused)) return false;
   if (shelfPinnedOpen) return false;
   if (shelfManager && shelfManager.hasOpenContent && shelfManager.hasOpenContent()) return false;
+  // Wallpaper Engine 壁纸激活时背景归它所有：空闲主页预览若接管，
+  // 粒子画布（z=2）会盖住壁纸层（z=0）→ 控制台一隐藏就发黑（2026-11-13 实测）
+  if (document.body.classList.contains('wallpaper-engine-active')) return false;
   return true;
 }
 function setHomeControlsLocked(locked) {
@@ -75,6 +78,9 @@ function ensureHomeWallpaperParticles(opts) {
 }
 function activateHomeWallpaperPreview(opts) {
   opts = opts || {};
+  // 咽喉守卫：Wallpaper Engine 壁纸激活时背景归它所有，空闲预览不得接管
+  // （showHome 内的调用是无条件直调，绕过 shouldUseIdleWallpaperPreview）
+  if (document.body.classList.contains('wallpaper-engine-active')) return;
   document.body.classList.add('home-wallpaper-preview');
   ensureHomeWallpaperParticles(Object.assign({ instant: true }, opts));
 }

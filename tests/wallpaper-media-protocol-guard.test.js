@@ -33,8 +33,8 @@ test('mineradio-wallpaper 协议必须在 whenReady 里挂上处理器', () => {
   );
   assert.match(
     librarySrc,
-    /await protocol\.handle\(WALLPAPER_ENGINE_SCHEME,\s*\(request\) => this\.mediaResponse\(request\)\)/,
-    'installProtocol 必须把请求接到 mediaResponse',
+    /await protocol\.handle\(WALLPAPER_ENGINE_SCHEME,/,
+    'installProtocol 必须把请求接到处理器（具体包装由防悬挂守卫锁定）',
   );
   // 注册特权 scheme 必须发生在 main.js 顶层（app ready 之前才有效）
   assert.match(
@@ -154,6 +154,55 @@ test('视频必须退居解码角色：镜像激活时 display:none，回读链�
   );
 });
 
+test('协议处理器绝不能悬挂：disposed / 异常 / 超时都要立即给响应', () => {
+  // 启动自动恢复壁纸会发 mineradio-wallpaper:// 请求；若此时协议处理器抛错或
+  // 挂起，页面 did-finish-load 等不到 → 15s 后 MR-BOOT-WINDOW-LOAD 报错弹窗
+  // （2026-11-13 用户连续两次启动失败，startup-error.log 里 did-fail-load:-3
+  //  + "Wallpaper Engine library is closed" 即此链路）
+  assert.match(
+    librarySrc,
+    /mediaResponse\(request\)[\s\S]{0,300}if \(this\.disposed\) return new Response\('Not found'/,
+    'mediaResponse 必须先判 disposed 并返回 404，不能让已释放的库继续处理',
+  );
+  assert.match(
+    librarySrc,
+    /installProtocol\(protocol\)[\s\S]{0,900}setTimeout\(\(\) => resolve\(notFound\(504\)\), 8000\)/,
+    'installProtocol 必须有 8 秒超时兜底（小于 15s 的 loadURL 超时）',
+  );
+  assert.match(
+    librarySrc,
+    /mediaResponse\(request\)\.catch\(\(\) => notFound\(500\)\)/,
+    'mediaResponse 的任何异常必须转成 500 响应，不能抛给 protocol.handle',
+  );
+});
+
+test('壁纸方向：WebGL 着色器必须翻转 UV 的 Y（ImageData 顶行在 v=0）', () => {
+  // 2026-11-13 用户实测壁纸上下颠倒：ImageData 顶行上传到 v=0，
+  // 而屏幕上沿对应 aPos.y=+1，直接用 aPos*0.5+0.5 会把视频顶行画到屏幕底
+  const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
+  assert.match(
+    fnsSrc,
+    /vUv=vec2\(aPos\.x\*0\.5\+0\.5,0\.5-aPos\.y\*0\.5\)/,
+    '顶点着色器必须翻转 Y：屏幕顶采样视频顶行',
+  );
+});
+
+test('空闲主页预览不得在 WE 壁纸激活时接管背景', () => {
+  // 控制台隐藏 → showHome → activateHomeWallpaperPreview 无条件直调，
+  // 粒子画布(z=2)盖住壁纸层(z=0) → 全屏发黑（用户 2026-11-13 实测）
+  const homeSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/05-playback/04-home-empty-wallpaper.js'), 'utf8');
+  assert.match(
+    homeSrc,
+    /function activateHomeWallpaperPreview[\s\S]{0,300}wallpaper-engine-active[\s\S]{0,120}return/,
+    'activateHomeWallpaperPreview 必须在咽喉处挡住 WE 激活态（showHome 会绕过条件直调）',
+  );
+  assert.match(
+    homeSrc,
+    /function shouldUseIdleWallpaperPreview[\s\S]{0,500}wallpaper-engine-active[\s\S]{0,120}return false/,
+    'shouldUseIdleWallpaperPreview 也必须有同样守卫',
+  );
+});
+
 test('镜像必须是 WebGL + CPU 像素拷贝：视频帧直传与重绘 2D canvas 都无法被玻璃回读', () => {
   // 第五层坑（2026-11-13 实机实验矩阵定案）：backdrop-filter 回读对
   // 「每帧重绘的 2D canvas」返回黑（GPU 与 willReadFrequently CPU 均如此），
@@ -170,13 +219,15 @@ test('镜像必须是 WebGL + CPU 像素拷贝：视频帧直传与重绘 2D can
   );
   assert.match(
     fnsSrc,
-    /willReadFrequently:\s*true/,
-    '中转画布必须 willReadFrequently（每帧 getImageData）',
+    /createImageBitmap\(m\.mid\)[\s\S]{0,600}bitmap\.close\(\)/,
+    '主路径必须 createImageBitmap(GPU 拷贝) 且用完 close()：'
+    + 'getImageData 每帧数 MB 垃圾会把渲染进程压到 OOM（2026-11-13 实测崩溃），'
+    + '而 texImage2D 直传视频元素的 GPU 纹理回读不了',
   );
   assert.match(
     fnsSrc,
-    /m\.gl\.texImage2D\(m\.gl\.TEXTURE_2D, 0, m\.gl\.RGBA, canvas\.width, canvas\.height, 0,/,
-    '必须用 9 参形式从 CPU 像素上传（6 参视频元素直传的纹理回读不了）',
+    /uploadPending/,
+    '必须有 uploadPending 防排队堆积（上传是异步的）',
   );
   assert.match(
     fnsSrc,

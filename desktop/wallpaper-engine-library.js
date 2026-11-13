@@ -821,6 +821,10 @@ class WallpaperEngineLibrary {
   }
 
   async mediaResponse(request) {
+    // 应用退出/多实例竞态时 library 已释放，绝不能让请求悬挂：
+    // 挂起的 protocol.handle 请求会拖住页面 did-finish-load，
+    // 15s 后直接报 MR-BOOT-WINDOW-LOAD（2026-11-13 实测两次）
+    if (this.disposed) return new Response('Not found', { status: 404, headers: { 'X-Content-Type-Options': 'nosniff' } });
     const method = String(request && request.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD') {
       return new Response('Method not allowed', {
@@ -828,7 +832,13 @@ class WallpaperEngineLibrary {
         headers: { 'Allow': 'GET, HEAD', 'X-Content-Type-Options': 'nosniff' },
       });
     }
-    if (!this.snapshot && !this.scanPromise) await this.list({ force: false });
+    // list() 在 disposed 时会抛；此处不许把异常抛给 protocol.handle，
+    // 否则请求悬挂 → did-finish-load 等不到 → MR-BOOT-WINDOW-LOAD
+    if (!this.snapshot && !this.scanPromise) {
+      try { await this.list({ force: false }); } catch (_) {
+        return new Response('Not found', { status: 404, headers: { 'X-Content-Type-Options': 'nosniff' } });
+      }
+    }
     let url;
     let id;
     try {
@@ -880,7 +890,21 @@ class WallpaperEngineLibrary {
 
   async installProtocol(protocol) {
     if (this.protocolInstalled) return;
-    await protocol.handle(WALLPAPER_ENGINE_SCHEME, (request) => this.mediaResponse(request));
+    // 任何异常/挂起都必须在 8 秒内变成明确的 HTTP 响应，绝不拖住页面加载
+    await protocol.handle(WALLPAPER_ENGINE_SCHEME, (request) => {
+      const notFound = (status) => new Response('Not found', {
+        status,
+        headers: { 'X-Content-Type-Options': 'nosniff' },
+      });
+      let timer = null;
+      const guard = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(notFound(504)), 8000);
+      });
+      return Promise.race([
+        this.mediaResponse(request).catch(() => notFound(500)),
+        guard,
+      ]).finally(() => { if (timer) clearTimeout(timer); });
+    });
     this.protocolInstalled = true;
   }
 

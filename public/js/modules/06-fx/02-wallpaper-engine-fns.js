@@ -210,6 +210,10 @@ function wallpaperEngineLayerReady(kind, token) {
     if (kind === 'video' && wallpaperEngineSelection.kind === 'engine') layer.classList.add('engine-ready');
   }
   document.body.classList.add('wallpaper-engine-active');
+  // 空闲主页预览若已在接管背景（用户从隐藏控制台状态下选壁纸），立即让位
+  if (document.body.classList.contains('home-wallpaper-preview') && typeof deactivateHomeWallpaperPreview === 'function') {
+    try { deactivateHomeWallpaperPreview(false); } catch (ePrev) { }
+  }
   if (kind === 'video') {
     var layerVideo = document.getElementById('wallpaper-engine-video');
     if (layerVideo) wallpaperEngineGlassMirrorStart(layerVideo, token);
@@ -285,7 +289,7 @@ function clearWallpaperEngineLayerMedia(delay) {
 var wallpaperEngineGlassMirror = {
   video: null, canvas: null, token: 0, rafId: 0, lastRaf: 0, boxKey: '',
   gl: null, program: null, buffer: null, texture: null, uUVScale: null, uUVOffset: null,
-  mid: null, midCtx: null, ctx2d: null, mode: '',
+  mid: null, midCtx: null, ctx2d: null, mode: '', uploadPending: false, useGetDataFallback: false,
 };
 
 function wallpaperEngineGlassMirrorElement() {
@@ -308,7 +312,7 @@ function wallpaperEngineGlassMirrorInitGl(canvas) {
     powerPreference: 'low-power',
   });
   if (!gl) return null;
-  var vsSrc = 'attribute vec2 aPos;varying vec2 vUv;void main(){vUv=aPos*0.5+0.5;gl_Position=vec4(aPos,0.0,1.0);}';
+  var vsSrc = 'attribute vec2 aPos;varying vec2 vUv;void main(){vUv=vec2(aPos.x*0.5+0.5,0.5-aPos.y*0.5);gl_Position=vec4(aPos,0.0,1.0);}';
   var fsSrc = 'precision mediump float;varying vec2 vUv;uniform sampler2D uTex;uniform vec2 uScale;uniform vec2 uOffset;'
     + 'void main(){gl_FragColor=vec4(texture2D(uTex,clamp(uOffset+vUv*uScale,vec2(0.0),vec2(1.0))).rgb,1.0);}';
   function compile(type, src) {
@@ -358,6 +362,8 @@ function wallpaperEngineGlassMirrorStop() {
   m.video = null;
   m.rafId = 0;
   m.boxKey = '';
+  m.uploadPending = false;
+  m.useGetDataFallback = false;
   try { document.body.classList.remove('wallpaper-engine-video-ready'); } catch (e4) { }
   if (m.gl && m.canvas) {
     try {
@@ -405,7 +411,9 @@ function wallpaperEngineGlassMirrorStart(video, token) {
     if (!m.mid || m.mid.width !== bw || m.mid.height !== bh) {
       m.mid = document.createElement('canvas');
       m.mid.width = bw; m.mid.height = bh;
-      m.midCtx = m.mid.getContext('2d', { willReadFrequently: true });
+      // 不加 willReadFrequently：主路径走 createImageBitmap（GPU 拷贝，J3 实验
+      // 实锤可读），强制 CPU 背存反而多一次拷贝；getImageData 仅是老内核兜底
+      m.midCtx = m.mid.getContext('2d');
     }
     gl.uniform2f(m.uUVScale, 1, 1);
     gl.uniform2f(m.uUVOffset, 0, 0);
@@ -432,7 +440,7 @@ function wallpaperEngineGlassMirrorStart(video, token) {
         }
       }
       var vw = video.videoWidth, vh = video.videoHeight;
-      if (vw && vh) {
+      if (vw && vh && !document.hidden) {
         var isFill = !!(layer && layer.classList.contains('engine-ready'));
         if (m.mode === 'webgl' && m.gl && m.midCtx) {
           // cover 裁切在 2D 中转画布上完成，上传后直接铺满
@@ -443,17 +451,41 @@ function wallpaperEngineGlassMirrorStart(video, token) {
           } else {
             m.midCtx.drawImage(video, (canvas.width - dwCover) / 2, (canvas.height - dhCover) / 2, dwCover, dhCover);
           }
-          var pixels = m.midCtx.getImageData(0, 0, canvas.width, canvas.height);
           m.gl.viewport(0, 0, canvas.width, canvas.height);
           m.gl.useProgram(m.program);
           m.gl.bindTexture(m.gl.TEXTURE_2D, m.texture);
-          try {
-            m.gl.texImage2D(m.gl.TEXTURE_2D, 0, m.gl.RGBA, canvas.width, canvas.height, 0,
-              m.gl.RGBA, m.gl.UNSIGNED_BYTE, new Uint8Array(pixels.data.buffer));
-          } catch (eUp) { }
           m.gl.uniform2f(m.uUVScale, 1, 1);
           m.gl.uniform2f(m.uUVOffset, 0, 0);
-          m.gl.drawArrays(m.gl.TRIANGLE_STRIP, 0, 4);
+          if (typeof createImageBitmap === 'function') {
+            // 主路径：createImageBitmap(GPU 拷贝) —— 零 CPU 读回。
+            // 直接 texImage2D(视频元素) 的 GPU 纹理回读不了（见顶部实验矩阵），
+            // getImageData 每帧 4MB 垃圾会把渲染进程压到 OOM（实测 22:07 崩过一次）。
+            // uploadPending 防止上一帧未传完时排队堆积。
+            if (!m.uploadPending) {
+              m.uploadPending = true;
+              var self = m;
+              var tokenNow = token;
+              createImageBitmap(m.mid).then(function (bitmap) {
+                self.uploadPending = false;
+                if (self.token !== tokenNow || !self.gl) { bitmap.close(); return; }
+                self.gl.texImage2D(self.gl.TEXTURE_2D, 0, self.gl.RGBA, self.gl.RGBA, self.gl.UNSIGNED_BYTE, bitmap);
+                bitmap.close();
+                self.gl.drawArrays(self.gl.TRIANGLE_STRIP, 0, 4);
+              }).catch(function () {
+                self.uploadPending = false;
+                self.useGetDataFallback = true;
+              });
+            }
+          }
+          if ((m.useGetDataFallback || typeof createImageBitmap !== 'function') && m.midCtx) {
+            // 兜底：老内核无 createImageBitmap 时才走 getImageData（内存代价高）
+            var pixels = m.midCtx.getImageData(0, 0, canvas.width, canvas.height);
+            try {
+              m.gl.texImage2D(m.gl.TEXTURE_2D, 0, m.gl.RGBA, canvas.width, canvas.height, 0,
+                m.gl.RGBA, m.gl.UNSIGNED_BYTE, new Uint8Array(pixels.data.buffer));
+            } catch (eUp) { }
+            m.gl.drawArrays(m.gl.TRIANGLE_STRIP, 0, 4);
+          }
         } else if (m.ctx2d) {
           if (isFill) {
             m.ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -467,10 +499,10 @@ function wallpaperEngineGlassMirrorStart(video, token) {
     }
     if (m.token !== token) return;
     if (typeof requestAnimationFrame === 'function') {
-      // 视频 display:none 时 rVFC 不会触发，用 rAF 按 ~30fps 节流驱动
+      // 视频 display:none 时 rVFC 不会触发，用 rAF 按 ~24fps 节流驱动
       m.rafId = requestAnimationFrame(function (ts) {
         if (m.token !== token) return;
-        if (ts - m.lastRaf < 33) { m.rafId = requestAnimationFrame(paint); return; }
+        if (ts - m.lastRaf < 42) { m.rafId = requestAnimationFrame(paint); return; }
         m.lastRaf = ts;
         paint();
       });
