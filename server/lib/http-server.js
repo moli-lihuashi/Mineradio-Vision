@@ -307,11 +307,16 @@ module.exports = function createHttpServer(deps) {
   function startHttpServer() {
     if (server.listening) return server;
     server.listen(PORT, HOST, () => {
+      // 首页响应里会注入明文 token，所以 / 与 /index.html 都要求自带 ?token=（见 assertIndexToken）。
+      // 裸访问固定 403 —— 手动 node server.js 的人如果没有这行，只会看到一个「坏掉」的空白页。
+      const token = String((typeof getApiToken === 'function' ? getApiToken() : '') || '').trim();
+      const indexUrl = 'http://localhost:' + PORT + '/index.html' + (token ? '?token=' + encodeURIComponent(token) : '');
       console.log('======================================================');
       console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
+      console.log(' 浏览器打开  →  ' + indexUrl);
       console.log(' 登录态: ' + (getUserCookie() ? '已登录(cookie已加载)' : '未登录'));
       console.log(' DJ native: ' + (nativeDjAvailable ? 'ON (energy+beatmap C++)' : 'OFF (JS fallback)'));
-      if (getApiTokenAuto()) console.log(' [Security] API token auto-generated for this session');
+      if (getApiTokenAuto()) console.log(' [Security] token 本次会话自动生成；要固定就用 MINERADIO_API_TOKEN 指定');
       console.log('======================================================');
     });
     return server;

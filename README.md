@@ -110,7 +110,48 @@ npm install
 npm start
 ```
 
-桌面版由 Electron 主进程启动本地服务（`server.js`）并加载界面。
+桌面版由 Electron 主进程启动本地服务（`server.js`）并加载界面，token 由主进程自动生成并拼在导航地址上，用不着手动处理。
+
+### 只想用浏览器看（网页模式）
+
+不启动 Electron，直接跑本地服务：
+
+```bash
+node server.js
+```
+
+启动日志会打印**可以直接打开的完整地址**：
+
+```
+======================================================
+ 粒子音乐可视化 v2  →  http://localhost:3000
+ 浏览器打开  →  http://localhost:3000/index.html?token=3f2a9c……（每次启动随机）
+ 登录态: 未登录
+======================================================
+```
+
+**裸开 `http://localhost:3000` 一定 403，这是设计行为，不是服务坏了。** 首页响应会把 API token 明文注入 HTML，如果谁都能先拿到首页，就等于谁都能白拿 token 去调全部接口；所以 `/` 与 `/index.html` 对不带 token 的请求一律回 `403 {"error":"UNAUTHORIZED"}`。真正的入口是日志里那条 `?token=` 的地址。
+
+**想把 token 固定下来**（方便收藏地址，或用脚本调接口）：
+
+```bash
+MINERADIO_API_TOKEN=my-local-token node server.js      # macOS / Linux / Git Bash
+```
+
+```powershell
+$env:MINERADIO_API_TOKEN='my-local-token'; node server.js   # PowerShell
+```
+
+之后地址固定为 `http://127.0.0.1:3000/index.html?token=my-local-token`。
+
+| 环境变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `PORT` | `3000` | 监听端口 |
+| `HOST` | `127.0.0.1` | 监听地址，建议只留环回 |
+| `MINERADIO_API_TOKEN` | 每次启动随机 | 固定 API token |
+| `MINERADIO_ALLOW_NON_LOOPBACK_HOST` | 未设置 | 设为 `1` 才接受非环回 Host 头（局域网访问） |
+
+手工调 `/api/*` 时要在请求头带 `x-mineradio-token: <token>`；页面里的请求会自动带上，不需要额外配置。音频与封面这类由 `<audio>` / `<img>` 直接发起的请求允许把 token 放在 query 里。
 
 ## 构建 Windows 安装包
 
