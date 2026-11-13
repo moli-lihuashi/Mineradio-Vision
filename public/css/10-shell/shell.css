@@ -819,3 +819,26 @@ body.desktop-mode-control-peek .desktop-mode-control-handle{opacity:.94}
 .desktop-mode-control-state{font-size:10px;line-height:1.4;color:rgba(255,255,255,.44)}
 .desktop-mode-control-exit{margin-bottom:0;border-color:rgba(255,120,120,.26);background:rgba(255,90,90,.10)}
 .desktop-mode-control-exit:hover{background:rgba(255,90,90,.18);border-color:rgba(255,120,120,.42)}
+
+/* 控制台隐藏态必须彻底不渲染（2026-11-13 实机定案）
+ * 歌单详情主题在 playlist.css 给 #bottom-bar.visible 加了 !important 的
+ * opacity:.94 + 深色渐变 + blur(16px) brightness(.94)，而 playback.css 的
+ * #bottom-bar.soft-hidden{opacity:0} 没有 !important —— 隐藏后底栏仍以 0.94
+ * 不透明度留在屏幕上，露出的那一条深色玻璃就是用户说的「控制台隐藏发黑」。
+ * 本规则用更高特异性 + !important 压回，并加 visibility:hidden 双保险：
+ * 即使将来又出现更高优先级的 opacity 规则，LiquidGlass 的玻璃 canvas 也不会渲染。
+ * 放在 shell.css（最后加载）以保证同级 !important 时胜出。 */
+html #bottom-bar.visible.soft-hidden,
+html body.home-controls-locked #bottom-bar.visible,
+#bottom-bar.visible.soft-hidden,
+body.home-controls-locked #bottom-bar.visible.lg-active{
+  opacity:0!important;
+  visibility:hidden!important;
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+  filter:none!important;
+  pointer-events:none!important;
+  transform:translateX(-50%) translateY(88px) scale(.972)!important;
+}

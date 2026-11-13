@@ -154,6 +154,32 @@ test('视频必须退居解码角色：镜像激活时 display:none，回读链�
   );
 });
 
+test('控制台隐藏态必须压过歌单主题的 !important 深色玻璃条', () => {
+  // 2026-11-13 实机 CDP.getMatchedStylesForNode 定案：隐藏态下 #bottom-bar
+  // 的 class = "lg-host visible lg-active soft-hidden"，但命中规则里
+  // playlist.css 的 #bottom-bar.visible{opacity:.94!important +
+  // 深色渐变!important + blur brightness(.94)!important} 压过了
+  // playback.css 的 #bottom-bar.soft-hidden{opacity:0}（无 !important），
+  // 于是隐藏后留下一条黑色玻璃条。修法：shell.css（最后加载）用更高特异性
+  // + !important 压回 opacity/背景/滤镜，并用 visibility:hidden 双保险。
+  const shellCss = fs.readFileSync(path.join(ROOT, 'public/css/10-shell/shell.css'), 'utf8');
+  assert.match(
+    shellCss,
+    /html #bottom-bar\.visible\.soft-hidden[\s\S]{0,600}opacity:0!important[\s\S]{0,200}visibility:hidden!important/,
+    '隐藏态规则必须同时带 opacity:0!important 与 visibility:hidden!important（后者保证 LiquidGlass canvas 不渲染）',
+  );
+  assert.match(
+    shellCss,
+    /html body\.home-controls-locked #bottom-bar\.visible/,
+    'home-controls-locked 路径也要覆盖（showHome 走这条）',
+  );
+  assert.match(
+    shellCss,
+    /backdrop-filter:none!important/,
+    '隐藏态必须清掉 backdrop-filter，否则 blur brightness(.94) 仍会把壁纸压暗',
+  );
+});
+
 test('协议处理器绝不能悬挂：disposed / 异常 / 超时都要立即给响应', () => {
   // 启动自动恢复壁纸会发 mineradio-wallpaper:// 请求；若此时协议处理器抛错或
   // 挂起，页面 did-finish-load 等不到 → 15s 后 MR-BOOT-WINDOW-LOAD 报错弹窗
