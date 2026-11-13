@@ -859,17 +859,8 @@ html #bottom-bar.visible.soft-hidden > .lg-glass-shell,
 html body.home-controls-locked #bottom-bar.visible > .lg-glass-shell{
   display:none!important;
 }
-/* 隐藏态下把手那根线就是进度条：--play-progress 由 setProgressVisual 写入。
- * 原 #bottom-handle{opacity:.14} 太淡看不清进度，提到 .5；
- * body.controls-visible 的 0、:hover/awake 的 .82 特异性更高，仍会正常生效。
- * 已播放段用固定青色：--fc-accent-rgb 在浅色主题下是白色，靠它做双色会没有对比。 */
-#bottom-handle{opacity:.5}
-#bottom-handle span{
-  background:linear-gradient(90deg,
-    rgba(96,225,255,.98) 0 var(--play-progress,0%),
-    rgba(255,255,255,.30) var(--play-progress,0%) 100%)!important;
-  box-shadow:0 0 12px rgba(96,225,255,.35)!important;
-}
+/* 把手保持原本的单色小横条（playback.css 的 opacity:.14 / 白色 4px），
+   不再叠加第二根进度条——隐藏态的歌曲进度由下方 #progress-bar 承担。 */
 /* 隐藏态下进度线要更清楚（原深色玻璃没了，给轨道一点底） */
 html #bottom-bar.visible.soft-hidden #progress-bar,
 html body.home-controls-locked #bottom-bar.visible #progress-bar{

@@ -256,22 +256,24 @@ test('控制台隐藏态必须压过歌单主题的 !important 深色玻璃条',
     'home-controls-locked 路径也要覆盖（showHome 走这条）',
   );
 
-  // 隐藏态下底栏沉出屏幕，唯一稳定的进度载体是 body 级 #bottom-handle
+  // 把手必须保持原本的单色小横条：用户实测「控制台进度条上边怎么还有个
+  // 小进度条，本来是小横条的」—— 之前把把手做成双色进度条 + 无条件 opacity:.5
+  // 会在控制台升起时叠出第二根进度条。隐藏态进度由 #progress-bar 承担即可。
   const seekSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-lyrics/04-progress-seek.js'), 'utf8');
-  assert.match(
+  assert.doesNotMatch(
     seekSrc,
-    /setProgressVisual\(percent\)[\s\S]{0,1200}--play-progress/,
-    'setProgressVisual 必须把百分比写到 #bottom-handle（隐藏态的进度来源）',
+    /--play-progress/,
+    'setProgressVisual 不许再往 #bottom-handle 写进度（把手恢复单色小横条）',
   );
-  assert.match(
+  assert.doesNotMatch(
     shellCss,
     /#bottom-handle\{opacity:\.5\}/,
-    '把手 opacity 必须无条件提到 .5（原 .14 看不清进度；controls-visible 的 0 优先级更高不受影响）',
+    '不许无条件提高把手 opacity：controls-visible 时应由 playback.css 隐藏它',
   );
-  assert.match(
+  assert.doesNotMatch(
     shellCss,
-    /#bottom-handle span\{[\s\S]{0,300}rgba\(96,225,255,\.98\)/,
-    '已播放段必须用固定青色：--fc-accent-rgb 在浅色主题下是白色，双色会没对比',
+    /#bottom-handle span\{[\s\S]{0,300}--play-progress/,
+    '把手 span 不许再画成第二条进度条',
   );
 
   // 镜像挂在 body 层后必须自己带窗口圆角（用户实测：WE 壁纸让四周变方）
