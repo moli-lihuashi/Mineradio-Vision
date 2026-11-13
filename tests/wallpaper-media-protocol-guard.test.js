@@ -165,18 +165,46 @@ test('控制台隐藏态必须压过歌单主题的 !important 深色玻璃条',
   const shellCss = fs.readFileSync(path.join(ROOT, 'public/css/10-shell/shell.css'), 'utf8');
   assert.match(
     shellCss,
-    /html #bottom-bar\.visible\.soft-hidden[\s\S]{0,600}opacity:0!important[\s\S]{0,200}visibility:hidden!important/,
-    '隐藏态规则必须同时带 opacity:0!important 与 visibility:hidden!important（后者保证 LiquidGlass canvas 不渲染）',
+    /html #bottom-bar\.visible\.soft-hidden[\s\S]{0,700}background:transparent!important[\s\S]{0,200}backdrop-filter:none!important/,
+    '隐藏态必须清掉深色渐变背景与 backdrop-filter（黑玻璃条来源）',
+  );
+  assert.match(
+    shellCss,
+    /#bottom-bar\.visible\.soft-hidden > \.lg-glass-shell[\s\S]{0,160}display:none!important/,
+    '只隐藏 LiquidGlass 玻璃画布，不能把整个底栏藏掉',
+  );
+  assert.match(
+    shellCss,
+    /#bottom-bar\.visible\.soft-hidden #progress-bar[\s\S]{0,200}background:rgba\(255,255,255,\.22\)!important/,
+    '隐藏态必须保留并增强 #progress-bar：那是隐藏后唯一的歌曲进度提示',
+  );
+  assert.doesNotMatch(
+    shellCss,
+    /#bottom-bar\.visible\.soft-hidden[\s\S]{0,700}visibility:hidden!important/,
+    '不许再用 visibility:hidden 把整条底栏藏掉——会连进度一起藏掉（用户实测反驳）',
   );
   assert.match(
     shellCss,
     /html body\.home-controls-locked #bottom-bar\.visible/,
     'home-controls-locked 路径也要覆盖（showHome 走这条）',
   );
+
+  // 隐藏态下底栏沉出屏幕，唯一稳定的进度载体是 body 级 #bottom-handle
+  const seekSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-lyrics/04-progress-seek.js'), 'utf8');
+  assert.match(
+    seekSrc,
+    /setProgressVisual\(percent\)[\s\S]{0,1200}--play-progress/,
+    'setProgressVisual 必须把百分比写到 #bottom-handle（隐藏态的进度来源）',
+  );
   assert.match(
     shellCss,
-    /backdrop-filter:none!important/,
-    '隐藏态必须清掉 backdrop-filter，否则 blur brightness(.94) 仍会把壁纸压暗',
+    /#bottom-handle\{opacity:\.5\}/,
+    '把手 opacity 必须无条件提到 .5（原 .14 看不清进度；controls-visible 的 0 优先级更高不受影响）',
+  );
+  assert.match(
+    shellCss,
+    /#bottom-handle span\{[\s\S]{0,300}rgba\(96,225,255,\.98\)/,
+    '已播放段必须用固定青色：--fc-accent-rgb 在浅色主题下是白色，双色会没对比',
   );
 });
 

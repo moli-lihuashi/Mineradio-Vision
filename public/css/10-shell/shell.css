@@ -820,20 +820,22 @@ body.desktop-mode-control-peek .desktop-mode-control-handle{opacity:.94}
 .desktop-mode-control-exit{margin-bottom:0;border-color:rgba(255,120,120,.26);background:rgba(255,90,90,.10)}
 .desktop-mode-control-exit:hover{background:rgba(255,90,90,.18);border-color:rgba(255,120,120,.42)}
 
-/* 控制台隐藏态必须彻底不渲染（2026-11-13 实机定案）
+/* 控制台隐藏态：去掉深色玻璃条，保留进度线（2026-11-13 实机定案）
  * 歌单详情主题在 playlist.css 给 #bottom-bar.visible 加了 !important 的
- * opacity:.94 + 深色渐变 + blur(16px) brightness(.94)，而 playback.css 的
- * #bottom-bar.soft-hidden{opacity:0} 没有 !important —— 隐藏后底栏仍以 0.94
- * 不透明度留在屏幕上，露出的那一条深色玻璃就是用户说的「控制台隐藏发黑」。
- * 本规则用更高特异性 + !important 压回，并加 visibility:hidden 双保险：
- * 即使将来又出现更高优先级的 opacity 规则，LiquidGlass 的玻璃 canvas 也不会渲染。
+ * opacity:.94 + 深色渐变 + blur(16px) brightness(.94)，压过了 playback.css
+ * 的 #bottom-bar.soft-hidden{opacity:0}（无 !important）—— 隐藏后底栏仍以
+ * 0.94 不透明度把深色玻璃留在屏幕上，就是用户说的「隐藏发黑」。
+ *
+ * 但整条 visibility:hidden 是错的：底栏 flex-column 下移 88px 后，屏幕里
+ * 只剩最顶部的 #progress-bar，那根线正是隐藏态下唯一的歌曲进度提示。
+ * 所以这里只清背景/滤镜/阴影并停掉 LiquidGlass 玻璃画布，进度条保持可见。
  * 放在 shell.css（最后加载）以保证同级 !important 时胜出。 */
 html #bottom-bar.visible.soft-hidden,
 html body.home-controls-locked #bottom-bar.visible,
 #bottom-bar.visible.soft-hidden,
 body.home-controls-locked #bottom-bar.visible.lg-active{
-  opacity:0!important;
-  visibility:hidden!important;
+  opacity:1!important;
+  visibility:visible!important;
   background:transparent!important;
   backdrop-filter:none!important;
   -webkit-backdrop-filter:none!important;
@@ -841,4 +843,27 @@ body.home-controls-locked #bottom-bar.visible.lg-active{
   filter:none!important;
   pointer-events:none!important;
   transform:translateX(-50%) translateY(88px) scale(.972)!important;
+}
+/* 只停掉玻璃画布，别碰 #progress-bar / #bottom-handle */
+html #bottom-bar.visible.soft-hidden > .lg-glass-shell,
+html body.home-controls-locked #bottom-bar.visible > .lg-glass-shell{
+  display:none!important;
+}
+/* 隐藏态下把手那根线就是进度条：--play-progress 由 setProgressVisual 写入。
+ * 原 #bottom-handle{opacity:.14} 太淡看不清进度，提到 .5；
+ * body.controls-visible 的 0、:hover/awake 的 .82 特异性更高，仍会正常生效。
+ * 已播放段用固定青色：--fc-accent-rgb 在浅色主题下是白色，靠它做双色会没有对比。 */
+#bottom-handle{opacity:.5}
+#bottom-handle span{
+  background:linear-gradient(90deg,
+    rgba(96,225,255,.98) 0 var(--play-progress,0%),
+    rgba(255,255,255,.30) var(--play-progress,0%) 100%)!important;
+  box-shadow:0 0 12px rgba(96,225,255,.35)!important;
+}
+/* 隐藏态下进度线要更清楚（原深色玻璃没了，给轨道一点底） */
+html #bottom-bar.visible.soft-hidden #progress-bar,
+html body.home-controls-locked #bottom-bar.visible #progress-bar{
+  background:rgba(255,255,255,.22)!important;
+  box-shadow:none!important;
+  pointer-events:auto!important;
 }

@@ -152,6 +152,12 @@ function setProgressVisual(percent) {
   var thumb = document.getElementById('progress-thumb');
   if (fill) fill.style.width = pctStr;
   if (thumb) thumb.style.left = pctStr;
+  // 控制台隐藏后底栏沉下去，屏幕里只剩 #bottom-handle 那根线。
+  // 把进度同步到它，隐藏态也能看到播放进度（2026-11-13 用户实测诉求）。
+  var handle = document.getElementById('bottom-handle');
+  if (handle) {
+    try { handle.style.setProperty('--play-progress', pctStr); } catch (e) { }
+  }
 }
 
 // P1：预览→live 交接 spring（MineradioMotion）。只动视觉 percent，不碰 thumb transform / 预览时钟 / seek 时间。
