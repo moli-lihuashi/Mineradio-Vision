@@ -154,6 +154,73 @@ test('视频必须退居解码角色：镜像激活时 display:none，回读链�
   );
 });
 
+test('壁纸媒体在窗口隐藏 / Folia 世界必须停解码与镜像上传，并能在恢复时唤醒', () => {
+  // 用户提问「隐藏时会不会还吃性能、切 Folia 会不会关闭」——检查结论：
+  // 旧实现只在 document.hidden 时暂停；Electron 托盘隐藏/最小化时
+  // document.hidden 常为 false（12d 注释也承认），镜像循环也只判 document.hidden，
+  // 于是 4K 视频继续解码 + 每帧 createImageBitmap/texImage2D 继续跑。
+  // Folia 只暂停了视频，镜像循环没停。
+  const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
+  const stateSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/00-state/12d-fx-runtime-globals.js'), 'utf8');
+  const foliaSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/12-folia/03-folia-world-runtime.js'), 'utf8');
+  const foliaCss = fs.readFileSync(path.join(ROOT, 'public/css/12-folia/folia-world.css'), 'utf8');
+  const indexCss = fs.readFileSync(path.join(ROOT, 'public/css/index.css'), 'utf8');
+
+  assert.match(
+    fnsSrc,
+    /function wallpaperEngineMediaShouldRun\(\)[\s\S]{0,600}isDeepBackgroundMode\(\)[\s\S]{0,300}foliaWorldActive\(\)/,
+    '统一判定必须同时覆盖 document.hidden、Electron 原生最小化/隐藏、Folia 世界',
+  );
+  assert.match(
+    fnsSrc,
+    /function paint\(\)[\s\S]{0,400}if \(!wallpaperEngineMediaShouldRun\(\)\)[\s\S]{0,300}return;/,
+    '镜像绘制循环必须在不该运行时完全跳过 drawImage / createImageBitmap / texImage2D',
+  );
+  assert.match(
+    fnsSrc,
+    /function wallpaperEngineGlassMirrorKick\(\)/,
+    '必须有主动唤醒入口：后台期间 rAF 会被 Chromium 节流甚至暂停',
+  );
+  assert.match(
+    fnsSrc,
+    /function wallpaperEngineSyncMediaRuntime\(\)[\s\S]{0,800}video\.pause\(\)/,
+    '统一同步入口必须在不该运行时暂停视频解码',
+  );
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'desktop/main.js'), 'utf8');
+  assert.match(mainSrc, /mainWindow\.on\('hide',\s*\(\) => sendWindowState\(mainWindow\)\)/,
+    '主进程 hide 事件必须下发窗口状态（渲染层据此判定深度后台）');
+  assert.match(mainSrc, /mainWindow\.on\('minimize',\s*\(\) => sendWindowState\(mainWindow\)\)/,
+    '主进程 minimize 事件必须下发窗口状态');
+  assert.match(stateSrc, /updateDesktopRuntimeState[\s\S]{0,1500}wallpaperEngineSyncMediaRuntime\(\)/,
+    '窗口状态变化（minimize/hide/show/restore）必须触发壁纸同步');
+  assert.match(foliaSrc, /foliaWorldPauseWallpaperVideos[\s\S]{0,600}wallpaperEngineSyncMediaRuntime\(\)/,
+    'Folia 进入时必须同步停止壁纸媒体');
+  assert.match(foliaSrc, /foliaWorldResumeWallpaperVideos[\s\S]{0,900}wallpaperEngineSyncMediaRuntime\(\)/,
+    'Folia 退出时必须唤醒镜像循环');
+  assert.match(foliaCss, /body\.folia-world-active #wallpaper-engine-layer[\s\S]{0,200}visibility:\s*hidden\s*!important/,
+    'Folia 激活时壁纸层与镜像画布必须退出合成链');
+  assert.match(indexCss, /body\.render-deep-sleep #wallpaper-engine-layer[\s\S]{0,200}visibility:\s*hidden\s*!important/,
+    '深度后台时壁纸层与镜像画布必须退出合成链');
+
+  // 直接执行源码里的纯判定函数（不靠正则猜），覆盖全部状态组合
+  const fnMatch = fnsSrc.match(/function wallpaperEngineMediaShouldRun\(\)[\s\S]*?\n\}/);
+  assert.ok(fnMatch, '必须能抽到 wallpaperEngineMediaShouldRun 函数体');
+  const build = (hidden, deep, folia) => new Function(
+    'document', 'isDeepBackgroundMode', 'foliaWorldActive',
+    fnMatch[0] + '\nreturn wallpaperEngineMediaShouldRun();',
+  )({ hidden }, () => deep, () => folia);
+  assert.equal(build(true, false, false), false, 'document.hidden 时必须停');
+  assert.equal(build(false, true, false), false, '窗口最小化/托盘隐藏时必须停');
+  assert.equal(build(false, false, true), false, 'Folia 世界激活时必须停');
+  assert.equal(build(false, false, false), true, '前台可见且不在 Folia 时必须运行');
+  // 依赖函数抛错时不能把壁纸误停，也不能让异常冒泡到合并 script 顶层
+  const throwing = new Function(
+    'document', 'isDeepBackgroundMode', 'foliaWorldActive',
+    fnMatch[0] + '\nreturn wallpaperEngineMediaShouldRun();',
+  )({ hidden: false }, () => { throw new Error('state-not-ready'); }, () => { throw new Error('state-not-ready'); });
+  assert.equal(throwing, true, '状态模块尚未就绪而抛错时必须放行（不能静默停掉壁纸）');
+});
+
 test('控制台隐藏态必须压过歌单主题的 !important 深色玻璃条', () => {
   // 2026-11-13 实机 CDP.getMatchedStylesForNode 定案：隐藏态下 #bottom-bar
   // 的 class = "lg-host visible lg-active soft-hidden"，但命中规则里

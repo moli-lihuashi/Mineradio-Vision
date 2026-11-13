@@ -292,6 +292,25 @@ var wallpaperEngineGlassMirror = {
   mid: null, midCtx: null, ctx2d: null, mode: '', uploadPending: false, useGetDataFallback: false,
 };
 
+// ===== 壁纸媒体的运行许可 =====
+// 三条「不该继续解码/上传」的状态：
+//   1) document.hidden —— 浏览器/标签页隐藏
+//   2) isDeepBackgroundMode() —— Electron 窗口最小化 / hide 到托盘（原生状态权威，
+//      document.hidden 在托盘隐藏时经常仍是 false，见 12d 的注释）
+//   3) foliaWorldActive() —— Folia 世界把壁纸整块盖住
+// 注意 isDeepBackgroundMode() 会尊重用户显式选择的 liveBackgroundKeep（后台保持），
+// 那种情况下继续运行是用户意图，不强行省电。
+function wallpaperEngineMediaShouldRun() {
+  if (document.hidden) return false;
+  try {
+    if (typeof isDeepBackgroundMode === 'function' && isDeepBackgroundMode()) return false;
+  } catch (e) { }
+  try {
+    if (typeof foliaWorldActive === 'function' && foliaWorldActive()) return false;
+  } catch (e2) { }
+  return true;
+}
+
 function wallpaperEngineGlassMirrorElement() {
   var m = wallpaperEngineGlassMirror;
   if (m.canvas) return m.canvas;
@@ -421,6 +440,19 @@ function wallpaperEngineGlassMirrorStart(video, token) {
   var layer = document.getElementById('wallpaper-engine-layer');
   function paint() {
     if (m.token !== token) return;
+    // 隐藏/最小化/Folia 期间不做任何 drawImage / createImageBitmap / texImage2D。
+    // 保留一条低频 rAF 空转探测：Chromium 后台节流可能把 rAF 降到 1fps 甚至暂停，
+    // 所以另由 wallpaperEngineGlassMirrorKick() 在恢复事件上主动唤醒。
+    if (!wallpaperEngineMediaShouldRun()) {
+      if (typeof requestAnimationFrame === 'function') {
+        m.rafId = requestAnimationFrame(function () {
+          if (m.token !== token) return;
+          paint();
+        });
+      }
+      m.lastRaf = 0;
+      return;
+    }
     var rectNow = canvas.getBoundingClientRect();
     if (rectNow.width >= 2 && rectNow.height >= 2) {
       var scaleNow = Math.min(1, 1600 / Math.max(rectNow.width, 1));
@@ -440,7 +472,7 @@ function wallpaperEngineGlassMirrorStart(video, token) {
         }
       }
       var vw = video.videoWidth, vh = video.videoHeight;
-      if (vw && vh && !document.hidden) {
+      if (vw && vh) {
         var isFill = !!(layer && layer.classList.contains('engine-ready'));
         if (m.mode === 'webgl' && m.gl && m.midCtx) {
           // cover 裁切在 2D 中转画布上完成，上传后直接铺满
@@ -509,6 +541,40 @@ function wallpaperEngineGlassMirrorStart(video, token) {
     }
   }
   paint();
+  m.paint = paint;
+}
+
+// 恢复事件（窗口 show/restore、visibilitychange、Folia exit）主动唤醒镜像循环：
+// 后台期间 rAF 可能被 Chromium 节流到 1fps 或彻底暂停，只靠 paint 自己排帧会卡住。
+function wallpaperEngineGlassMirrorKick() {
+  var m = wallpaperEngineGlassMirror;
+  if (!m.token || !m.canvas) return;
+  if (!wallpaperEngineMediaShouldRun()) return;
+  if (m.rafId && typeof cancelAnimationFrame === 'function') {
+    try { cancelAnimationFrame(m.rafId); } catch (e) { }
+  }
+  m.rafId = 0;
+  m.lastRaf = 0;
+  if (typeof m.paint === 'function') m.paint();
+}
+
+// 统一同步入口：窗口状态 / 页面可见性 / Folia 切换都走这里。
+// 不该运行时暂停视频解码；恢复时按当前选择拉起播放并唤醒镜像。
+function wallpaperEngineSyncMediaRuntime() {
+  if (typeof wallpaperEngineSelection === 'undefined' || !wallpaperEngineSelection) return;
+  if (!wallpaperEngineSelection.active || wallpaperEngineSelection.mediaType !== 'video') return;
+  var video = document.getElementById('wallpaper-engine-video');
+  if (!video) return;
+  if (!wallpaperEngineMediaShouldRun()) {
+    cancelWallpaperEngineVideoRetry();
+    try { video.pause(); } catch (e) { }
+    return;
+  }
+  if (video.paused && document.body.classList.contains('wallpaper-engine-active')) {
+    var item = wallpaperEngineProjectById(wallpaperEngineSelection.id);
+    requestWallpaperEngineVideoPlayback(video, item, 'media', wallpaperEngineLayerToken, false, 0);
+  }
+  wallpaperEngineGlassMirrorKick();
 }
 
 function restoreOriginalBackgroundAfterWallpaperEngine() {
@@ -559,15 +625,9 @@ function wallpaperEngineRuntimeErrorText(error) {
 function requestWallpaperEngineVideoPlayback(video, item, kind, token, revealLayer, attempt) {
   cancelWallpaperEngineVideoRetry();
   if (!video || token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active) return;
-  // 玻璃采样器 / host 生命周期已剥离，统一回退到 document.hidden
-  var hostUnavailable = document.hidden;
-  if (hostUnavailable) {
-    try { video.pause(); } catch (e) { }
-    if (revealLayer) wallpaperEngineLayerReady('video', token);
-    return;
-  }
-  /* Folia 世界把壁纸整块盖住：不拉起播放（退出世界时统一恢复），但选择照常生效。 */
-  if (typeof foliaWorldActive === 'function' && foliaWorldActive()) {
+  // 页面隐藏 / 窗口最小化到托盘 / Folia 世界：一律不拉起播放，避免后台空烧
+  // 4K 解码。三种状态由 wallpaperEngineMediaShouldRun() 统一判定。
+  if (!wallpaperEngineMediaShouldRun()) {
     try { video.pause(); } catch (e) { }
     if (revealLayer) wallpaperEngineLayerReady('video', token);
     return;
@@ -1349,14 +1409,8 @@ function bindWallpaperEngineLibraryEvents() {
         return;
       }
       if (wallpaperEngineSelection.mediaType === 'video') {
-        if (!video) return;
-        if (document.hidden) {
-          cancelWallpaperEngineVideoRetry();
-          try { video.pause(); } catch (e) { }
-        } else if (document.body.classList.contains('wallpaper-engine-active')) {
-          var token = wallpaperEngineLayerToken;
-          requestWallpaperEngineVideoPlayback(video, item, 'media', token, false, 0);
-        }
+        // 统一同步：隐藏时暂停解码、恢复时拉起播放并唤醒镜像循环
+        wallpaperEngineSyncMediaRuntime();
         return;
       }
       var animatedImage = wallpaperEngineSelection.kind === 'preview'

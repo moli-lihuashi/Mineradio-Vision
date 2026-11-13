@@ -390,6 +390,10 @@ function foliaWorldPauseWallpaperVideos() {
   foliaWorldVideoPauseState.engine = !!(wv && !wv.paused);
   try { if (cv && !cv.paused) cv.pause(); } catch (_) {}
   try { if (wv && !wv.paused) wv.pause(); } catch (_) {}
+  // 同步内置壁纸的玻璃镜像循环：Folia 盖住壁纸时不再每帧上传纹理
+  if (typeof wallpaperEngineSyncMediaRuntime === 'function') {
+    try { wallpaperEngineSyncMediaRuntime(); } catch (_) {}
+  }
 }
 
 function foliaWorldResumeWallpaperVideos() {
@@ -409,6 +413,11 @@ function foliaWorldResumeWallpaperVideos() {
       if (p && p.catch) p.catch(function () {});
     }
   } catch (_) {}
+  // 退出 Folia 后主动唤醒镜像循环（后台 rAF 可能已被节流），并统一按当前
+  // 窗口可见性 / 后台保持策略决定要不要继续跑壁纸媒体
+  if (typeof wallpaperEngineSyncMediaRuntime === 'function') {
+    try { wallpaperEngineSyncMediaRuntime(); } catch (_) {}
+  }
 }
 
 /* 主循环每帧调用一次；出错立即退出世界，避免半死状态。 */

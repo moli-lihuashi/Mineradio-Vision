@@ -762,6 +762,11 @@ function updateDesktopRuntimeState(state) {
   if (fx && (fx.desktopLyrics || fx.wallpaperMode)) setTimeout(syncDesktopOverlayState, 0);
   if (wasDeep && !isDeepBackgroundMode()) recoverVisualsAfterBackground('desktop-runtime-state');
   if (desktopRuntimeState.fullscreen !== wasFullscreen) scheduleMainRendererViewportRefresh('desktop-runtime-state');
+  // 窗口最小化 / hide 到托盘时 document.hidden 常常仍是 false：用原生状态
+  // 同步内置壁纸的解码与玻璃镜像（否则后台继续跑 4K 视频 + 每帧纹理上传）
+  if (typeof wallpaperEngineSyncMediaRuntime === 'function') {
+    try { wallpaperEngineSyncMediaRuntime(); } catch (_) { }
+  }
 }
 function installRenderPowerHooks() {
   updateRenderPowerClasses();

@@ -201,6 +201,10 @@ body.sonic-topography-active.user-capsule-auto-hide #top-right::before{content:'
 #canvas-container:focus,#canvas-container:focus-visible,#canvas-container canvas:focus,#canvas-container canvas:focus-visible,html:focus,html:focus-visible,body:focus,body:focus-visible{outline:none!important;box-shadow:none!important}
 #canvas-container canvas{outline:none!important;border:0!important}
 body.render-deep-sleep #canvas-container,body.render-deep-sleep #idle-guide-canvas,body.render-deep-sleep #splash-canvas,body.render-deep-sleep #hand-canvas{opacity:0!important;visibility:hidden!important}
+/* 深度后台（最小化 / 托盘隐藏）：壁纸视频暂停、镜像循环已停，再把两层从
+   合成链摘掉。恢复时 render-deep-sleep 移除 + wallpaperEngineGlassMirrorKick
+   重画首帧，不会出现黑屏。liveBackgroundKeep 用户显式选后台保持时不进深睡。 */
+body.render-deep-sleep #wallpaper-engine-layer,body.render-deep-sleep #wallpaper-engine-glass-mirror{visibility:hidden!important}
 body.splash-active:not(.splash-revealing) #canvas-container{opacity:.16;transform:scale(1)}
 body.splash-active.splash-revealing #canvas-container{opacity:1;transform:scale(1)}
 #idle-guide-canvas{position:fixed;inset:0;z-index:2;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity .7s cubic-bezier(.22,1,.36,1)}
