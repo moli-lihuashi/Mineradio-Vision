@@ -7,7 +7,7 @@
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 ![version](https://img.shields.io/badge/version-3.3.1-success?style=flat-square)
 
-![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-11-14.png)
+![Mineradio Vision 应用界面](./docs/media/app-ui-2026-11-14.png)
 
 ## 这是什么
 
@@ -93,7 +93,7 @@
 
 ## 界面预览
 
-![Mineradio Vision 应用界面](./docs/media/app-ui-2026-11-14.png)
+![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-11-14.png)
 
 ## 下载安装
 
