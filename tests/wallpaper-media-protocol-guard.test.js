@@ -206,6 +206,18 @@ test('控制台隐藏态必须压过歌单主题的 !important 深色玻璃条',
     /#bottom-handle span\{[\s\S]{0,300}rgba\(96,225,255,\.98\)/,
     '已播放段必须用固定青色：--fc-accent-rgb 在浅色主题下是白色，双色会没对比',
   );
+
+  // 镜像挂在 body 层后必须自己带窗口圆角（用户实测：WE 壁纸让四周变方）
+  assert.match(
+    shellCss,
+    /body\.desktop-shell #wallpaper-engine-glass-mirror\{border-radius:34px\}/,
+    '镜像 canvas 必须跟 #wallpaper-engine-layer 一样带 34px 圆角',
+  );
+  assert.match(
+    shellCss,
+    /body\.desktop-shell\.desktop-maximized #wallpaper-engine-glass-mirror[\s\S]{0,300}border-radius:0!important/,
+    '最大化/全屏/壁纸模式时圆角必须归零（与壁纸层同一套变体）',
+  );
 });
 
 test('协议处理器绝不能悬挂：disposed / 异常 / 超时都要立即给响应', () => {

@@ -18,6 +18,16 @@ body.wallpaper-engine-dwm-active.wallpaper-engine-glass-sampler-ready #wallpaper
    不带 clip-path（会被 backdrop-filter 回读跳过）。 */
 #wallpaper-engine-glass-mirror{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;background:transparent;opacity:0;transition:opacity 300ms ease;display:none}
 body.wallpaper-engine-video-ready #wallpaper-engine-glass-mirror{display:block;opacity:1}
+/* 镜像挂在 body 层后必须自己带窗口圆角，否则满屏直角会盖住壁纸层的圆角
+   （2026-11-13 用户实测：用了 WE 壁纸后播放器四周变方）。
+   与下方 #wallpaper-engine-layer 完全同一套：desktop-shell 34px，
+   最大化 / 全屏 / 壁纸模式 / html:fullscreen 归零。
+   用 border-radius 裁剪替换元素，不用 clip-path（会被 backdrop-filter 回读跳过）。 */
+body.desktop-shell #wallpaper-engine-glass-mirror{border-radius:34px}
+body.desktop-shell.desktop-maximized #wallpaper-engine-glass-mirror,
+body.desktop-shell.desktop-fullscreen #wallpaper-engine-glass-mirror,
+body.desktop-shell.desktop-wallpaper-mode #wallpaper-engine-glass-mirror,
+html:fullscreen body.desktop-shell #wallpaper-engine-glass-mirror{border-radius:0!important}
 #wallpaper-engine-image,#wallpaper-engine-video{z-index:1}
 #wallpaper-engine-freeze{z-index:2;object-fit:fill;visibility:hidden;transition:opacity 160ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 160ms}
 #wallpaper-engine-layer.freeze-ready #wallpaper-engine-freeze{opacity:1;visibility:visible;transition-delay:0s}
