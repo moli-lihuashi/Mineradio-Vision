@@ -57,3 +57,20 @@ test('runtime 探针不许走「未初始化就报不可用」的假阴性路径
     '探针必须通过 ensureWallpaperEngineRuntime() 拿实例',
   );
 });
+
+test('壁纸视频不得走硬件叠加层，否则 LiquidGlass 的背景回读是黑的', () => {
+  // Chromium 会把 <video> 提升为 DirectComposition video overlay，而
+  // backdrop-filter 的背景回读拿不到叠加层里的帧 —— 玻璃折射壁纸视频时
+  // 透出来是黑的（只剩置换图环纹）。必须显式关掉视频叠加层。
+  assert.match(
+    mainSrc,
+    /'disable-direct-composition-video-overlays'/,
+    'main.js 必须带 disable-direct-composition-video-overlays：'
+    + '否则玻璃采样不到壁纸视频帧，折射区一片黑',
+  );
+  assert.match(
+    mainSrc,
+    /'disable-hardware-overlays'/,
+    'main.js 必须带 disable-hardware-overlays 兜底：确保视频回落到普通合成路径',
+  );
+});

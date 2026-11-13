@@ -221,6 +221,14 @@ const CHROMIUM_PERFORMANCE_SWITCHES = [
   ['disable-backgrounding-occluded-windows'],
   ['force_high_performance_gpu'],
   ['use-angle', 'd3d11'],
+  // 壁纸视频默认会被提升成硬件叠加层（DirectComposition video overlay），
+  // 而 backdrop-filter 的背景回读拿不到叠加层里的视频帧 —— LiquidGlass
+  // 折射壁纸视频时透出来是黑的（2026-11-13 实测：玻璃区只剩置换图的环纹）。
+  // 关掉视频叠加层让视频回到普通合成路径，玻璃才能采样到它；
+  // 代价是少一层合成优化，对桌面音乐应用可接受（守卫见
+  // tests/wallpaper-media-protocol-guard.test.js）。
+  ['disable-direct-composition-video-overlays'],
+  ['disable-hardware-overlays'],
 ];
 for (const [name, value] of CHROMIUM_PERFORMANCE_SWITCHES) {
   if (value == null) app.commandLine.appendSwitch(name);
