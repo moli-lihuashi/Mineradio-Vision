@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 版本检查需要读到最近的 tag
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # npm ci 严格按 package-lock.json 安装；package.json 与 lock 不一致会直接失败。
+      # 这是「lock 损坏被悄悄带过去」的第一道拦截（原生 addon 由仓库自带预编译产物，
+      # 测试不依赖它，跳过 install scripts 避免 CI 上无谓的 node-gyp 编译）。
+      - name: Install dependencies (lock integrity)
+        run: npm ci --ignore-scripts
+
+      - name: Run full test suite
+        run: node scripts/run-tests.js
+
+      # 语义化版本：加用户可见功能 bump minor，只修 bug bump patch。
+      # 仅在 PR 上比较 merge-base，push 到 main 时不重复判定。
+      - name: Check semantic version bump
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-version-bump.js --base "origin/${{ github.base_ref }}"

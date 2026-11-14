@@ -2615,11 +2615,33 @@ function checkPlaylistCoverMarkGuard() {
   const detailText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '02-playlist-detail.js'), 'utf8');
   const cssText = fs.readFileSync(path.join(appRoot, 'public', 'css', '06-lyrics', 'playlist.css'), 'utf8');
 
-  // 判据：喜欢=爱心、收藏=五角星，其余无封面保持灰块
+  // 判据：喜欢=库的 Cardioid Heart、收藏=库的 Rose Curve（math-curve-loaders 原版移植，
+  // 2026-11-13 用户要求撤掉设计稿的实心爱心/五角星），其余无封面保持灰块
   if (!/function playlistCoverMarkKind\(pl\)/.test(detailText)) fail('playlistCoverMarkKind is missing');
   if (!/function playlistCoverMarkHtml\(pl, size, radius\)/.test(detailText)) fail('playlistCoverMarkHtml is missing');
   if (!/isLikedPlaylistContext\(/.test(detailText)) fail('liked playlists must reuse isLikedPlaylistContext instead of a new ad-hoc name match');
-  if (!/PLAYLIST_COVER_MARK_PATHS\s*=\s*\{[^}]*liked:[^}]*collected:/.test(detailText)) fail('both heart and star paths must be defined');
+  // 曲线必须来自库的原版定义（方程参数/粒子数/尾迹/时长默认值），不许自画形状。
+  // liked 用 Heart Wave：库的 Cardioid Heart 渲染出来凹口在底部（用户看着是倒的），
+  // Heart Wave 两瓣朝上才是正立心。
+  if (!/PLAYLIST_TRAIL_CURVES\s*=\s*\{[^}]*liked:\s*\{[^}]*(Heart Wave|particleCount: 104)/.test(detailText)) {
+    fail('liked must use the library Heart Wave config (104 particles, upright heart)');
+  }
+  if (!/collected:\s*\{[^}]*particleCount: 78/.test(detailText)) {
+    fail('collected must use the library Rose Curve config (78 particles)');
+  }
+  if (!/b: 6\.4, root: 3\.3, amp: 0\.9, scaleX: 23\.2, scaleY: 24\.5/.test(detailText)) {
+    fail('Heart Wave original parameters are missing');
+  }
+  if (!/a: 9\.2, aBoost: 0\.6, breathBase: 0\.72, breathBoost: 0\.28, k: 5, scale: 3\.25/.test(detailText)) {
+    fail('Rose Curve original parameters are missing');
+  }
+  // 原版引擎三件套：呼吸曲线 / 旋转 / 拖尾粒子公式
+  if (!/0\.52 \+ \(\(Math\.sin\(pulse \* Math\.PI \* 2 \+ 0\.55\) \+ 1\) \/ 2\) \* 0\.48/.test(detailText)) {
+    fail('getDetailScale breathing curve (original formula) is missing');
+  }
+  if (!/Math\.pow\(1 - tailOffset, 0\.56\)/.test(detailText) || !/0\.9 \+ fade \* 2\.7/.test(detailText)) {
+    fail('original getParticle trail formula is missing');
+  }
   if (!/function playlistCoverHtml\(pl, thumb, size, radius\)/.test(detailText)) fail('playlistCoverHtml (cover slot) is missing');
   if (!/playlistCoverHtml\(pl, thumb, 44, 8\)/.test(detailText)) fail('the playlist card must render its cover through playlistCoverHtml');
   if (!/\.pl-cover-slot\{/.test(cssText)) fail('.pl-cover-slot styles are missing (img + hidden mark must share one box)');
@@ -2637,14 +2659,17 @@ function checkPlaylistCoverMarkGuard() {
   }
   if (!/\.pl-cover-mark\.is-liked\{color:#ff2d55\}/.test(cssText)) fail('liked mark colour is missing');
   if (!/\.pl-cover-mark\.is-collected\{color:#ffc93c\}/.test(cssText)) fail('collected mark colour is missing');
-  if (!/\.pl-card:hover \.pl-cover-mark\.is-liked svg\{animation:pl-cover-beat/.test(cssText)) {
-    fail('heart beat animation must be driven by .pl-card:hover (the pointer rests on the card, not the 25px icon)');
+  if (!/\.pl-card:hover \.pl-cover-mark\.is-liked\{filter:drop-shadow/.test(cssText)) {
+    fail('liked hover glow must be driven by .pl-card:hover (the pointer rests on the card, not the icon)');
   }
-  if (!/\.pl-card:hover \.pl-cover-mark\.is-collected svg\{animation:pl-cover-twinkle/.test(cssText)) {
-    fail('star twinkle animation must be driven by .pl-card:hover');
+  if (/pl-cover-beat|pl-cover-twinkle/.test(cssText)) {
+    fail('the old hand-drawn heart-beat / twinkle keyframes must go with the removed solid heart/star icons');
   }
-  if (!/@keyframes pl-cover-beat/.test(cssText) || !/@keyframes pl-cover-twinkle/.test(cssText)) fail('mark keyframes are missing');
-  console.log('[OK] coverless playlists show a heart / star placeholder that keeps the card hover intact.');
+  // hover 粒子动画必须以卡片为单位绑定（mark 是 pointer-events:none，永远不是事件目标）
+  if (!/closest\('\.pl-card'\)/.test(detailText)) {
+    fail('trail mouseover delegation must resolve the mark from .pl-card, not from closest(.pl-cover-mark)');
+  }
+  console.log('[OK] coverless playlists use the library math-curve placeholders (static outline + hover particle trail).');
 }
 
 function checkPlatformPanelPlaybackGuard() {

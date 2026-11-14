@@ -64,6 +64,24 @@ function readAppVersion(appRoot) {
   } catch (_) { return 'unknown'; }
 }
 
+// 构建时由 scripts/write-build-provenance.js 写入，随包发布。
+// 源码树直接跑（未构建）时没有这个文件，返回 null —— 不算错误。
+function readBuildStamp(appRoot) {
+  try {
+    const raw = fs.readFileSync(path.join(appRoot, 'build', 'build-provenance.json'), 'utf8');
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== 'object') return null;
+    return {
+      schema: Number(o.schema) || 0,
+      version: String(o.version || 'unknown'),
+      commit: String(o.commit || 'unknown'),
+      commitShort: String(o.commitShort || ''),
+      builtAt: String(o.builtAt || ''),
+      treeClean: o.treeClean !== false,
+    };
+  } catch (_) { return null; }
+}
+
 function collectBuildProvenance(options) {
   const opts = options || {};
   const appRoot = opts.appRoot || path.resolve(__dirname, '..', '..');
@@ -124,6 +142,8 @@ function collectBuildProvenance(options) {
     version: readPackageMeta(sourceRoot).version,
     commit: readCommit(sourceRoot),
     appVersion: readAppVersion(sourceRoot),
+    // 面向用户的构建溯源：版本 / 完整 commit / 构建时间。关于页直接展示这三项。
+    build: readBuildStamp(sourceRoot),
     generatedAt: new Date(now()).toISOString(),
     runtimeAppRoot: rtRaw,
     sourceRoot,

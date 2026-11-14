@@ -199,6 +199,7 @@
     'js/modules/10-shell/05-startup-bindings.js',
     'js/modules/10-shell/05-diagnostics.js',
     'js/modules/10-shell/06-break-reminder.js',
+    'js/modules/10-shell/07-about-panel.js',
     // folia 世界（与预设互斥的独立歌词世界；主循环会调 foliaWorldActive/foliaWorldTick）
     // 2026-11-12 启动拆分：主波只留 00-folia-state（11KB 状态锚）。foliaWorldActive
     // 在 Folia 运行时未落地前恒 false（active 初始 false），主循环的 folia 分支自然

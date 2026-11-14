@@ -71,3 +71,6 @@ screenshots/
 .smoke-appdata/
 .smoke-userdata/
 /2
+
+# Generated at build time (scripts/write-build-provenance.js) — not committed
+build/build-provenance.json

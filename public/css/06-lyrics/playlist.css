@@ -94,28 +94,15 @@
   border-radius:inherit;background:transparent
 }
 #playlist-panel .pl-card{--pl-cover-size:50px;--pl-cover-radius:11px}
-.pl-cover-mark svg{width:58%;height:58%;display:block;transform-origin:50% 54%;transition:transform .25s ease,filter .3s ease}
+/* math-curve-loaders 曲线占满 viewBox（原版卡片里 svg 也是贴满 frame），只在边缘留一点余量 */
+.pl-cover-mark svg{width:94%;height:94%;display:block;overflow:visible}
+/* hover 粒子动画（math-curve-loaders 原版移植）：canvas 惰性插入，只在 hover 时跑；
+   原设计稿的心跳/闪烁已随实心爱心/五角星一起撤掉 */
+.pl-cover-mark .pl-cover-trail{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;display:block}
 .pl-cover-mark.is-liked{color:#ff2d55}
 .pl-cover-mark.is-collected{color:#ffc93c}
 .pl-card:hover .pl-cover-mark.is-liked{filter:drop-shadow(0 0 12px rgba(255,45,85,.55))}
-.pl-card:hover .pl-cover-mark.is-liked svg{animation:pl-cover-beat 1.2s ease-in-out infinite}
 .pl-card:hover .pl-cover-mark.is-collected{filter:drop-shadow(0 0 12px rgba(255,201,60,.55))}
-.pl-card:hover .pl-cover-mark.is-collected svg{animation:pl-cover-twinkle 2.2s ease-in-out infinite}
-@keyframes pl-cover-beat{
-  0%,100%{transform:scale(1)}
-  25%{transform:scale(1.15)}
-  40%{transform:scale(1)}
-  60%{transform:scale(1.1)}
-  75%{transform:scale(1)}
-}
-@keyframes pl-cover-twinkle{
-  0%,100%{transform:scale(1) rotate(0deg)}
-  50%{transform:scale(1.07) rotate(4deg)}
-}
-@media (prefers-reduced-motion: reduce){
-  .pl-card:hover .pl-cover-mark.is-liked svg,
-  .pl-card:hover .pl-cover-mark.is-collected svg{animation:none}
-}
 .pl-load-more{width:100%;height:30px;margin:8px 0 2px;display:flex;align-items:center;justify-content:center}
 .pl-name{font-size:12px;color:rgba(255,255,255,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pl-sub{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

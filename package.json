@@ -1,7 +1,7 @@
 {
   "name": "mineradio",
   "productName": "Mineradio",
-  "version": "3.3.1",
+  "version": "3.3.2",
   "description": "沉浸式音乐播放器，融合天气电台、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Mineradio",
   "main": "desktop/main.js",
@@ -16,7 +16,10 @@
     "build:win:dir": "electron-builder --win dir",
     "build:win:internal-beta": "electron-builder --config electron-builder.internal-beta.json --win nsis --publish never",
     "organize:dist": "node build/organize-dist.js",
-    "sync:dist": "node scripts/sync-dist-app.js"
+    "sync:dist": "node scripts/sync-dist-app.js",
+    "prebuild:win": "node scripts/write-build-provenance.js",
+    "check:version": "node scripts/check-version-bump.js",
+    "release:notes": "node scripts/make-release-notes.js"
   },
   "build": {
     "appId": "com.mineradio.desktop",

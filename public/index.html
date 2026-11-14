@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.2.35">
+<html lang="zh-CN" data-app-version="3.3.2">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -589,6 +589,10 @@ try {
   <div class="quick-menu-section-title">休息提醒</div>
   <button type="button" id="quick-menu-break-reminder-toggle" class="quick-menu-toggle on" onclick="toggleBreakReminderEnabled()" aria-pressed="true" title="连续聆听累计到间隔后，整屏浮出一层休息提示"><span>久听休息提醒</span><span class="dot"></span></button>
   <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
+  <div class="quick-menu-divider"></div>
+  <button type="button" id="quick-menu-about-btn" class="quick-menu-about-btn" onclick="openAboutPanel()" title="查看版本、构建 commit 与构建时间">
+    <span>关于本版本</span><small id="quick-menu-about-version">构建溯源</small>
+  </button>
 </div>
 
 <!-- 皮肤弹层（T 恤按钮）：和「播放选项」是兄弟弹层，同一层级、同一套玻璃材质、互斥打开。
@@ -1921,6 +1925,27 @@ try {
     <div id="ai-playlist-results" class="ai-playlist-results"></div>
     <div class="btn-row">
       <button class="modal-btn" onclick="closeAiPlaylistModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 关于本版本：构建溯源（版本 / commit / 构建时间）。数据来自随包发布的
+     build/build-provenance.json，经 /api/debug/build 读出；用户报 issue 时可直接复制。 -->
+<div id="about-modal" class="modal-mask" onclick="closeAboutPanel(event)">
+  <div class="modal about-modal" role="dialog" aria-label="关于本版本">
+    <div class="about-kicker">MINERADIO VISION</div>
+    <div class="about-title">关于本版本</div>
+    <div id="about-version" class="about-version">v—</div>
+    <dl class="about-facts">
+      <dt>构建自 commit</dt><dd id="about-commit">读取中…</dd>
+      <dt>构建时间</dt><dd id="about-built-at">读取中…</dd>
+      <dt>构建时工作区</dt><dd id="about-tree">—</dd>
+      <dt>源码 / 打包副本</dt><dd id="about-dist">—</dd>
+    </dl>
+    <p class="about-hint">版本与 GitHub Release 正文的「构建自 commit」应完全一致；不一致说明手里的安装包不是那次构建。</p>
+    <div class="about-actions">
+      <button type="button" class="about-btn" onclick="copyAboutBuildInfo()">复制构建信息</button>
+      <button type="button" class="about-btn about-btn-primary" onclick="closeAboutPanel()">关闭</button>
     </div>
   </div>
 </div>

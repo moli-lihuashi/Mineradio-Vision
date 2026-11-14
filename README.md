@@ -5,7 +5,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
 ![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
-![version](https://img.shields.io/badge/version-3.3.1-success?style=flat-square)
+![version](https://img.shields.io/badge/version-3.3.2-success?style=flat-square)
 
 ![Mineradio Vision 应用界面](./docs/media/app-ui-2026-11-14.png)
 
@@ -97,8 +97,8 @@
 
 ## 下载安装
 
-- **Windows 安装包（推荐）**：[Mineradio-3.3.1-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.1/Mineradio-3.3.1-Setup.exe)
-- **免安装便携版**：[Mineradio-Vision-v3.3.1-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.1/Mineradio-Vision-v3.3.1-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
+- **Windows 安装包（推荐）**：[Mineradio-3.3.2-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-3.3.2-Setup.exe)
+- **免安装便携版**：[Mineradio-Vision-v3.3.2-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-Vision-v3.3.2-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可安装。

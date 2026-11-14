@@ -868,3 +868,20 @@ html body.home-controls-locked #bottom-bar.visible #progress-bar{
   box-shadow:none!important;
   pointer-events:auto!important;
 }
+
+/* ===== 关于本版本（构建溯源） ===== */
+.about-modal{max-width:min(460px,92vw);padding:28px 30px 24px;text-align:left;background:linear-gradient(180deg,rgba(22,24,28,.97),rgba(10,12,15,.96));border-color:rgba(255,255,255,.09)}
+.about-kicker{font-size:10px;font-weight:780;letter-spacing:.22em;color:rgba(120,220,255,.72);text-transform:uppercase;margin-bottom:8px}
+.about-title{font-size:18px;font-weight:650;color:rgba(255,255,255,.94);margin-bottom:2px}
+.about-version{font-size:13px;color:rgba(120,220,255,.92);letter-spacing:.06em;margin-bottom:18px}
+.about-facts{display:grid;grid-template-columns:112px 1fr;gap:9px 12px;margin:0 0 18px;padding:16px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06)}
+.about-facts dt{font-size:11.5px;color:rgba(255,255,255,.48);margin:0}
+.about-facts dd{font-size:11.5px;color:rgba(255,255,255,.86);margin:0;word-break:break-all;font-variant-numeric:tabular-nums}
+.about-hint{font-size:11.5px;line-height:1.65;color:rgba(255,255,255,.5);margin:0 0 18px}
+.about-actions{display:flex;gap:10px;justify-content:flex-end}
+.about-btn{padding:8px 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:rgba(255,255,255,.82);font-size:12px;font-family:inherit;cursor:pointer;transition:background .18s,border-color .18s}
+.about-btn:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.22)}
+.about-btn-primary{background:rgba(96,200,255,.16);border-color:rgba(96,200,255,.38);color:rgba(190,235,255,.95)}
+.quick-menu-about-btn{display:flex;align-items:center;justify-content:space-between;width:100%;padding:9px 12px;margin-top:2px;border:0;border-radius:10px;background:transparent;color:rgba(255,255,255,.72);font-size:12px;font-family:inherit;cursor:pointer;text-align:left;transition:background .18s,color .18s}
+.quick-menu-about-btn:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.95)}
+.quick-menu-about-btn small{font-size:10.5px;color:rgba(255,255,255,.4)}

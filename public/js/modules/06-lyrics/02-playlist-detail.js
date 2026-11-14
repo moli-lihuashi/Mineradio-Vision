@@ -711,17 +711,45 @@ function playlistPanelGroups() {
     { key:'spotify', label:'Spotify Playlists', items:userPlaylists.filter(function(pl){ return pl.provider === 'spotify'; }) }
   ];
 }
-// ---- 没有封面的歌单：用「爱心 / 五角星」占位，而不是一块空白灰 ----
+// ---- 没有封面的歌单：用 math-curve-loaders 的曲线占位 ----
+// 来源 https://github.com/Paidax01/math-curve-loaders（2026-11-13 用户要求撤掉设计稿的
+// 实心爱心/五角星，直接用库里原版的曲线）：喜欢 = Cardioid Heart（r=a(1+cosθ) 坐标旋转
+// 成竖向爱心），收藏 = Rose Curve（r=a·cos(5θ) 五瓣玫瑰）。方程、粒子数、尾迹、循环/
+// 呼吸/旋转时长、轨迹粗细全部照抄库的默认值，一处不改。静态时显示库轨迹的淡轮廓
+// （原版 opacity 0.1），hover 时同一曲线跑粒子拖尾（见文件尾 playlistTrail*）。
 // 判据优先级：先认「喜欢」（沿用 isLikedPlaylistContext 的既有口径：specialType 5 /
 // qishui-liked / 标题含「我喜欢 / 喜欢的音乐 / liked」），再认「收藏」（subscribed
 // 或标题含「收藏」）。两条都不命中的无封面歌单保持原灰块，不硬塞图案。
-var PLAYLIST_COVER_MARK_PATHS = {
-  // 爱心：设计稿 code (1).html 的 path，填充色交给 CSS（currentColor）以便统一主题
-  liked: '<path d="M50 88 C20 62, 2 46, 2 27 C2 12, 14 2, 27 2 C37 2, 45.5 7.5, 50 16 C54.5 7.5, 63 2, 73 2 C86 2, 98 12, 98 27 C98 46, 80 62, 50 88 Z" fill="currentColor"/>' +
-    '<ellipse cx="32" cy="25" rx="8" ry="5" fill="rgba(255,255,255,.45)" transform="rotate(-30 32 25)"/>',
-  // 五角星：设计稿 code.html 的圆角星 path（Q 曲线把所有角磨圆）
-  collected: '<path d="M 53.3 11.5 L 59.3 28.9 Q 61.2 34.6 67.2 34.7 L 85.6 35 Q 95.6 35.2 87.6 41.2 L 72.9 52.3 Q 68.1 55.9 69.9 61.6 L 75.3 79.2 Q 78.2 88.8 70 83.1 L 54.9 72.5 Q 50 69 45.1 72.5 L 30 83.1 Q 21.8 88.8 24.7 79.2 L 30.1 61.6 Q 31.9 55.9 27.1 52.3 L 12.4 41.2 Q 4.4 35.2 14.4 35 L 32.8 34.7 Q 38.8 34.6 40.8 28.9 L 46.8 11.5 Q 50 2 53.3 11.5 Z" fill="currentColor"/>' +
-    '<ellipse cx="36" cy="30" rx="7" ry="4.5" fill="rgba(255,255,255,.38)" transform="rotate(-38 36 30)"/>'
+var PLAYLIST_TRAIL_CURVES = {
+  liked: {            // Heart Wave（f(x)=|x|^⅔+0.9√(3.3−x²)·sin(6.4πx)：两瓣朝上的正立心）
+    /* 库的另一条 Cardioid Heart 渲染出来是「圆弧朝上、凹口在底部」的扁桃心（用户看着是
+     * 倒的），换成库里这条 Heart Wave：两瓣在上、中央凹谷，方向正确。progress 沿 x 从
+     * 左端扫到右端（这条曲线不闭合，原版即如此）。方程/粒子数/尾迹/时长全为原版默认值。
+     * 原版映射在 viewBox 里同样偏上（y≈4.5~61），方程不改、整条平移 offsetY=17 居中。 */
+    b: 6.4, root: 3.3, amp: 0.9, scaleX: 23.2, scaleY: 24.5, rotate: false,
+    particleCount: 104, trailSpan: 0.18,
+    durationMs: 8400, pulseDurationMs: 5600, rotationDurationMs: 22000,
+    strokeWidth: 3.9,
+    offsetY: 17,
+    point: function (p, s) {
+      var xLimit = Math.sqrt(this.root);
+      var x = -xLimit + p * xLimit * 2;
+      var wave = this.amp * Math.sqrt(Math.max(0, this.root - x * x)) * Math.sin(this.b * Math.PI * x);
+      var f = Math.pow(Math.abs(x), 2 / 3) + wave;
+      return { x: 50 + x * this.scaleX, y: 18 + (1.75 - f) * (this.scaleY + s * 1.5) + this.offsetY };
+    }
+  },
+  collected: {        // Rose Curve
+    a: 9.2, aBoost: 0.6, breathBase: 0.72, breathBoost: 0.28, k: 5, scale: 3.25, rotate: true,
+    particleCount: 78, trailSpan: 0.32,
+    durationMs: 5400, pulseDurationMs: 4600, rotationDurationMs: 28000,
+    strokeWidth: 4.5,
+    point: function (p, s) {
+      var t = p * Math.PI * 2;
+      var r = (this.a + s * this.aBoost) * (this.breathBase + s * this.breathBoost) * Math.cos(this.k * t);
+      return { x: 50 + Math.cos(t) * r * this.scale, y: 50 + Math.sin(t) * r * this.scale };
+    }
+  }
 };
 
 function playlistCoverMarkKind(pl) {
@@ -736,10 +764,19 @@ function playlistCoverMarkKind(pl) {
   return '';
 }
 
+// 静态占位 = 库轨迹的淡轮廓（原版 path：stroke currentColor、opacity 0.1、round join）；
+// s 取 0.52（原版 getDetailScale 的中位值），不带旋转 —— 旋转/呼吸/粒子都在 hover 动画里。
 function playlistCoverMarkSvg(kind) {
-  if (!kind || !PLAYLIST_COVER_MARK_PATHS[kind]) return '';
-  return '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
-    PLAYLIST_COVER_MARK_PATHS[kind] + '</svg>';
+  var cfg = PLAYLIST_TRAIL_CURVES[kind];
+  if (!cfg) return '';
+  var d = '';
+  for (var i = 0; i <= 240; i++) {
+    var p = cfg.point(i / 240, 0.52);
+    d += (i === 0 ? 'M' : 'L') + ' ' + p.x.toFixed(2) + ' ' + p.y.toFixed(2) + ' ';
+  }
+  return '<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
+    '<path d="' + d + '" stroke="currentColor" stroke-width="' + cfg.strokeWidth +
+    '" stroke-linecap="round" stroke-linejoin="round" opacity="0.1"/></svg>';
 }
 
 // 尺寸走 CSS 变量：卡片里是 44px，`#playlist-panel` 下由 CSS 覆盖成 50px，
@@ -1054,3 +1091,163 @@ if (podcastListEl) {
     openMyPodcastCollection(card.getAttribute('data-podcast-key'), card.getAttribute('data-podcast-title') || '');
   });
 }
+
+
+// ---- 占位标记的 hover 粒子动画（math-curve-loaders 原版移植，2026-11-13）------
+// 引擎逐条照抄库的 main.js：getParticle 的拖尾公式（fade=(1-tailOffset)^0.56、
+// r=0.9+fade*2.7、opacity=0.04+fade*0.96）、getDetailScale 的呼吸曲线
+// （0.52 + ((sin(pulse·2π+0.55)+1)/2)*0.48）、getRotation 的匀速旋转、
+// renderInstance 的 progress 相位（随机 phaseOffset）。曲线配置在
+// PLAYLIST_TRAIL_CURVES（方程/粒子数/尾迹/时长全部原版默认值）。
+// 性能边界（用户确认的方案）：鼠标只有一个 —— 只有 hover 到卡片时才有一个 rAF
+// 实例在跑，离开立即 cancel；平时零新增（无 canvas、无动画循环）。
+// canvas 惰性创建、30fps 节流，帧耗时统计暴露在 window.__playlistTrailFrameStats。
+var PLAYLIST_TRAIL_FRAME_MS = 33; // 30fps：小尺寸拖尾足够顺滑，CPU 减半
+var PLAYLIST_TRAIL_COLORS = { liked: '255,45,85', collected: '255,201,60' };
+var playlistTrailState = null;
+
+function playlistTrailDetailScale(time, cfg, phaseOffset) {
+  var pulse = ((time + phaseOffset * cfg.pulseDurationMs) % cfg.pulseDurationMs) / cfg.pulseDurationMs;
+  return 0.52 + ((Math.sin(pulse * Math.PI * 2 + 0.55) + 1) / 2) * 0.48;
+}
+function playlistTrailRotation(time, cfg, phaseOffset) {
+  if (!cfg.rotate) return 0;
+  return -(((time + phaseOffset * cfg.rotationDurationMs) % cfg.rotationDurationMs) / cfg.rotationDurationMs) * 360;
+}
+
+function playlistTrailStart(mark) {
+  var kind = mark && mark.className && /is-(liked|collected)/.exec(mark.className);
+  if (!kind || playlistTrailState && playlistTrailState.mark === mark) return;
+  playlistTrailStop();
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  try {
+    var rect = mark.getBoundingClientRect();
+    if (rect.width < 4) return;
+    var dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    var canvas = document.createElement('canvas');
+    canvas.className = 'pl-cover-trail';
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    mark.appendChild(canvas);
+    playlistTrailState = {
+      mark: mark, canvas: canvas,
+      kind: kind[1], color: PLAYLIST_TRAIL_COLORS[kind[1]],
+      raf: 0, lastDraw: 0, startTime: performance.now(),
+      phaseOffset: Math.random(),           // 原版：每个实例随机相位
+      frameCost: 0, frames: 0, recent: []
+    };
+    playlistTrailTick(performance.now());
+  } catch (e) {}
+}
+
+function playlistTrailStop() {
+  var st = playlistTrailState;
+  if (!st) return;
+  if (st.raf) try { cancelAnimationFrame(st.raf); } catch (_) {}
+  if (st.canvas && st.canvas.parentNode) st.canvas.parentNode.removeChild(st.canvas);
+  playlistTrailState = null;
+}
+
+function playlistTrailTick(now) {
+  var st = playlistTrailState;
+  if (!st || !st.canvas || !st.canvas.isConnected) { playlistTrailStop(); return; }
+  st.raf = requestAnimationFrame(playlistTrailTick);
+  if (now - st.lastDraw < PLAYLIST_TRAIL_FRAME_MS) return;
+  var drawStart = now;
+  st.lastDraw = now;
+  var cfg = PLAYLIST_TRAIL_CURVES[st.kind];
+  if (!cfg) { playlistTrailStop(); return; }
+  var ctx = st.canvas.getContext('2d');
+  var w = st.canvas.width;
+  var k = w / 100;
+  var time = now - st.startTime;
+  var progress = ((time + st.phaseOffset * cfg.durationMs) % cfg.durationMs) / cfg.durationMs;
+  var s = playlistTrailDetailScale(time, cfg, st.phaseOffset);
+  var rotation = playlistTrailRotation(time, cfg, st.phaseOffset);
+  var rad = rotation * Math.PI / 180;
+  var cosR = Math.cos(rad), sinR = Math.sin(rad);
+  var toXY = function (p) {   // 原版 rotate(θ 50 50)：绕画布中心旋转
+    var dx = p.x - 50, dy = p.y - 50;
+    return { x: 50 + dx * cosR - dy * sinR, y: 50 + dx * sinR + dy * cosR };
+  };
+  ctx.clearRect(0, 0, w, w);
+  // 轨迹线（原版 path：stroke currentColor、width=config.strokeWidth、round join、
+  // opacity 0.1）。呼吸/旋转理论上每帧都在变，但：呼吸相位 5s 级周期、|Δs| 每帧仅
+  // ~0.018（50px 下缩放差 <1px，肉眼不可见）；旋转是绕中心的刚性旋转 —— 不必重描。
+  // 做法：轨迹只按呼吸相位重描进缓存（|Δs|>0.035 才重描，约每 2~3 帧），旋转用
+  // canvas transform 贴上去；每帧真正要画的只剩 drawImage + 粒子（探针实测 ~3ms）。
+  var needOutline = !st.outline || Math.abs(s - (st.outlineScale == null ? -1 : st.outlineScale)) > 0.035;
+  if (needOutline) {
+    var outline = st.outline || document.createElement('canvas');
+    outline.width = w; outline.height = w;
+    var octx = outline.getContext('2d');
+    octx.clearRect(0, 0, w, w);
+    octx.beginPath();
+    for (var i = 0; i <= 240; i++) {
+      var p = cfg.point(i / 240, s);
+      if (i === 0) octx.moveTo(p.x * k, p.y * k);
+      else octx.lineTo(p.x * k, p.y * k);
+    }
+    octx.strokeStyle = 'rgba(' + st.color + ',0.1)';
+    octx.lineWidth = cfg.strokeWidth * k;
+    octx.lineCap = 'round';
+    octx.lineJoin = 'round';
+    octx.stroke();
+    st.outline = outline;
+    st.outlineScale = s;
+  }
+  if (rad) {
+    ctx.save();
+    ctx.translate(w / 2, w / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(st.outline, -w / 2, -w / 2);
+    ctx.restore();
+  } else {
+    ctx.drawImage(st.outline, 0, 0);
+  }
+  // 粒子拖尾（原版 getParticle）
+  for (var n = 0; n < cfg.particleCount; n++) {
+    var tailOffset = n / (cfg.particleCount - 1);
+    var pt = toXY(cfg.point((((progress - tailOffset * cfg.trailSpan) % 1) + 1) % 1, s));
+    var fade = Math.pow(1 - tailOffset, 0.56);
+    ctx.beginPath();
+    ctx.arc(pt.x * k, pt.y * k, (0.9 + fade * 2.7) * k, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(' + st.color + ',' + (0.04 + fade * 0.96).toFixed(3) + ')';
+    ctx.fill();
+  }
+  st.frames++;
+  st.frameCost += performance.now() - drawStart;
+  // 最近 60 帧滚动平均：前几帧含 JIT 冷启动，混进全量平均会虚高几倍（探针实测过）
+  st.recent = st.recent.concat(performance.now() - drawStart);
+  if (st.recent.length > 60) st.recent.shift();
+  if (typeof window !== 'undefined') {
+    var recentSum = 0;
+    for (var r = 0; r < st.recent.length; r++) recentSum += st.recent[r];
+    window.__playlistTrailFrameStats = {
+      avgCostMs: Math.round(st.frameCost / st.frames * 1000) / 1000,
+      recentAvgMs: Math.round(recentSum / st.recent.length * 1000) / 1000,
+      recentFrames: st.recent.length,
+      frames: st.frames,
+      particleCount: cfg.particleCount, trailSpan: cfg.trailSpan
+    };
+  }
+}
+
+// 委托绑定：鼠标只有一个，同一时刻最多一个实例。mouseover 换目标即停旧的启新的。
+// 注意不能 closest('.pl-cover-mark')：mark 是 pointer-events:none，永远不是事件目标，
+// 而它又是卡片的兄弟分支 —— closest 沿祖先向上找永远碰不到它（探针按真实鼠标
+// 派发到卡片文字上实测 9 FAIL）。必须以卡片为单位，再在卡内查可见的 mark。
+(function playlistTrailBind() {
+  if (!document.body) return;
+  document.body.addEventListener('mouseover', function (e) {
+    var card = e.target && e.target.closest ? e.target.closest('.pl-card') : null;
+    var mark = card ? card.querySelector('.pl-cover-mark.is-liked,.pl-cover-mark.is-collected') : null;
+    if (playlistTrailState && playlistTrailState.mark === mark) return;
+    if (mark && (!mark.isConnected || mark.getBoundingClientRect().width < 4)) {
+      // 卡片有 mark 但不可见（封面正常时它 display:none 藏在封面槽里）→ 当作没有
+      mark = null;
+    }
+    if (mark) playlistTrailStart(mark);
+    else playlistTrailStop();
+  });
+})();
