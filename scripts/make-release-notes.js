@@ -55,7 +55,7 @@ function main() {
   lines.push('');
   lines.push('## 本版内容');
   lines.push('');
-  lines.push('详见 [CHANGELOG.md](../blob/main/CHANGELOG.md) 的 v' + version + ' 段落。');
+  lines.push('详见 [CHANGELOG.md](https://github.com/moli-lihuashi/Mineradio-Vision/blob/main/CHANGELOG.md) 的 v' + version + ' 段落。');
   lines.push('应用内「播放选项 → 关于本版本」可查看版本、构建 commit 与构建时间。');
   if (!b.treeClean) {
     lines.push('');
