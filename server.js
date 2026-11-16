@@ -1351,7 +1351,7 @@ const mediaProxy = require("./server/lib/media-proxy")({
   getApiToken: () => API_TOKEN,
 });
 const {
-  assertProxyableMediaUrl, fetchProxiedMedia, assertApiAuth,
+  assertProxyableMediaUrl, isAllowedProxyMediaHost, fetchProxiedMedia, assertApiAuth,
   audioProxyHeadersFor, audioContentTypeForUrl, sendAudioBuffer,
 } = mediaProxy;
 
@@ -1948,7 +1948,7 @@ const routeCtx = {
   APP_PACKAGE, APP_VERSION, UPDATE_CONFIG, UA, SCENE_PRESETS, CUEFIELD_FEEDBACK_FILE,
   // ---- http 工具 ----
   sendJSON, readRequestBody, serveStatic, serveIndexHtml,
-  assertProxyableMediaUrl, fetchProxiedMedia,
+  assertProxyableMediaUrl, isAllowedProxyMediaHost, fetchProxiedMedia,
   audioProxyHeadersFor, audioContentTypeForUrl, sendAudioBuffer,
   qishuiAudioAuthFromUrl, getQishuiDecryptedAudio,
   // ---- update / beatmap / cuefield ----
@@ -2016,6 +2016,8 @@ const routeMatchers = [
   require('./server/routes/home')(routeCtx),
   // 桌面宠物 · Petdex 接入（搜索代理 / 本地安装缓存 / 精灵表回传）
   require('./server/routes/pets')(routeCtx),
+  // 洛雪音乐（LX Music）源脚本运行时（导入/启用/切换/取址/歌词）
+  require('./server/routes/lx')(routeCtx),
   require('./server/routes/netease')(routeCtx),
   require('./server/routes/qq')(routeCtx),
   require('./server/routes/kugou')(routeCtx),

@@ -22,6 +22,8 @@ if (window.__mineradioPerf && typeof window.__mineradioPerf.registerRenderState 
   window.__mineradioPerf = renderPerfState;
 }
 var splashWarmRenderLast = 0;
+var splashFirstRenderPerfMarked = false;
+var splashScenePrewarmWaitMarked = false;
 var fixedRenderCadenceState = {
   key: '',
   lastCheckAt: 0,
@@ -394,10 +396,22 @@ function animate() {
     renderPerfState.drawRangeSubset = usedDrawRange ? 1 : 0;
   }
   if (isMainSceneCoveredBySplash()) {
+    if (typeof startupSceneCompileState !== 'undefined' && startupSceneCompileState && !startupSceneCompileState.done) {
+      if (!splashScenePrewarmWaitMarked && typeof markAppPerf === 'function') {
+        splashScenePrewarmWaitMarked = true;
+        markAppPerf('splash-first-render-wait-prewarm');
+      }
+      return;
+    }
     if (now - splashWarmRenderLast > 520) {
       splashWarmRenderLast = now;
       var splashRenderPerfStart = performance.now();
+      if (!splashFirstRenderPerfMarked && typeof markAppPerf === 'function') markAppPerf('splash-first-render-start');
       renderer.render(scene, camera);
+      if (!splashFirstRenderPerfMarked) {
+        splashFirstRenderPerfMarked = true;
+        if (typeof markAppPerf === 'function') markAppPerf('splash-first-render-done');
+      }
       sampleRenderFrameCost(performance.now() - splashRenderPerfStart);
     }
     return;

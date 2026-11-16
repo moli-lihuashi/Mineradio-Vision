@@ -1124,6 +1124,7 @@ function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
     lineCount: normalizeDesktopLyricsLineCount(fx.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : fx.desktopLyricsLines),
     tilt: clampRange(fx.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(fx.desktopLyricsTilt), DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
     lyricMotion: normalizeDesktopLyricsMotion(fx.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
+    align: normalizeDesktopLyricsAlign(fx.desktopLyricsAlign || fxDefaults.desktopLyricsAlign),
     lines: lyric.lines || null,
     clickThrough: isDevelopmentLockedFx('desktopLyricsClickThrough') ? true : fx.desktopLyricsClickThrough !== false,
     lyricGlowParticles: !!fx.lyricGlowParticles,
@@ -1464,7 +1465,7 @@ function pushDesktopLyricsState(force) {
   var linesKey = Array.isArray(payload.lines)
     ? payload.lines.map(function (row) { return (row.active ? '*' : '') + row.text; }).join('\u001f')
     : '';
-  var key = payload.enabled + '|' + payload.text + '|' + Math.round(payload.progress * 1000) + '|' + Math.round((payload.progressSpan || 0) * 100) + '|' + payload.playing + '|' + payload.size + '|' + payload.opacity + '|' + payload.lineCount + '|' + payload.tilt + '|' + payload.lyricMotion + '|' + linesKey + '|' + payload.clickThrough + '|' + payload.cinema + '|' + payload.highlightFollow + '|' + payload.frameRate + '|' + payload.fontFamily + '|' + payloadCustomFontId + '|' + payload.fontWeight + '|' + payload.letterSpacing + '|' + payload.lineHeight + '|' + payload.lyricScale + '|' + payload.feather + '|' + payload.beatMapKey + '|' + colors.primary + '|' + colors.secondary + '|' + colors.highlight + '|' + colors.glow + '|' + motion.lyricGlow + '|' + motion.lyricGlowBeat + '|' + Math.round((motion.lyricGlowStrength || 0) * 100) + '|' + Math.round((motion.highBloom || 0) * 100) + '|' + Math.round((motion.beatGlow || 0) * 100) + '|' + Math.round((motion.beatPulse || 0) * 100) + '|' + Math.round((motion.bass || 0) * 100);
+  var key = payload.enabled + '|' + payload.text + '|' + Math.round(payload.progress * 1000) + '|' + Math.round((payload.progressSpan || 0) * 100) + '|' + payload.playing + '|' + payload.size + '|' + payload.opacity + '|' + payload.lineCount + '|' + payload.tilt + '|' + payload.lyricMotion + '|' + payload.align + '|' + linesKey + '|' + payload.clickThrough + '|' + payload.cinema + '|' + payload.highlightFollow + '|' + payload.frameRate + '|' + payload.fontFamily + '|' + payloadCustomFontId + '|' + payload.fontWeight + '|' + payload.letterSpacing + '|' + payload.lineHeight + '|' + payload.lyricScale + '|' + payload.feather + '|' + payload.beatMapKey + '|' + colors.primary + '|' + colors.secondary + '|' + colors.highlight + '|' + colors.glow + '|' + motion.lyricGlow + '|' + motion.lyricGlowBeat + '|' + Math.round((motion.lyricGlowStrength || 0) * 100) + '|' + Math.round((motion.highBloom || 0) * 100) + '|' + Math.round((motion.beatGlow || 0) * 100) + '|' + Math.round((motion.beatPulse || 0) * 100) + '|' + Math.round((motion.bass || 0) * 100);
   if (!force && key === desktopOverlayPushState.lastLyricsKey && now - desktopOverlayPushState.lyricsAt < 900) return;
   desktopOverlayPushState.lyricsAt = now;
   desktopOverlayPushState.lastLyricsKey = key;

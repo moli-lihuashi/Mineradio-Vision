@@ -250,17 +250,12 @@ function testPushWallpaperStateDropsDeadGate() {
 const panelInputsSource = readSource(panelInputsPath);
 
 function makeVisibilityContext(on) {
-  var groupLabel = { hidden: !on };
-  var fpsLabel = { hidden: !on };
-  var fpsSeg = { hidden: !on };
-  var opacityRow = { hidden: !on };
-  var opacityInput = { closest: function (selector) { return selector === '.fx-slider' ? opacityRow : null; } };
+  // 壁纸设置四项已收进 #wallpaper-settings-group 一个容器，只由一个 hidden
+  // 统一控制（2026-11-16「两组帧率设置不再混在一起」）。模拟结构随之更新。
+  var group = { hidden: !on };
   var documentStub = {
     getElementById: function (id) {
-      if (id === 'wallpaper-settings-label') return groupLabel;
-      if (id === 'wallpaper-fps-label') return fpsLabel;
-      if (id === 'wallpaper-fps-seg') return fpsSeg;
-      if (id === 'fx-wallpaperopacity') return opacityInput;
+      if (id === 'wallpaper-settings-group') return group;
       return null;
     },
   };
@@ -268,26 +263,36 @@ function makeVisibilityContext(on) {
     document: documentStub,
     fx: { wallpaperMode: on },
   });
-  vm.runInContext(extractFunction(panelInputsSource, 'updateWallpaperPanelVisibility'), context,
+  const fnSrc = extractFunction(panelInputsSource, 'updateWallpaperPanelVisibility');
+  vm.runInContext(fnSrc, context,
     { filename: '05a-update-wallpaper-panel-visibility.slice.js' });
-  context.__els = { groupLabel: groupLabel, fpsLabel: fpsLabel, fpsSeg: fpsSeg, opacityRow: opacityRow };
+  context.__fnSrc = fnSrc;
+  context.__els = { group: group };
   return context;
 }
 
 function testWallpaperPanelVisibilityFollowsToggle() {
   var off = makeVisibilityContext(false);
   off.updateWallpaperPanelVisibility();
-  assert.strictEqual(off.__els.groupLabel.hidden, true, '开关关时「壁纸模式」分组标题要隐藏');
-  assert.strictEqual(off.__els.fpsLabel.hidden, true, '开关关时「壁纸帧数」标签要隐藏');
-  assert.strictEqual(off.__els.fpsSeg.hidden, true, '开关关时帧数分段要隐藏');
-  assert.strictEqual(off.__els.opacityRow.hidden, true, '开关关时透明度滑块要隐藏');
+  assert.strictEqual(off.__els.group.hidden, true, '开关关时壁纸设置容器要隐藏');
 
   var on = makeVisibilityContext(true);
   on.updateWallpaperPanelVisibility();
-  assert.strictEqual(on.__els.groupLabel.hidden, false, '开关开时「壁纸模式」分组标题要显示');
-  assert.strictEqual(on.__els.fpsLabel.hidden, false, '开关开时「壁纸帧数」标签要显示');
-  assert.strictEqual(on.__els.fpsSeg.hidden, false, '开关开时帧数分段要显示');
-  assert.strictEqual(on.__els.opacityRow.hidden, false, '开关开时透明度滑块要显示');
+  assert.strictEqual(on.__els.group.hidden, false, '开关开时壁纸设置容器要显示');
+
+  // 不许回退成「四个元素各自 hidden、显隐不同步」——那正是本次要修的缺陷。
+  assert.ok(/wallpaper-settings-group/.test(on.__fnSrc),
+    '显隐必须走 #wallpaper-settings-group 容器');
+  assert.ok(!/wallpaper-settings-label|wallpaper-fps-label|wallpaper-fps-seg|fx-wallpaperopacity/.test(on.__fnSrc),
+    '不许再单独切换四个子项的 hidden（会再次出现只露一半）');
+
+  // 结构约束：四项在文档顺序上必须位于容器之后（收进同一块）。
+  const indexHtml = readSource(indexPath);
+  const groupPos = indexHtml.indexOf('id="wallpaper-settings-group"');
+  assert.ok(groupPos > 0, 'index.html 必须有 #wallpaper-settings-group');
+  for (const id of ['wallpaper-settings-label', 'wallpaper-fps-label', 'wallpaper-fps-seg', 'fx-wallpaperopacity']) {
+    assert.ok(indexHtml.indexOf('id="' + id + '"') > groupPos, id + ' 必须收进壁纸设置容器');
+  }
 
   // updateFxInputs 必须刷新可见性（否则面板打开时状态不同步）
   const updateFxInputsSrc = extractFunction(panelInputsSource, 'updateFxInputs');
@@ -481,12 +486,16 @@ function testIndexHtmlUnlock() {
   assert.ok(!/dev-locked/.test(chunk), '壁纸模式开关不得再有 dev-locked');
   assert.ok(!/fx-dev-badge/.test(chunk), '壁纸模式开关不得再有「开发中」徽标');
 
-  assert.ok(/id="wallpaper-settings-label"[^>]*hidden/.test(indexHtml),
-    '「壁纸模式」分组标题默认 hidden（随开关显示）');
-  assert.ok(/id="wallpaper-fps-label"[^>]*hidden/.test(indexHtml),
-    '「壁纸帧数」标签默认 hidden（随开关显示）');
-  assert.ok(/id="wallpaper-fps-seg"[^>]*hidden/.test(indexHtml),
-    '帧数分段默认 hidden（随开关显示）');
+  // 四项已收进一个容器，默认 hidden 放在容器上；子项不再各自 hidden，
+  // 否则容器显示时子项仍被自身 hidden 压住（正是本次修复的「只露一半」）。
+  assert.ok(/id="wallpaper-settings-group"[^>]*hidden/.test(indexHtml),
+    '壁纸设置容器默认 hidden（随开关显示）');
+  for (const id of ['wallpaper-settings-label', 'wallpaper-fps-label', 'wallpaper-fps-seg']) {
+    const tag = indexHtml.match(new RegExp('id="' + id + '"[^>]*'));
+    assert.ok(tag, 'index.html 缺少 ' + id);
+    assert.ok(!/\shidden(\s|$)/.test(tag[0]),
+      id + ' 不应再各自带 hidden（统一由 #wallpaper-settings-group 控制）');
+  }
 
   /* 开关的 title 是用户唯一的「怎么退出」提示：默认走标准 WorkerW 时窗口拿不到键盘焦点，
    * 写「Esc 退出」就是骗人，必须指向托盘。 */

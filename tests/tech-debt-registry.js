@@ -58,12 +58,16 @@ const TECH_DEBT = [
   },
   {
     id: 'qishui-auth-legacy-7',
-    title: "server/qishui/auth.js 仍把 error_code 7 当 'wait'",
+    title: "server/qishui/auth.js 把 error_code 7 当 'wait'（未启用链路）",
     where: 'server/qishui/auth.js',
-    status: 'open',
-    reviewBy: '2026-12-31',
-    why: '与路由的中性 upstream_code_7 并存，等于两套语义；该链路未启用、无路由调用。',
-    nextStep: '先确认全仓确实没有调用者，然后要么删掉这条链路，要么与 upstream_code_7 对齐——不要两套语义长期并存。',
+    status: 'closed',
+    closedAt: '2026-11-14',
+    note: '逐个函数核查调用者：createQishuiPcQrLogin / checkQishuiPcQrLogin / exchangeQishuiOAuthCode 只出现在 qishui-api.js 的再导出里，零真实调用；同批辅助函数（qishuiPcQrNextFromIndexUrl 等 7 个）也是零引用。整条死链路删除，auth.js 从 347 行降到 47 行，只保留活着的 saveQishuiAccessToken / clearQishuiAccessToken。两套语义不再并存。',
+    evidence: [
+      { file: 'server/qishui/auth.js', mustNotContain: 'error_code === 7' },
+      { file: 'server/qishui/auth.js', mustContain: 'saveQishuiAccessToken' },
+      { file: 'qishui-api.js', mustNotContain: 'createQishuiPcQrLogin,' },
+    ],
   },
   {
     id: 'kugou-skip-tests',

@@ -58,13 +58,13 @@ try {
   document.documentElement.classList.add('diy-mode-preload');
 }
 </script>
-<link rel="stylesheet" href="css/index.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/index.css?v=3.0.1-lxui">
 <link rel="stylesheet" href="css/02-visual/visual.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/02-home/home.css?v=3.0.2-petwhite">
 <link rel="stylesheet" href="css/05-playback/playback.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/05-playback/netease-features.css?v=1.0.0">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.3-spotify">
-<link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.0-modular">
+<link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.2-fpsgroups">
 <link rel="stylesheet" href="css/12-folia/folia-world.css?v=0.1.0-skeleton">
 <link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/06-fx/glass.css?v=3.0.0-modular">
@@ -114,6 +114,7 @@ try {
     <button id="skin-btn" class="skin-btn" type="button" onclick="toggleSkinPopover(event)" title="皮肤" aria-label="皮肤" aria-expanded="false" aria-haspopup="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
     </button>
+
     <button id="player-quick-menu-btn" type="button" class="player-quick-menu-trigger" onclick="togglePlayerQuickMenu(event)" title="播放选项" aria-label="播放选项" aria-expanded="false" aria-haspopup="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>
     </button>
@@ -134,6 +135,7 @@ try {
   <button id="skin-btn-fs" class="skin-btn" type="button" onclick="toggleSkinPopover(event)" title="皮肤" aria-label="皮肤" aria-expanded="false" aria-haspopup="true">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
   </button>
+
   <button id="player-quick-menu-btn-fs" type="button" class="player-quick-menu-trigger" onclick="togglePlayerQuickMenu(event)" title="播放选项" aria-label="播放选项" aria-expanded="false" aria-haspopup="true">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>
   </button>
@@ -635,10 +637,12 @@ try {
   <div class="skin-popover-foot">点一格立即生效：红心格里就地放一遍，演出一格放满整屏，频谱一格贴在控制条底沿</div>
 </div>
 
-<button id="fx-fab" title="视觉控制台" onclick="toggleFxPanelPin(event)">
+<!-- 位置用 inline 锁死：CSS 链接带固定版本号，内容更新后可能命中磁盘缓存里的旧抬升规则。
+     inline 优先级高于普通 CSS 规则，能保证开关始终贴右下角；短屏 22/35 由 CSS 的 !important 规则覆盖。 -->
+<button id="fx-fab" title="视觉控制台" onclick="toggleFxPanelPin(event)" style="bottom:24px">
   <svg width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M4 7h8"/><path d="M16 7h4"/><circle cx="14" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>
 </button>
-<button id="fx-fab-hide-btn" type="button" onclick="toggleFxFabAutoHide(event)" title="自动隐藏视觉控制台">‹</button>
+<button id="fx-fab-hide-btn" type="button" onclick="toggleFxFabAutoHide(event)" title="自动隐藏视觉控制台" style="bottom:37px">‹</button>
 
 <!-- 控制台 (右侧贴边自动显示, 无关闭按钮)
      fx-css-glass = 纯 CSS 液态玻璃开关；去掉即回到 WebGL 玻璃路径 -->
@@ -1144,8 +1148,14 @@ try {
           <button data-desktop-lyrics-motion="float">呼吸</button>
           <button data-desktop-lyrics-motion="none">静止</button>
         </div>
+        <div class="fx-section-label">桌面歌词对齐</div>
+        <div class="fx-seg" id="desktop-lyrics-align-seg">
+          <button data-desktop-lyrics-align="center">居中</button>
+          <button data-desktop-lyrics-align="left">左对齐</button>
+          <button data-desktop-lyrics-align="right">右对齐</button>
+        </div>
         <div class="fx-slider"><label>桌面歌词倾斜</label><input id="fx-desktoplyricstilt" type="range" min="-35" max="35" step="1"><output></output></div>
-        <div class="fx-section-label">桌面歌词帧率</div>
+        <div class="fx-section-label">桌面歌词帧率 <small class="fx-label-scope">只影响桌面歌词窗口</small></div>
         <div class="fx-seg" id="desktop-lyrics-fps-seg">
           <button data-desktop-lyrics-fps="24">24</button>
           <button data-desktop-lyrics-fps="30">30</button>
@@ -1154,14 +1164,19 @@ try {
           <button data-desktop-lyrics-fps="0">无上限</button>
         </div>
       </div>
-      <div class="fx-section-label" id="wallpaper-settings-label" hidden>壁纸模式</div>
-      <div class="fx-section-label" id="wallpaper-fps-label" hidden>壁纸模式帧率（作用于壁纸，不是桌面歌词）</div>
-      <div class="fx-seg" id="wallpaper-fps-seg" hidden>
-        <button data-wallpaper-fps="24">24</button>
-        <button data-wallpaper-fps="30">30</button>
-        <button data-wallpaper-fps="60">60</button>
+      <!-- 壁纸设置整体一个容器：标题 / 帧率 / 透明度一起显隐。
+           原先标题和选项条分别设 hidden，容易出现「只露出一条没有标题的帧率条」，
+           被误认成桌面歌词帧率的第二行。 -->
+      <div id="wallpaper-settings-group" class="wallpaper-settings-group" hidden>
+        <div class="fx-section-label" id="wallpaper-settings-label">壁纸模式</div>
+        <div class="fx-section-label" id="wallpaper-fps-label">壁纸帧率 <small class="fx-label-scope">只影响壁纸窗口，与桌面歌词无关</small></div>
+        <div class="fx-seg" id="wallpaper-fps-seg">
+          <button data-wallpaper-fps="24">24</button>
+          <button data-wallpaper-fps="30">30</button>
+          <button data-wallpaper-fps="60">60</button>
+        </div>
+        <div class="fx-slider"><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35" max="1" step="0.01"><output></output></div>
       </div>
-      <div class="fx-slider"><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35" max="1" step="0.01"><output></output></div>
     </div>
   </div>
 
@@ -1358,6 +1373,8 @@ try {
     <button id="tab-queue" class="panel-tab active" onclick="switchPlaylistTab('queue')">当前队列</button>
     <button id="tab-pl" class="panel-tab" onclick="switchPlaylistTab('playlists')">我的歌单</button>
     <button id="tab-podcast" class="panel-tab" onclick="switchPlaylistTab('podcasts')">我的播客</button>
+    <!-- LX 音源作为第四个页签：不动「我的播客」（那是有实现的功能），也不在顶栏新增图标 -->
+    <button id="tab-lx" class="panel-tab" onclick="switchPlaylistTab('lx')">LX 音源</button>
   </div>
   <div id="queue-pane">
     <div class="queue-toolbar">
@@ -1379,6 +1396,48 @@ try {
     </div>
     <div class="queue-chip" style="margin-top:4px">内置歌单可混合全部平台</div>
     <div id="pl-list" style="margin-top:6px"></div>
+  </div>
+  <!-- LX 音源：脚本导入 / 启停切换 / 自检 / 兜底开关。由 22-lx-source.js 渲染 -->
+  <div id="lx-pane" style="display:none">
+    <div class="queue-toolbar">
+      <div class="queue-chip" id="lx-source-summary">未检查</div>
+      <div style="display:flex;gap:6px">
+        <button class="fx-mini-btn ghost" data-lx-act="refresh" style="height:26px;padding:0 10px;font-size:11px">刷新</button>
+      </div>
+    </div>
+    <div class="lx-source-list" id="lx-source-list"></div>
+    <div class="lx-source-status" id="lx-source-status"></div>
+    <!-- 兜底开关：仍是原生 checkbox（id 不变，JS 绑定不动），appearance:none 改成滑动开关 -->
+    <label class="lx-source-fallback">
+      <input type="checkbox" id="lx-source-fallback" checked />
+      <span class="lx-source-fallback-text">
+        <strong>音源兜底播放</strong>
+        <small>平台取不到直链时自动改用音源</small>
+      </span>
+    </label>
+    <div class="lx-source-import">
+      <div class="lx-source-section-head">
+        <strong>导入脚本</strong>
+        <small>直链或本地 .js 文件</small>
+      </div>
+      <div class="lx-source-row">
+        <input id="lx-source-url" type="text" placeholder="粘贴音源脚本直链 https://….js" spellcheck="false" />
+        <button type="button" data-lx-act="import-url">导入</button>
+      </div>
+      <!-- 原生 file input 隐藏但保留（label 的 for 仍指向它），由自定义按钮 + 文件名承接交互 -->
+      <div class="lx-source-file-picker">
+        <input id="lx-source-file" type="file" accept=".js,application/javascript,text/javascript" />
+        <label for="lx-source-file" class="lx-source-file-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+          <span>选择本地 .js</span>
+        </label>
+        <span class="lx-source-file-name" id="lx-source-file-name">尚未选择文件</span>
+      </div>
+    </div>
+    <div class="lx-source-note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
+      <span>源脚本由你自行导入，本应用不内置任何音源。只导入你信任来源的脚本——脚本在沙箱里执行，但沙箱不是强隔离。</span>
+    </div>
   </div>
   <div id="podcast-pane" style="display:none">
     <div class="queue-toolbar">

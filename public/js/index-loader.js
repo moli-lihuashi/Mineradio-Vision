@@ -169,6 +169,9 @@
     'js/modules/05-playback/16b-pet-walk-bounds.js',
     'js/modules/05-playback/16-pet-petdex.js',
     'js/modules/05-playback/16c-pet-skin.js',
+    // 洛雪音乐（LX）兼容源脚本：22a 歌曲→musicInfo 归一（纯函数），22 面板与取址
+    'js/modules/05-playback/22a-lx-music-info.js',
+    'js/modules/05-playback/22-lx-source.js',
     // lyrics / playlists
     'js/modules/06-lyrics/00-lyrics-fetch-parse.js',
     'js/modules/06-lyrics/00-built-in-playlists.js',

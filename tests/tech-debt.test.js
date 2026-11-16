@@ -61,6 +61,10 @@ test('closed 项：必须有收口日期，且证据文件仍存在并包含指�
         assert.ok(read(ev.file).includes(ev.mustContain),
           item.id + ' 的证据 ' + ev.file + ' 不再包含 "' + ev.mustContain + '" —— 可能被改回去了');
       }
+      if (ev.mustNotContain) {
+        assert.ok(!read(ev.file).includes(ev.mustNotContain),
+          item.id + ' 的证据 ' + ev.file + ' 又出现了 "' + ev.mustNotContain + '" —— 收口的改动被回退了');
+      }
     });
     assert.ok(item.note && item.note.length > 10, item.id + ' 缺收口说明');
   });

@@ -1962,6 +1962,13 @@ function createDesktopLyricsWindow(payload = {}) {
     movable: true,
     focusable: false,
     skipTaskbar: true,
+    // Windows 上 skipTaskbar 只是一次性的 ITaskbarList::DeleteTab，不写 WS_EX_TOOLWINDOW。
+    // 本窗口 show:false 创建、随后 showInactive()/setAlwaysOnTop()/setIgnoreMouseEvents()，
+    // 任务栏会重新登记这个无 owner 的顶层窗口 —— 实测会出现「Mineradio」和
+    // 「Mineradio Desktop Lyrics」两个任务栏缩略图。type:'toolbar' 是 Electron 在 Windows
+    // 上唯一支持的窗口类型，会在建窗时加上 Windows 原生尊重的 WS_EX_TOOLWINDOW，
+    // 任务栏/Alt+Tab 都不再收录；已验证置顶、透明、鼠标穿透、opacity 全部不受影响。
+    ...(process.platform === 'win32' ? { type: 'toolbar' } : {}),
     show: false,
     title: 'Mineradio Desktop Lyrics',
     webPreferences: {

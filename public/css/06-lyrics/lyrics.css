@@ -14,7 +14,7 @@
 /* ============================================================ */
 #classic-player{position:fixed;inset:0;z-index:5;pointer-events:none;opacity:0;transition:opacity .45s ease}
 #classic-player.active{opacity:1;pointer-events:auto}
-body.empty-home-active #classic-player.active{z-index:2;opacity:0!important;pointer-events:none!important;visibility:hidden!important;transition:none!important}
+body.empty-home-active #classic-player.active{z-index:2;opacity:1!important;pointer-events:none!important;transition:none!important}
 .cp-bg{position:absolute;inset:0;overflow:hidden}
 .cp-bg-blur{position:absolute;inset:-20%;background-size:cover;background-position:center;filter:blur(120px) saturate(1.6);transform:scale(1.15);opacity:.55}
 .cp-bg-overlay{position:absolute;inset:0;background:rgba(0,0,0,.45)}

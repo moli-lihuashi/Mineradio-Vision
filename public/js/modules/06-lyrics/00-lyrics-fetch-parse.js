@@ -1,6 +1,39 @@
 // ============================================================
 //  歌词
 // ============================================================
+// ---- LX 音源取词兜底 ----
+// 平台歌词接口经常对冷门/版权曲返回空壳。此时如果用户装了 LX 兼容音源，
+// 就用同一份 musicInfo 再取一次（与取址兜底同一套映射，见 22a）。
+// 只看行级 LRC 与翻译：LX 的 lxlyric 是逐字格式，现有管道解析不了。
+function lyricResponseHasContent(r) {
+  if (!r || typeof r !== 'object') return false;
+  var keys = ['yrc', 'lyric', 'lrc'];
+  for (var i = 0; i < keys.length; i++) {
+    var value = r[keys[i]];
+    if (typeof value === 'string' && value.trim().length > 20) return true;
+  }
+  return false;
+}
+
+async function tryLxSourceLyric(song) {
+  if (!song || typeof song !== 'object') return null;
+  if (typeof LxSource === 'undefined' || !LxSource || typeof LxSource.resolveLyric !== 'function') return null;
+  if (typeof LxMusicInfo === 'undefined' || !LxMusicInfo) return null;
+  var provider = typeof songProviderKey === 'function' ? songProviderKey(song) : '';
+  var source = LxMusicInfo.lxSourceKeyForProvider(provider);
+  if (!source) return null;
+  var info;
+  try { info = LxMusicInfo.buildLxMusicInfo(provider, song); } catch (_) { return null; }
+  if (!LxMusicInfo.hasUsableId(info)) return null;
+  try {
+    var got = await LxSource.resolveLyric(source, info);
+    if (!got || !lyricResponseHasContent(got)) return null;
+    return { lyric: got.lyric || '', tlyric: got.tlyric || '', source: 'lx' };
+  } catch (_) {
+    return null;
+  }
+}
+
 async function fetchLyric(songOrId, token) {
   try {
     var song = (songOrId && typeof songOrId === 'object') ? songOrId : null;
@@ -21,6 +54,12 @@ async function fetchLyric(songOrId, token) {
       : ('/api/lyric?id=' + encodeURIComponent(song ? song.id : songOrId));
     var r = await apiJson(endpoint);
     if (token !== trackSwitchToken) return;
+    // 平台没给到歌词（空响应/只有占位）→ 有 LX 音源就再取一次
+    if (!lyricResponseHasContent(r)) {
+      var lxLyric = await tryLxSourceLyric(song);
+      if (token !== trackSwitchToken) return;
+      if (lxLyric) r = lxLyric;
+    }
     applyLyricApiResponse(r, token, song);
     if (song) writePersistentLyricCache(song, r);
   } catch (e) {

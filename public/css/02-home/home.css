@@ -8,8 +8,6 @@ body.home-preset-enter .home-card,
 body.home-preset-enter .home-hero,
 body.home-preset-enter .home-tile,
 body.home-preset-enter .home-visual{transition:none!important;animation:none!important}
-body.home-preset-enter #classic-player,
-body.home-preset-enter #classic-player.active,
 body.home-preset-enter #sonic-topography-frame,
 body.home-preset-enter.sonic-topography-active #sonic-topography-frame{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important;transform:none!important}
 body.empty-home-active .home-card,

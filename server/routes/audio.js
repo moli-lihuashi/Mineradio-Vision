@@ -4,6 +4,7 @@
 //  - /api/audio  (音频代理, 支持 Range; 汽水 #auth= 走本地解密)
 // ====================================================================
 const { pipeline } = require('stream');
+const { decodeHeaderParam } = require('../lib/proxy-headers');
 const { Readable, Transform } = require('stream');
 
 const BODY_STALL_TIMEOUT_MS = 30000;
@@ -118,7 +119,10 @@ module.exports = function register(ctx) {
           res.end(err.message || 'Invalid audio url');
           return;
         }
-        const hdr = audioProxyHeadersFor(audioUrl, range);
+        // 音源（如 LX 源脚本）返回的地址可能带防盗链，需要补 Referer/UA。
+        // 只接受 referer/origin/user-agent 三个头，见 server/lib/proxy-headers.js。
+        const extraHeaders = decodeHeaderParam(url.searchParams.get('h'));
+        const hdr = Object.assign(audioProxyHeadersFor(audioUrl, range), extraHeaders);
         const up = await fetchProxiedMedia(audioUrl, hdr);
         const out = {
           'Content-Type': audioContentTypeForUrl(audioUrl, up.headers.get('content-type')),

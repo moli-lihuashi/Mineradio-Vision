@@ -747,6 +747,10 @@ const payloadContext = vm.createContext({
   normalizeDesktopLyricsLineCount: normalizeLineCount,
   normalizeDesktopLyricsMotion: function () { return 'slide'; },
   normalizeDesktopLyricsFps: function () { return 60; },
+  // 2026-11-16 新增：payload 带 align 档（贴边对齐），需与 03c 同语义
+  normalizeDesktopLyricsAlign: function (v) {
+    return /^(left|center|right)$/.test(String(v || '')) ? String(v) : 'center';
+  },
   DESKTOP_LYRICS_SIZE_MIN: readLayoutContext.DESKTOP_LYRICS_SIZE_MIN,
   DESKTOP_LYRICS_SIZE_MAX: readLayoutContext.DESKTOP_LYRICS_SIZE_MAX,
   DESKTOP_LYRICS_TILT_MIN: readLayoutContext.DESKTOP_LYRICS_TILT_MIN,
@@ -848,17 +852,20 @@ function testDesktopLyricsTiltLimitsStayInSync() {
     'desktopLyricsPayload 的 tilt 必须用 DESKTOP_LYRICS_TILT_MIN/MAX'
   );
 
-  // CSS 用 perspective(1100px) 做 3D，JS 的预留算法按同一个距离计算
-  const cssPerspective = lyricsPageSource.match(/transform:perspective\((\d+)px\) rotateY\(var\(--lyric-tilt/);
+  // CSS 用 perspective 做 3D，JS 的预留算法按同一个默认距离计算。
+  // 贴边档会把 --lyric-tilt-perspective 调到 2400px，所以 CSS 里是
+  // perspective(var(--lyric-tilt-perspective, 800px))；这里校验默认值与 JS 常量一致。
+  const stackBlock = (lyricsPageSource.match(/\.lyric-stack\{[\s\S]*?\}/) || [''])[0];
+  const cssPerspective = stackBlock.match(/transform:perspective\((?:(\d+)px|var\(--lyric-tilt-perspective,\s*(\d+)px\))\)\s*rotateY\(var\(--lyric-tilt/);
   assert.ok(cssPerspective, '.lyric-stack 的倾斜必须是 perspective(...) rotateY(...)');
   assert.strictEqual(
-    Number(cssPerspective[1]),
+    Number(cssPerspective[1] || cssPerspective[2]),
     Number(perspectiveMatch[1]),
-    'CSS 的透视距离要与 JS 的 LYRIC_ROTATE_PERSPECTIVE 一致'
+    'CSS 的透视距离默认值要与 JS 的 LYRIC_ROTATE_PERSPECTIVE 一致'
   );
   // 单行模式的滚动容器也必须走 rotateY（否则「倾斜」只在多行时是三维的）
   assert.ok(
-    /transform:perspective\(\d+px\) rotateY\(var\(--lyric-tilt/.test(
+    /transform:perspective\((?:(\d+)px|var\(--lyric-tilt-perspective,[^)]*\))\)\s*rotateY\(var\(--lyric-tilt/.test(
       (lyricsPageSource.match(/\.lyric-scroll\{[\s\S]*?\}/) || [''])[0]
     ),
     '.lyric-scroll 的 transform 也要用 perspective + rotateY'
@@ -934,6 +941,15 @@ function testPayloadClampsSizeToSharedLimits() {
     assert.strictEqual(p2.tilt, pair[1], 'tilt=' + pair[0] + ' 应夹到 ' + pair[1] + '，实际 ' + p2.tilt);
   });
   payloadContext.fx.desktopLyricsTilt = 0;
+
+  // 对齐档（贴边对齐）必须原样透传到 payload，非法值回落 center。
+  // 缺这个字段时窗口会停在旧对齐上，和面板显示不一致。
+  [['left', 'left'], ['center', 'center'], ['right', 'right'], ['bogus', 'center'], [undefined, 'center']].forEach(function (pair) {
+    payloadContext.fx.desktopLyricsAlign = pair[0];
+    const p3 = desktopLyricsPayload(true, true);
+    assert.strictEqual(p3.align, pair[1], 'align=' + pair[0] + ' 应为 ' + pair[1] + '，实际 ' + p3.align);
+  });
+  payloadContext.fx.desktopLyricsAlign = 'center';
 }
 
 // 小字号下各行仍要保持比例：不能因为内部 15px 地板把「中间大、两侧小」压平

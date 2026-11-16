@@ -146,6 +146,10 @@ function updateDesktopLyricsLayoutControls() {
   document.querySelectorAll('#desktop-lyrics-motion-seg [data-desktop-lyrics-motion]').forEach(function(btn){
     btn.classList.toggle('active', normalizeDesktopLyricsMotion(btn.getAttribute('data-desktop-lyrics-motion')) === motion);
   });
+  var align = normalizeDesktopLyricsAlign(fx.desktopLyricsAlign);
+  document.querySelectorAll('#desktop-lyrics-align-seg [data-desktop-lyrics-align]').forEach(function(btn){
+    btn.classList.toggle('active', normalizeDesktopLyricsAlign(btn.getAttribute('data-desktop-lyrics-align')) === align);
+  });
 }
 /* 桌面歌词主开关关掉时，把「大小 / 透明度 / 行数 / 动效 / 倾斜 / 帧率」整块收起，
  * 只留一行提示。这些参数作用于另一个窗口，主开关没开时摆在面板里只会让人以为「拖了没反应」。 */
@@ -157,18 +161,13 @@ function updateDesktopLyricsPanelVisibility() {
   panel.classList.toggle('dl-on', on);
   panel.classList.toggle('dl-off', !on);
 }
-// 壁纸模式的「帧数 / 透明度」只在开关打开时显示（与桌面歌词设置块同一条 UX 约定）
+// 壁纸模式的「帧数 / 透明度」只在开关打开时显示（与桌面歌词设置块同一条 UX 约定）。
+// 整组共用一个容器控制显隐：标题和选项条分开设 hidden 时，曾出现只露出帧率条、没有标题，
+// 被误认成桌面歌词帧率的第二行。
 function updateWallpaperPanelVisibility() {
   var on = !!(fx && fx.wallpaperMode);
-  var groupLabel = document.getElementById('wallpaper-settings-label');
-  if (groupLabel) groupLabel.hidden = !on;
-  var fpsLabel = document.getElementById('wallpaper-fps-label');
-  if (fpsLabel) fpsLabel.hidden = !on;
-  var fpsSeg = document.getElementById('wallpaper-fps-seg');
-  if (fpsSeg) fpsSeg.hidden = !on;
-  var opacityInput = document.getElementById('fx-wallpaperopacity');
-  var row = opacityInput && opacityInput.closest && opacityInput.closest('.fx-slider');
-  if (row) row.hidden = !on;
+  var group = document.getElementById('wallpaper-settings-group');
+  if (group) group.hidden = !on;
 }
 /* 低画质会关掉行层渲染（14-stage-lyrics-rendering.js: quality==='eco' → false），
  * 舞台只剩 cur/next/next2 三层 = 3 行。这件事以前完全没提示，用户只会觉得「行数设置坏了」，

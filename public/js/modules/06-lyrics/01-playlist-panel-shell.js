@@ -271,20 +271,28 @@ function scrollPlaylistPanelToCurrent() {
   });
 }
 function switchPlaylistTab(tab) {
-  tab = tab === 'podcasts' ? 'podcasts' : (tab === 'playlists' ? 'playlists' : 'queue');
+  // 'lx' 是「我的播客」换来的新页签（播客面板仍在 DOM，只是不再有入口）
+  tab = tab === 'lx' ? 'lx' : (tab === 'podcasts' ? 'podcasts' : (tab === 'playlists' ? 'playlists' : 'queue'));
   queueViewTab = tab;
   document.getElementById('tab-queue').classList.toggle('active', tab === 'queue');
   document.getElementById('tab-pl').classList.toggle('active', tab === 'playlists');
-  var podcastTab = document.getElementById('tab-podcast');
-  if (podcastTab) podcastTab.classList.toggle('active', tab === 'podcasts');
+  var lxTab = document.getElementById('tab-lx');
+  if (lxTab) lxTab.classList.toggle('active', tab === 'lx');
   document.getElementById('queue-pane').style.display = tab === 'queue' ? '' : 'none';
   document.getElementById('pl-pane').style.display = tab === 'playlists' ? '' : 'none';
+  var lxPane = document.getElementById('lx-pane');
+  if (lxPane) lxPane.style.display = tab === 'lx' ? '' : 'none';
   var podcastPane = document.getElementById('podcast-pane');
   if (podcastPane) podcastPane.style.display = tab === 'podcasts' ? '' : 'none';
+  // 切到 LX 页签时拉一次状态，别让用户看到上一次的旧列表
+  if (tab === 'lx' && typeof LxSource !== 'undefined' && LxSource && typeof LxSource.refresh === 'function') {
+    LxSource.refresh();
+  }
   if (tab === 'playlists' || tab === 'podcasts') refreshUserPlaylists();
   if (tab === 'queue') animateVisiblePanelList(document.getElementById('queue-list'), '.queue-item', document.getElementById('playlist-panel'), '.queue-item.now');
   if (tab === 'playlists') animateVisiblePanelList(document.getElementById('pl-list'), '.pl-card', document.getElementById('playlist-panel'));
   if (tab === 'podcasts') animateVisiblePanelList(document.getElementById('podcast-list'), '.pl-card', document.getElementById('playlist-panel'));
+  if (tab === 'lx') animateVisiblePanelList(document.getElementById('lx-source-list'), '.lx-source-item', document.getElementById('playlist-panel'));
 }
 function setMiniQueueOpen(open) {
   miniQueueOpen = !!open;

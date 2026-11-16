@@ -551,6 +551,10 @@ class DesktopWallpaperRuntime {
       movable: false,
       focusable: false,
       skipTaskbar: true,
+      // 同 desktop/main.js 的桌面歌词窗口：Windows 的 skipTaskbar 只做一次性
+      // DeleteTab，窗口显示/置顶后会被任务栏重新登记。toolbar 类型会加
+      // WS_EX_TOOLWINDOW，让这个覆盖层不产生第二个任务栏缩略图。
+      ...(process.platform === 'win32' ? { type: 'toolbar' } : {}),
       show: false,
       title: 'Mineradio Desktop Wallpaper',
       webPreferences: {

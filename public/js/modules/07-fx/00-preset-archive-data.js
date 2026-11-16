@@ -174,6 +174,7 @@ function normalizeFxArchiveSnapshot(raw) {
     desktopLyricsLines: normalizeDesktopLyricsLineCount(Object.prototype.hasOwnProperty.call(raw, 'desktopLyricsLines') ? raw.desktopLyricsLines : fxDefaults.desktopLyricsLines),
     desktopLyricsTilt: archiveNumber(raw, 'desktopLyricsTilt', fxDefaults.desktopLyricsTilt, DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
     desktopLyricsMotion: normalizeDesktopLyricsMotion(raw.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
+    desktopLyricsAlign: normalizeDesktopLyricsAlign(raw.desktopLyricsAlign || fxDefaults.desktopLyricsAlign),
     desktopLyricsClickThrough: raw.desktopLyricsClickThrough === true,
     desktopLyricsCinema: raw.desktopLyricsCinema !== false,
     desktopLyricsHighlight: raw.desktopLyricsHighlight === true,

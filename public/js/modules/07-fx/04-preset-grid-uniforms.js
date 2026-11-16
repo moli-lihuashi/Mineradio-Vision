@@ -94,6 +94,12 @@ function setPreset(p, opts) {
   applyClassicFxPanelState();
   applyClassicPresetState(p === CLASSIC_PRESET_INDEX);
   uniforms.uPreset.value = p;
+  if (typeof syncParticleShaderPreset === 'function') syncParticleShaderPreset(p);
+  // 切到经典预设时刷新 HOME 可见性：经典是纯 DOM 播放器界面，激活时不应被
+  // HOME 空场态（body.empty-home-active）用 CSS 藏掉。切回其它预设同理反向刷新。
+  if (changed && typeof updateEmptyHomeVisibility === 'function') {
+    try { updateEmptyHomeVisibility({ forceLoad: false }); } catch (_) {}
+  }
   refreshPresetGrid();
   if (changed && !opts.skipTransition) triggerPresetParticleTransition(prev, p);
   // 每个预设对应的相机基线 (改 userOrbit)
@@ -151,6 +157,7 @@ function setPreset(p, opts) {
 
 function syncFxUniforms() {
   uniforms.uPreset.value = fx.preset;
+  if (typeof syncParticleShaderPreset === 'function') syncParticleShaderPreset(fx.preset);
   uniforms.uIntensity.value = fx.intensity;
   uniforms.uParticleDensity.value = fx.particleCount;
   uniforms.uDepth.value = fx.depth;

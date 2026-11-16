@@ -5,6 +5,11 @@
 function shouldShowEmptyHomeCore(ignoreSplash) {
   if (!ignoreSplash && document.body.classList.contains('splash-active')) return false;
   if (immersiveMode) return false;
+  // 经典预设（Preset 11）是纯 DOM 播放器界面，没有 3D 粒子层可被 HOME 叠加。
+  // 它激活时若队列为空，HOME 空场态的 `body.empty-home-active` 会经 CSS 把
+  // #classic-player 强制 visibility:hidden —— 用户选了经典却看不到封面/歌词。
+  // 这里把「经典预设激活」纳入排除条件，让经典播放器正常显示而非被空场态接管。
+  if (typeof isClassicPresetActive === 'function' && isClassicPresetActive()) return false;
   if (homeForcedOpen) return true;
   if (homeSuppressed) return false;
   if (shelfPinnedOpen) return false;
@@ -131,7 +136,10 @@ function clearHomeUiState() {
   if (typeof stopHomeWeatherFx === 'function') stopHomeWeatherFx();
 }
 function hasActivePresetOverlay() {
-  return isClassicPresetActive() || document.body.classList.contains('sonic-topography-active');
+  // 只有音域回响（sonic-topography）是全屏覆盖层，需要为 HOME 隐藏。
+  // 经典预设是播放器主界面，不是覆盖层：HOME 显示时它应作为背景层保留在下面
+  // （与其它预设的粒子背景一致），不能进 home-preset-enter 被 visibility:hidden 藏掉。
+  return document.body.classList.contains('sonic-topography-active');
 }
 function snapshotPresetLayersForHome() {
   var sonic = document.getElementById('sonic-topography-frame');

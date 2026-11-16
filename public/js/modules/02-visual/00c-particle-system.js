@@ -1678,12 +1678,103 @@ void main(){
 }
 `;
 
+/* 十套预设原本全部编进同一个 58KB 顶点着色器。冷启动时只为当前预设付编译成本：
+ * 保留分支骨架，把未选分支的 block 内容替换为空；缺省/越界仍使用完整源，行为不变。 */
+function particleShaderPresetValue(preset) {
+  var value = Number(preset);
+  return isFinite(value) ? value : 0;
+}
+function particleShaderBlockEnd(source, openBrace) {
+  var depth = 0;
+  var lineComment = false;
+  var blockComment = false;
+  for (var i = openBrace; i < source.length; i += 1) {
+    var ch = source.charAt(i);
+    var next = source.charAt(i + 1);
+    if (lineComment) {
+      if (ch === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (ch === '*' && next === '/') { blockComment = false; i += 1; }
+      continue;
+    }
+    if (ch === '/' && next === '/') { lineComment = true; i += 1; continue; }
+    if (ch === '/' && next === '*') { blockComment = true; i += 1; continue; }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+function buildParticleVertexShaderForPreset(source, preset) {
+  var presetValue = particleShaderPresetValue(preset);
+  var presetFinite = isFinite(Number(preset));
+  var mainStart = source.indexOf('  if (uPreset < 0.5) {');
+  var mainEnd = source.indexOf('  //  鼠标交互 (仅 SILK)', mainStart);
+  if (mainStart < 0 || mainEnd < 0) return source;
+  var branchRe = /(?:^|\n)\s*(?:if|else if) \(uPreset\s*<\s*([0-9.]+)\)\s*\{/g;
+  branchRe.lastIndex = Math.max(0, mainStart - 1);
+  var branches = [];
+  var match;
+  while ((match = branchRe.exec(source)) && match.index < mainEnd) {
+    var open = match.index + match[0].lastIndexOf('{');
+    var close = particleShaderBlockEnd(source, open);
+    if (close < 0 || close > mainEnd) break;
+    branches.push({ open: open, close: close, limit: Number(match[1]) });
+    branchRe.lastIndex = close + 1;
+  }
+  if (!branches.length) return source;
+  var selected = -1;
+  for (var i = 0; i < branches.length; i += 1) {
+    if (presetValue < branches[i].limit) { selected = i; break; }
+  }
+  // 越界 / 异常输入仍用完整源（真错误，非预设语义）。无匹配分支 = 经典预设：
+  // 它的粒子/bloom/浮层/背封在 setPreset 里 visible=false，从不绘制，这里只需一个
+  // 能编译通过的最小顶点着色器。main() 前缀已声明 pos/maxRippleAmp/各 varying，
+  // 后缀（鼠标交互之后）会重算全部 varying 并算 gl_Position，所以主体一行 pos=position 即可。
+  if (selected < 0) {
+    // 经典预设（索引 11）没有粒子分支，且粒子层 visible=false 从不绘制，给最小源。
+    // 越界 / 非有限输入是真错误，回退完整源保证行为可预测。
+    if (!presetFinite || presetValue !== 11) return source;
+    return source.slice(0, mainStart) + '  pos = position;\n' + source.slice(mainEnd);
+  }
+  var parts = [];
+  var cursor = 0;
+  for (var b = 0; b < branches.length; b += 1) {
+    var branch = branches[b];
+    parts.push(source.slice(cursor, branch.open + 1));
+    parts.push(b === selected ? source.slice(branch.open + 1, branch.close) : '\n/* inactive particle preset omitted */\n');
+    parts.push('}');
+    cursor = branch.close + 1;
+  }
+  parts.push(source.slice(cursor));
+  return parts.join('');
+}
+var particlePresetShaderCache = {};
+function particleVertexShaderForPreset(preset) {
+  var key = String(particleShaderPresetValue(preset));
+  if (!particlePresetShaderCache[key]) {
+    try {
+      particlePresetShaderCache[key] = buildParticleVertexShaderForPreset(vs, preset);
+    } catch (err) {
+      console.warn('[particles] preset shader selection failed, using full source:', err);
+      particlePresetShaderCache[key] = vs;
+    }
+  }
+  return particlePresetShaderCache[key];
+}
+var particleShaderActivePreset = particleShaderPresetValue(typeof fx !== 'undefined' && fx ? fx.preset : 0);
+var activeParticleVs = particleVertexShaderForPreset(particleShaderActivePreset);
+
 var material = new THREE.ShaderMaterial({
-  uniforms: uniforms, vertexShader: vs, fragmentShader: fs,
+  uniforms: uniforms, vertexShader: activeParticleVs, fragmentShader: fs,
   transparent: true, depthWrite: false, blending: THREE.NormalBlending,
 });
 
-var bloomVs = vs
+var bloomVs = activeParticleVs
   .replace('uniform float uMouseActive, uPixel, uColorMixT, uLoading;', 'uniform float uMouseActive, uPixel, uColorMixT, uLoading, uBloomSize;')
   .replace('gl_PointSize = sz * uPixel * uPointScale;', 'gl_PointSize = sz * uPixel * uPointScale * uBloomSize;');
 var bloomFs = `
@@ -1710,6 +1801,19 @@ var bloomMaterial = new THREE.ShaderMaterial({
   uniforms: uniforms, vertexShader: bloomVs, fragmentShader: bloomFs,
   transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
 });
+function syncParticleShaderPreset(preset) {
+  var nextPreset = particleShaderPresetValue(preset);
+  if (nextPreset === particleShaderActivePreset || !material || !bloomMaterial) return false;
+  var nextVs = particleVertexShaderForPreset(nextPreset);
+  material.vertexShader = nextVs;
+  material.needsUpdate = true;
+  bloomMaterial.vertexShader = nextVs
+    .replace('uniform float uMouseActive, uPixel, uColorMixT, uLoading;', 'uniform float uMouseActive, uPixel, uColorMixT, uLoading, uBloomSize;')
+    .replace('gl_PointSize = sz * uPixel * uPointScale;', 'gl_PointSize = sz * uPixel * uPointScale * uBloomSize;');
+  bloomMaterial.needsUpdate = true;
+  particleShaderActivePreset = nextPreset;
+  return true;
+}
 var bloomParticles = new THREE.Points(geo, bloomMaterial);
 bloomParticles.frustumCulled = false;
 bloomParticles.renderOrder = 0;

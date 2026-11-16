@@ -10,6 +10,78 @@
  */
 'use strict';
 
+/* ---- Pixi 8.21 滤镜纹理池兼容补丁（世界级，所有 Pixi 模式生效）----
+ * Pixi 8.21.0 在窗口 resize / renderer.resolution 变化时会把「屏幕大小的空闲池纹理」
+ * destroy(true) 回收（source 置 null），但 FilterSystem 侧仍可能持有这些引用：
+ *   a) _globalFilterBindGroup 的槽位 1/2/3（tempera 的 pixiFilterPoolCompat 已修）；
+ *   b) _filterStack 里上一趟 pass 留下的 inputTexture —— 原版 _findFilterResolution
+ *      直接读 source._resolution，就会抛「Cannot read properties of null
+ *      (reading '_resolution')」，世界层 catch 后整局退出（用户所见）。
+ * 这里在创建任何模式实例之前安装完整补丁（绑定组解绑 + _findFilterResolution 空安全），
+ * 幂等标志与 tempera 的 pixiFilterPoolCompat 共用：tempera 自装时看到标志已设即跳过。
+ */
+function foliaWorldInstallPixi821FilterPoolCompat(pixi) {
+  if (!pixi || pixi.VERSION !== '8.21.0') return false;
+  var prototype = pixi.FilterSystem.prototype;
+  if (prototype.__foliaPixi821FilterPoolCompat) return false;
+  prototype.__foliaPixi821FilterPoolCompat = true;
+
+  var groups = new Set();
+  var pool = pixi.TexturePool;
+  var unbindPassTextures = function () {
+    var source = pixi.Texture.EMPTY.source;
+    groups.forEach(function (group) {
+      group.setResource(source, 1);
+      group.setResource(source.style, 2);
+      group.setResource(source, 3);
+    });
+  };
+
+  /* init 会被 Pixi 的 renderer runner 在任何滤镜渲染之前执行 */
+  var init = prototype.init;
+  prototype.init = function () {
+    if (init) init.call(this);
+    groups.add(this._globalFilterBindGroup);
+  };
+  var destroy = prototype.destroy;
+  prototype.destroy = function () {
+    groups.delete(this._globalFilterBindGroup);
+    this._globalFilterBindGroup.destroy();
+    destroy.call(this);
+  };
+
+  /* resize / renderer 销毁 / clear() 都会从这里丢弃空闲纹理 */
+  var dropTextures = pool._dropTextures;
+  pool._dropTextures = function (textures, shouldDestroy) {
+    if (shouldDestroy && textures.length > 0) unbindPassTextures();
+    dropTextures.call(this, textures, shouldDestroy);
+  };
+  var returnTexture = pool.returnTexture;
+  pool.returnTexture = function (texture, resetStyle) {
+    var key = this._poolKey[texture.uid];
+    if (key !== undefined && !this._buckets.has(key)) unbindPassTextures();
+    returnTexture.call(this, texture, resetStyle);
+  };
+
+  /* _findFilterResolution 空安全：_filterStack 里的 inputTexture 可能是已被池回收
+   * （source=null）的纹理，原实现直接读 source._resolution 抛错。跳过空引用继续
+   * 往栈底找，找不到再退回 fallback —— 与绑定组解绑是同一缺陷的另一半。 */
+  var findFilterResolution = prototype._findFilterResolution;
+  prototype._findFilterResolution = function (fallback) {
+    var index = (this._filterStackIndex || 0) - 1;
+    while (index > 0) {
+      var entry = this._filterStack[index];
+      if (!entry || entry.skip) { index -= 1; continue; }
+      var texture = entry.inputTexture;
+      if (texture && texture.source) return texture.source._resolution;
+      index -= 1;
+    }
+    return fallback;
+  };
+  void findFilterResolution;
+  return true;
+}
+
 function foliaWorldEnsureRoot() {
   if (foliaWorld.root && foliaWorld.root.isConnected) return foliaWorld.root;
   var root = document.createElement('div');
@@ -140,6 +212,12 @@ function foliaWorldCreateInstance() {
   if (def.needsWebGL2 && !foliaWorldSupportsWebGL2()) {
     foliaWorld.failReason = '「' + def.name + '」需要 WebGL2，当前设备不支持';
     return false;
+  }
+  /* Pixi 8.21 滤镜池兼容补丁必须在任何模式创建 App 之前装上（幂等）。 */
+  try {
+    if (typeof PIXI !== 'undefined') foliaWorldInstallPixi821FilterPoolCompat(PIXI);
+  } catch (compatErr) {
+    console.warn('[FoliaWorld] pixi filter-pool compat skipped:', compatErr);
   }
   foliaWorldDestroyInstance();
   var token = foliaWorldCreateToken;
@@ -421,6 +499,12 @@ function foliaWorldResumeWallpaperVideos() {
 }
 
 /* 主循环每帧调用一次；出错立即退出世界，避免半死状态。 */
+function foliaWorldCompactStackHead(err, limit) {
+  var stack = (err && err.stack) ? String(err.stack) : '';
+  if (!stack) return '';
+  var lines = stack.split(/\r?\n/).slice(0, 3).map(function (line) { return line.trim(); }).filter(Boolean);
+  return lines.join(' | ').slice(0, limit || 200);
+}
 function foliaWorldTick(now, dt) {
   if (!foliaWorld.active) return;
   var inst = foliaWorld.instance;
@@ -432,9 +516,14 @@ function foliaWorldTick(now, dt) {
   try {
     def.tick(inst, ctx);
   } catch (err) {
-    foliaWorld.failReason = 'Folia 渲染异常：' + ((err && err.message) || String(err));
+    /* 模式名 + 堆栈首行进 failReason：面板里就能看出是哪个模式、哪条内部路径，
+     * 不用再连 CDP 抓一遍。完整堆栈仍进 console。 */
+    var stackHead = foliaWorldCompactStackHead(err);
+    foliaWorld.failReason = 'Folia 渲染异常（' + (def.name || foliaWorld.mode) + '）：'
+      + ((err && err.message) || String(err))
+      + (stackHead ? ' · ' + stackHead : '');
     foliaWorldExit({ silent: true });
-    if (typeof showToast === 'function') showToast(foliaWorld.failReason);
+    if (typeof showToast === 'function') showToast('Folia 渲染异常（' + (def.name || foliaWorld.mode) + '）：' + ((err && err.message) || String(err)));
     console.error('[FoliaWorld]', err);
     return;
   }

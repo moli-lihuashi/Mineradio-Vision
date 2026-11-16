@@ -3,12 +3,32 @@
 /* 几个玻璃根各自 requestIdleCallback 预热，会挤在同一个空闲窗口里同时建 WebGL 上下文、
  * 同时编译整套着色器 —— 实测「点击进入」后 0~4.5s 的掉帧主要来自这里
  * （同一秒内 getContext 162ms / getProgramParameter 120ms / getShaderParameter 79ms）。
- * 只做错峰、不做串行：仍允许重叠，避免把总时长拉长。槽位按「用户先看到谁」排。 */
+ * 后台预热错峰且串行；用户主动打开面板仍直接调 warmup，不在这条队列里等待。 */
 var LG_WARM_SLOT_MS = 180;
+var lgBootWarmQueue = [];
+var lgBootWarmRunning = false;
+function drainGlassWarmupQueue() {
+  if (lgBootWarmRunning || !lgBootWarmQueue.length) return;
+  lgBootWarmRunning = true;
+  var job = lgBootWarmQueue.shift();
+  var result;
+  try { result = job(); } catch (err) {
+    console.warn('[LiquidGlass] queued warmup failed:', err);
+  }
+  Promise.resolve(result).then(function () {
+    lgBootWarmRunning = false;
+    setTimeout(drainGlassWarmupQueue, 0);
+  }, function () {
+    lgBootWarmRunning = false;
+    setTimeout(drainGlassWarmupQueue, 0);
+  });
+}
 function staggerGlassWarmup(slot, fn) {
   var delay = Math.max(0, slot | 0) * LG_WARM_SLOT_MS;
-  if (delay <= 0) { fn(); return; }
-  setTimeout(fn, delay);
+  setTimeout(function () {
+    lgBootWarmQueue.push(fn);
+    drainGlassWarmupQueue();
+  }, delay);
 }
 
 /* 方案 A：进入主界面时先让 .home-card 自带的 CSS 玻璃（backdrop-filter）顶着，
@@ -283,7 +303,7 @@ function bootstrapLiquidGlass() {
       if (fxState !== 'idle' || !fxShell) return;
       fxState = 'warming';
       fxCfg = buildFxCfg();
-      LiquidGlass.init({
+      return LiquidGlass.init({
         root: fxPanel,
         glassElements: [fxShell],
         defaults: liquidGlassInitDefaults(fxCfg)
@@ -394,7 +414,7 @@ function bootstrapLiquidGlass() {
       if (sbState !== 'idle' || !sbShell) return;
       sbState = 'warming';
       sbCfg = buildSearchCfg();
-      LiquidGlass.init({
+      return LiquidGlass.init({
         root: searchBox,
         glassElements: [sbShell],
         defaults: liquidGlassInitDefaults(sbCfg)
@@ -492,7 +512,7 @@ function bootstrapLiquidGlass() {
       if (document.body.classList.contains('lg-degraded') || document.body.classList.contains('lg-forced-off')) return;
       if (!isHomeVisible()) return;
       homeGlassArmed = true;
-      if (homeState === 'idle') warmupHomeGlass();
+      if (homeState === 'idle') staggerGlassWarmup(0, warmupHomeGlass);
       else activateHomeGlass();
     }
 
@@ -539,7 +559,7 @@ function bootstrapLiquidGlass() {
       if (!homeCards.length) return;
       homeState = 'warming';
       homeCfg = buildHomeCfg();
-      LiquidGlass.init({
+      return LiquidGlass.init({
         root: homeGrid,
         glassElements: homeCards.slice(),
         defaults: liquidGlassInitDefaults(homeCfg)
@@ -697,7 +717,7 @@ function bootstrapLiquidGlass() {
       if (!ltCards.length) return;
       ltState = 'warming';
       ltCfg = buildLtCfg();
-      LiquidGlass.init({
+      return LiquidGlass.init({
         root: ltRail,
         glassElements: ltCards.slice(),
         defaults: liquidGlassInitDefaults(ltCfg)
@@ -861,7 +881,7 @@ function bootstrapLiquidGlass() {
       if (bbState !== 'idle' || !bbShell) return;
       bbState = 'warming';
       bbCfg = buildBottomCfg();
-      LiquidGlass.init({
+      return LiquidGlass.init({
         root: bottomBar,
         glassElements: [bbShell],
         defaults: liquidGlassInitDefaults(bbCfg)
@@ -977,10 +997,22 @@ function applyAllLiquidGlassConfig() {
 }
 window.applyAllLiquidGlassConfig = applyAllLiquidGlassConfig;
 
+function scheduleLiquidGlassBootstrapAfterSplash() {
+  var waitStartedAt = performance.now();
+  function waitForSplashExit() {
+    if (document.body.classList.contains('splash-active') && performance.now() - waitStartedAt < 12000) {
+      setTimeout(waitForSplashExit, 200);
+      return;
+    }
+    applyHomeLiquidGlassConfig();
+    bootstrapLiquidGlass();
+  }
+  waitForSplashExit();
+}
 if (document.readyState === 'complete' || document.readyState === 'interactive') {
-  setTimeout(function(){ applyHomeLiquidGlassConfig(); bootstrapLiquidGlass(); }, 1500);
+  setTimeout(scheduleLiquidGlassBootstrapAfterSplash, 0);
 } else {
   document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function(){ applyHomeLiquidGlassConfig(); bootstrapLiquidGlass(); }, 1500);
+    setTimeout(scheduleLiquidGlassBootstrapAfterSplash, 0);
   });
 }

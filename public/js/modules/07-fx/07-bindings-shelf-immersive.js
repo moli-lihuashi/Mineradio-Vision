@@ -403,6 +403,16 @@ function bindFxPanelDom() {
       showToast('桌面歌词动效：' + desktopLyricsMotionLabel(fx.desktopLyricsMotion));
     });
   });
+  document.querySelectorAll('#desktop-lyrics-align-seg [data-desktop-lyrics-align]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      fx.desktopLyricsAlign = normalizeDesktopLyricsAlign(btn.getAttribute('data-desktop-lyrics-align'));
+      updateDesktopLyricsLayoutControls();
+      saveLyricLayout();
+      pushDesktopLyricsState(true);
+      var alignLabel = { left: '左对齐', center: '居中', right: '右对齐' }[fx.desktopLyricsAlign] || '居中';
+      showToast('桌面歌词对齐：' + alignLabel);
+    });
+  });
   document.querySelectorAll('#wallpaper-fps-seg [data-wallpaper-fps]').forEach(function(btn){
     btn.addEventListener('click', function(){
       fx.wallpaperFps = Math.max(1, Math.min(60, Math.round(Number(btn.getAttribute('data-wallpaper-fps')) || 60)));

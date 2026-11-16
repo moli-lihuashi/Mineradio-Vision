@@ -130,6 +130,52 @@ function providerPlayUrlEndpoint(song, opts) {
   return '/api/song/url?id=' + encodeURIComponent(song.id || '') + matchQuery + qualityParam;
 }
 
+// ---- LX 音源兜底 ----
+// 平台侧取不到直链时（会员/版权限制、或直接抛错），如果用户装了 LX 兼容音源就再试一次。
+// 默认开启：装了音源就是要用；面板里可以关（mineradio-lx-source-fallback = '0'）。
+// 只兜底有对应 LX 源的平台：汽水/Spotify/本地 在 LX 生态里没有对应源，直接跳过。
+var LX_FALLBACK_STORE_KEY = 'mineradio-lx-source-fallback';
+
+function lxSourceFallbackEnabled() {
+  try {
+    return localStorage.getItem(LX_FALLBACK_STORE_KEY) !== '0';
+  } catch (_) {
+    return true;   // 存坏/不可用按开启处理，不让一次写坏就永久失效
+  }
+}
+
+async function tryLxSourceFallback(song, opts) {
+  opts = opts || {};
+  if (opts.skipLxSourceFallback) return null;
+  if (!lxSourceFallbackEnabled()) return null;
+  if (typeof LxSource === 'undefined' || !LxSource || typeof LxSource.resolveUrl !== 'function') return null;
+  if (typeof LxMusicInfo === 'undefined' || !LxMusicInfo) return null;
+
+  var provider = typeof songProviderKey === 'function' ? songProviderKey(song) : '';
+  var source = LxMusicInfo.lxSourceKeyForProvider(provider);
+  if (!source) return null;
+
+  var info;
+  try { info = LxMusicInfo.buildLxMusicInfo(provider, song); } catch (_) { return null; }
+  if (!LxMusicInfo.hasUsableId(info)) return null;
+
+  try {
+    var got = await LxSource.resolveUrl(source, info, opts.quality || '');
+    if (!got || !got.url) return null;
+    return {
+      url: got.url,
+      provider: provider,
+      quality: got.quality || '',
+      resolver: got.resolver || '',
+      isLxSource: true,
+      lxSource: source
+    };
+  } catch (_) {
+    // 兜底失败不能盖住原始错误：调用方会在都失败时抛平台那条
+    return null;
+  }
+}
+
 async function resolveProviderPlayUrlData(song, opts) {
   opts = opts || {};
   if (opts.preResolvedPlaybackData && opts.preResolvedPlaybackData.url) {
@@ -144,7 +190,11 @@ async function resolveProviderPlayUrlData(song, opts) {
   // 切歌取消信号：归属失效时上层 abort，fetch 立刻断开而不是等满超时
   if (opts.playbackResolveSignal) reqOpts.signal = opts.playbackResolveSignal;
   try {
-    return await apiJson(endpoint, reqOpts);
+    var data = await apiJson(endpoint, reqOpts);
+    // 有响应但没有可用直链（会员/版权限制常见这种形态）→ 有 LX 音源就再试一次
+    if (data && data.url) return data;
+    var lxFromEmpty = await tryLxSourceFallback(song, opts);
+    return lxFromEmpty || data;
   } catch (err) {
     var aborted = err && (err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.code === 20);
     if (aborted) {
@@ -154,6 +204,9 @@ async function resolveProviderPlayUrlData(song, opts) {
       // 纯超时：转成可读错误，走正常失败分支
       throw new Error('取址超时（' + Math.round(timeoutMs / 1000) + 's）');
     }
+    // 平台侧取址抛错 → 有 LX 音源就再试一次；都失败才抛平台那条原始错误
+    var lxFromError = await tryLxSourceFallback(song, opts);
+    if (lxFromError) return lxFromError;
     throw err;
   }
 }

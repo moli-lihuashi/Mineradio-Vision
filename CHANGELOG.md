@@ -1,5 +1,109 @@
 # Changelog
 
+## v3.3.2 · 2026-11-16 重新构建批次
+
+本次按发布要求**不升版本号**，资产替换了 2026-11-14 的构建；以 Release 正文首行的构建 commit 与 SHA256 为准。
+
+
+### 两组帧率设置不再混在一起
+
+- **现象**：视觉控制台里「桌面歌词帧率」（24/30/60/120/无上限）和「壁纸帧率」（24/30/60）两条选择条紧挨着，壁纸那条的标题没跟着显示，看起来像同一个设置的两行。
+- **根因**：壁纸区的分组标题、帧率标题、选项条、透明度分别设 `hidden`，显隐不同步；另外 `05b-fx-panel-layout.js` 的 `setFxSectionBefore()` 用 `textContent` 整体重写标题，把运行时给桌面歌词帧率加的作用范围小字删掉了。
+- **改法**：
+  - 壁纸设置（分组标题 / 帧率标题 / 选项条 / 透明度）收进 `#wallpaper-settings-group` **一个容器**，`updateWallpaperPanelVisibility()` 只用一个 `hidden` 控制，不可能再出现「只露出选项条没有标题」。
+  - 两组标题都写明作用范围：「桌面歌词帧率 · 只影响桌面歌词窗口」「壁纸帧率 · 只影响壁纸窗口，与桌面歌词无关」；壁纸区加 16px 顶部间距和分隔线。
+  - `setFxSectionBefore()` / `setFxSectionBeforeNode()` 改用 `fxSetLabelTextKeepChildren()` 只替换直接文本节点，保留 `<small>` 说明，不再被布局阶段重写抹掉。
+  - 档位与绑定完全不变（桌面 24/30/60/120/无上限、壁纸 24/30/60，id 与 `data-*` 原样）。
+  - `fx-panel.css` 版本号 bump 到 `?v=3.0.2-fpsgroups`——这次也改了该 CSS，避免磁盘缓存让改动看起来无效。
+- **验证**：Electron 真实页面确认两处作用范围小字都在、壁纸容器 `display:block`、顶部间距 16px 与分隔线存在、两组选项条都可见。新增 `tests/fx-fps-groups.test.js` 4 条守卫，均自证回退会判红。
+- **回归**：150/150 测试、45/45 变异全判红（新增 M47：标题重写回退）；dist 的四个文件一致。
+
+### LX 音源面板组件美化
+
+- **问题**：面板里混着两个浏览器原生控件——系统蓝色方块复选框、以及「选择文件 / 未选择任何文件」的原生文件框，和深色玻璃面板完全不搭；导入区没有分组层次，安全说明裸贴在底部。
+- **改动**（只改外观，交互语义一律不动：所有 id、`data-lx-act`、`accept` 限制、checkbox 的 `.checked` 读写都保持原样）：
+  - **兜底开关**：`appearance:none` 改成 34×19 滑动轨道 + 白色滑块，选中态青蓝描边与微光；文案拆成主标题「音源兜底播放」和副标题「平台取不到直链时自动改用音源」，整行卡片可点，保留键盘焦点环。
+  - **文件选择**：原生 input 用 `opacity:0` 隐藏但**保留可访问性**，由 `label for` 关联的自定义按钮（上传图标 + 「选择本地 .js」）承接点击；虚线容器里增加文件名回显，选中后文字变青蓝。JS 在 `change` 时更新文件名与 `is-picked` 标记。
+  - **导入区**：独立分组卡片 + 标题/小字说明；输入框加 placeholder 弱化与聚焦光晕，导入按钮 hover 轻微上抬。
+  - **说明卡**：改成琥珀色半透明提示卡，带信息图标，与「只导入你信任来源的脚本」的警示语义匹配。
+  - **列表项**：当前启用的音源加左侧青蓝强调条。
+- **验证**：Electron 加载真实页面并截取面板渲染图确认观感；交互实测——开关点击后 `checked` 翻转且 `localStorage` 写入 `'0'`、原生 file input 仍带 `accept` 且 `opacity:0`、用 `DataTransfer` 造一个 File 触发 `change` 后文件名回显为 `demo-source.js` 并带 `is-picked`。新增 2 条守卫（关键 id/动作不丢、原生控件确实被样式接管且文件名会回显），变异新增 M45（去掉 `label for` 即被抓）。
+- **顺手堵住 CSS 缓存坑**：这次改的是 `css/index.css`，它原本也带固定版本号 `?v=3.0.0-modular`——上一轮 `fx-panel.css` 正是因此出现「改了没生效」。已 bump 成 `?v=3.0.1-lxui`，加静态守卫防止回退，并自证把版本号改回旧值会立刻判红。
+- **回归**：146/146 测试、44/44 变异全判红（新增 M45 去掉 `label for`、M46 版本号回退）；dist 的 HTML / CSS / JS 三个文件一致。
+
+### 视觉控制台开关不再跟着底部控制条动
+
+- **现象**：底部控制条一升起，右下角那个打开视觉控制台的开关（`#fx-fab`）连同旁边的自动隐藏箭头（`#fx-fab-hide-btn`）一起往上跳。
+- **根因**：`public/css/07-fx/fx-panel.css` 里有一组跟随 `body.controls-visible` 的规则，把开关从 `bottom:24px` 抬到 `126px`（短高屏 `22px → 112px`），箭头从 `37px` 抬到 `139px`（短高屏 `35px → 125px`）。控制条的 `visible` 状态由 `04-bottom-controls-cursor.js` 的 `updateControlsChromeState()` 转成这个 body 类，所以联动是纯 CSS 造成的，没有 JS 参与。
+- **修法**：四条抬升规则全部写回各自的基准值（24/37，短高屏 22/35）。**保留原来的高特异性选择器**而不是直接删规则，这样以后有人在别处又加抬升规则，这组后面的同特异性规则仍能压住它。
+- **不会被控制条挡住**：控制条 `z-index:6`，开关是 `19`。Electron 实测窄视口（886px 宽，两者矩形确实重叠）时，开关中心点仍命中自身，可正常点击；宽视口下两者根本不重叠。
+- **验证**：Electron 加载真实页面，两种视口（1266x798 / 886x698）× 两种 body 状态（默认 / `desktop-shell diy-mode`），共四组，控制条升起前后开关与箭头的 `bottom` 计算值、矩形底边、两者间距**完全一致**；且升起时中心点命中开关。另加 `tests/fx-fab-anchor.test.js` 3 条守卫：基础值、全仓 CSS 扫描「controls-visible 下不许出现抬升值」、不许有 JS 绕过 CSS 直接改 `style.bottom`。已自证：把值改回 126px → 守卫立刻判红，还原 → 绿。
+- **回归**：143/143 测试、42/42 变异全判红（M43 抬升值回退、M44 去掉 inline 锁定都被抓）；dist 的 HTML 与 CSS 均一致。
+- **二次反馈「怎么还是一样」——真正原因是 CSS 磁盘缓存**：`index.html` 里 `fx-panel.css` 的链接带**固定版本号** `?v=3.0.0-modular`，文件内容改了但 URL 没变，窗口重新打开时 Chromium 直接命中磁盘缓存里的旧 CSS（`bottom:126px`），旧行为原样保留。前几轮改的是 JS/HTML，这次只动 CSS，正好踩中。核查过：仓库 `public/css` 与 `dist/.../public/css` 全量 diff 一致、全仓只有一份 `Mineradio.exe`、dist 里 fab 的 bottom 只有 24/37/22/35，代码侧没有残留。
+- **三层防线**：
+  - `index.html` 给 `#fx-fab` / `#fx-fab-hide-btn` 加 inline `style="bottom:24px"` / `37px`。inline 优先级高于普通 CSS 规则，**即使浏览器仍加载缓存里的旧 CSS，抬升规则也压不动它**。
+  - `fx-panel.css` 的四条固定规则加 `!important`，压过任何后来加载或更高特异性的抬升规则。
+  - CSS 版本号 bump 成 `?v=3.0.1-fabanchor`，重启后强制重新拉取，绕开磁盘缓存。
+- **端到端补测「旧缓存」场景**：在真实页面里注入一遍旧的抬升 CSS（126/139/112/125px）再模拟控制条升起——两种视口 × 三种场景（默认 / `desktop-shell diy-mode` / 旧 CSS 缓存）共六组，开关与箭头的 `bottom` 计算值、矩形底边、间距全部不变，升起时中心点仍命中开关。守卫扩到 4 条，新增「CSS 缓存防线」断言（inline 锁定、版本号 bump、`!important` 齐全）。
+
+
+### 洛雪音乐（LX）源脚本接入
+
+**这不是「新增一个音乐平台」，而是内嵌一个 LX 兼容源脚本运行时。** 立项前先把两条路都查清了：
+
+- **LX 官方 Open API 拿不到音频**：`https://lxmusic.toside.cn/desktop/open-api` 从 v2.7.0 起提供 `/status`（状态/歌名/歌手/进度/封面/歌词行）、`/lyric`、`/lyric-all`、SSE 订阅，以及 `/play` `/pause` `/skip-next` `/seek` `/volume` `/mute` `/collect` 等控制端点——**没有任何取音频地址的接口**。它只能「遥控 LX 客户端」，不能给 Mineradio 供歌。
+- **真正的音源能力只在源脚本里**：LX 的「自定义源脚本」（`custom-source`）是一段 JS，通过 `on('request', …)` 响应 `musicUrl` / `lyric` / `pic`。要拿到歌就必须把这类脚本跑起来。
+
+### 做了什么
+
+- **`server/lx/source-host.js`**（1252 行，源自参考实现 ww085213/Mineradio-LX-Music，GPL-3.0 同协议）：`vm` 沙箱 + `globalThis.lx` 兼容层（`EVENT_NAMES` / `request` / `on` / `send` / `utils.crypto` / `utils.buffer` / `utils.zlib`），含多音源顺序尝试、音质降级链、URL 可用性探测、超时与缓存、gzip 解码、header 过滤。另做了两处适配：目录可用 `MINERADIO_LX_SOURCE_DIR` 覆盖（探针/测试隔离）；告警走项目统一日志。
+- **`server/routes/lx.js`**：`status / import（脚本或直链）/ select / enable / check / delete / resolve / lyric` 八个端点。错误码统一翻成中文（如 `LX_SOURCE_AT_LEAST_ONE_ENABLED` → 「不能停用最后一个启用的音源」），不把 `LX_SOURCE_*` 直接糊给用户。
+- **`server/lib/proxy-headers.js` + `/api/audio?h=`**：音源返回的地址常带防盗链，需要补 Referer/UA 才能取流。代理**只接受 referer / origin / user-agent 三个头**，值 ≤512 字符且拒 CRLF（防 header 注入）——不放行 Cookie/Authorization，避免把凭据交给脚本。
+- **顶栏「音源」弹层**（`22-lx-source.js`）：导入（直链/本地 .js）、启用/停用、切换当前音源、自检（真正初始化脚本并报出它支持哪些平台）、删除、状态提示。入口是顶栏音符按钮，与「皮肤」「播放选项」互斥打开。
+
+### 续：歌词兜底 + 汽水死链路收口
+
+- **LX 兜底播放的歌现在有歌词了**：`/api/lx-source/lyric` 之前只有后端、前端没接。现在歌词管道在「平台返回空词」时用同一份 `musicInfo` 再取一次（`lyricResponseHasContent` 判定，至少 20 字符才算有词）。只交出行级 LRC 与翻译——LX 的 `lxlyric` 是逐字格式，现有管道解析不了，没有硬塞进 `lyric` 字段冒充行级词。
+- **汽水未启用的扫码/OAuth 链路已整条删除**（`server/qishui/auth.js` 347 → 47 行）：逐个函数核对调用者，`createQishuiPcQrLogin` / `checkQishuiPcQrLogin` / `exchangeQishuiOAuthCode` 只出现在 `qishui-api.js` 的再导出里、零真实调用，同批 7 个辅助函数也是零引用。这条链路正是把 `error_code 7` 当 `'wait'` 的那条，删掉后不再和路由的中性 `upstream_code_7` 两套语义并存。活着的 `saveQishuiAccessToken` / `clearQishuiAccessToken` 保留（`routes/qishui.js` 在用），服务端实测 `/api/qishui/status`、`/api/qishui/login/check` 均正常。
+- **技术债登记表 open 从 3 降到 2**：`qishui-auth-legacy-7` 标 closed，证据改成「`auth.js` 不含 `error_code === 7`」+「`qishui-api.js` 不再导出那三个函数」，`mustNotContain` 断言能抓住「收口后又被改回去」。
+
+- **取址阶段就预检代理白名单**：`/api/audio` 只代理白名单内的 CDN（`PROXY_MEDIA_HOST_SUFFIXES` 已覆盖网易云/QQ/酷狗/腾讯云/CDN 等主流域名）。但音源脚本返回的域名未必在里面——之前要等播放器报 `MEDIA_ERR_SRC_NOT_SUPPORTED`，用户只看到「播放失败」。现在取址时就检查，返回 `LX_SOURCE_HOST_NOT_PROXYABLE` 并写明「哪个域名 + 要加进哪个常量」。
+  - 实测：脚本返回 `download.samplelib.com` 的公开测试音频 → 取址直接 422 + 明确原因，不再拖到播放失败。
+  - 没有放宽白名单：主机后缀是纵深防御，真正拦 SSRF 的是 DNS 解析后的 IP 黑名单；为第三方脚本放宽主机层，等于把本机代理变成任意公网转发器。
+
+- **入口位置：歌单面板新增第四个页签「LX 音源」**（当前队列 / 我的歌单 / 我的播客 / LX 音源）。
+  - 顶栏不再有独立音符按钮：用户明确不要在那里新增图标。
+  - **「我的播客」保留**：它是有实现的功能。最初按「如果没用就换掉」去改，但核查发现播客列表/播放链路是完整的，条件不成立就不该动，已恢复。
+  - 面板宽 340~364px，四个页签放得下；给 `.panel-tabs` 加了 `flex-wrap` 兜底，窄屏换行而不是溢出。
+  - 页签切换互斥（同时只有一个 pane 可见），切到 LX 时自动拉一次状态，不会看到上次的旧列表。
+  - 原来那个独立弹层（`#lx-source-popover`）连同顶栏按钮一起删除，内容整体搬进 pane，DOM id 不变。
+
+### 边界（必须说清，不要误解成「已经能放 LX 的歌了」）
+
+- **不内置任何音源脚本**。与 LX 官方和参考实现一致：脚本由用户自行导入，版权与合规责任归导入者。测试只用一段**合成脚本**（只声明能力、返回固定字符串），不联网、不含任何真实平台地址。
+- **沙箱不是强隔离**。`vm` 挡不住恶意脚本，面板底部固定写着「只导入你信任来源的脚本」，没有藏起来。
+- **播放链路已接入**（`resolveProviderPlayUrlData` 是统一取址入口，4 处调用共享）：
+  - 两条兜底触发点：拿到响应但**没有直链**（会员/版权限制常见形态）、以及**取址直接抛错**。都失败才抛平台那条原始错误，不会被兜底错误盖住。
+  - 只兜底有对应 LX 源的平台：`netease→wy`、`qq→tx`、`kugou→kg`。汽水 / Spotify / 本地音乐在 LX 生态里没有对应源，直接跳过，不硬编一个。
+  - 默认开启（装了音源就是要用），音源面板里可关（`mineradio-lx-source-fallback=0`）；切歌的 AbortError 不触发兜底，避免拖慢连点切歌。
+  - **ID 归一是可验证的，我用回显脚本证了**：`buildLxMusicInfo()` 只传该平台真正的主 ID（wy 传 `musicId`、tx 传 `songmid`+`strMediaMid`、kg 传 `hash`+`albumId`），不把 id 到处滥填。用一段「把收到的 `musicInfo` 塞进返回 URL」的合成脚本跑真实链路，回显结果：
+    - 酷狗 → `hash=HASH_KG`、`albumId=AL_KG`、`meta.kg={id,hash}` ✓
+    - QQ → `songmid=MID_QQ`、`strMediaMid=MM_QQ`、`meta.qq` ✓、**没有 hash**（不串味）✓
+    - 汽水 → `lxSourceKeyForProvider` 返回空 ✓
+  - 已知的良性现象：酷狗那条 `songmid`/`musicId` 会被 LX 的 `normalizeMusicInfo` 连锁填成同一个 hash 值。真实 kg 源读的是 `hash`，`meta.kg` 也正确，所以不影响；这是参考实现与 LX 官方共同的归一行为，不是我们传错。
+
+### 验证
+
+- `tests/lx-source.test.js` 15 条：代理头白名单（拒 Cookie/CRLF/超长）、编解码往返、合成脚本能加载并报出 `kw/kg` 与音质、自检通过、歌词 action 走通、不能停用最后一个音源、删除后清空、路由/前端/弹层已接线、路由文件不含具体平台域名；以及平台映射（汽水/Spotify 返回空）、三平台 ID 归一、`hasUsableId`、取址链兜底接线与默认开启。
+- 端到端（Electron 加载真实页面 + 回显脚本）：`LxMusicInfo.buildLxMusicInfo` → `LxSource.resolveUrl` → `/api/lx-source/resolve` → 脚本收到的字段，三平台逐一核对通过。
+- 真起服务打端点：初始 `configured:false` → 导入后 `sources:['kw']` → 自检 `ok:true` → 歌词拿到 `[00:01.00]probe` → 取址返回 `url` + `proxy.params`。
+- 139/139 测试；变异 40 条中 39 条由跑批全判红，M42（页签入口归一失效）单独自证：改掉那一行 → 这条静态守卫立刻红，还原后绿。dist 五个文件一致。
+
+### 顺带修的一个工程隐患
+
+变异检验脚本原来只在 `finally` 里恢复文件，进程被强杀（SIGTERM/SIGKILL）就会**把变异后的代码留在仓库**——这次就撞上了：`server/lib/petdex-uri.js` 的 SSRF 校验被留成 `if (false) return ''`，直到两天后跑全量测试才暴露。现在每条变异前先把「原文件路径 + 原内容」落盘到 `.mutate-inflight.json`，下次启动自动恢复；同时挂 SIGINT/SIGTERM/SIGHUP 恢复后退出。
+
+
 ## v3.3.2 · 2026-11-14
 
 补丁版本，把 v3.3.1（11-11 构建）之后的代码送进正式安装包。**此前的 v3.3.1 资产不含这些改动**；本版起 Release 正文固定写明构建 commit 与时间，并附资产 SHA256。

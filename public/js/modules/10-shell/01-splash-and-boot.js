@@ -161,6 +161,7 @@ var splashTimer = null;
 var reduceSplashMotion = false;
 var splashReadyToEnter = false;
 var splashPendingEnter = false;
+var splashPrewarmWaitLogged = false;
 // 必须是「模块求值那一刻」，不能留 0。
 // 这个值原本只在 initSplashDomBindings()（本文件后段）里赋值；一旦那个函数因为合并 script
 // 顶层中断而没被调用（见 01-scene/00-renderer-quality.js 的说明），它就会一直是 0，
@@ -1343,6 +1344,18 @@ function tryMarkSplashReadyFromBoot() {
     splashTimer = setTimeout(tryMarkSplashReadyFromBoot, Math.max(50, minMs - elapsed));
     return;
   }
+  // 「点击进入」之前还要等首帧渲染与分批编译完成：否则用户一点，主线程仍要啃
+  // 剩下的着色器编译，正好落在「splash 淡出 → 首帧」窗口里（冷启动无响应同源）。
+  // 失败 / 8s deadline 会由 startupSceneCompileState.done 兜住；没有该状态（老链路）直接放行。
+  if (typeof startupSceneCompileState !== 'undefined' && startupSceneCompileState && !startupSceneCompileState.done) {
+    if (!splashPrewarmWaitLogged) {
+      splashPrewarmWaitLogged = true;
+      console.log('[splash] 等首帧预热完成再放「点击进入」');
+    }
+    if (splashTimer) clearTimeout(splashTimer);
+    splashTimer = setTimeout(tryMarkSplashReadyFromBoot, 80);
+    return;
+  }
   markSplashReadyToEnter();
 }
 
@@ -1417,14 +1430,97 @@ bindSleepTimerControl();
 bindVolumeControls();
 initControlGlassSurface();
 bindPlayerControlAnimations();
-scheduleUiWarmTask(function(){
-  updateControlGlassDisplacementMap();
-  updateSearchBoxGlassDisplacementMap();
-  updateSearchPillGlassDisplacementMap();
+function runStartupWarmStep(name, fn) {
+  if (typeof markAppPerf === 'function') markAppPerf(name + '-start');
   try {
-    if (renderer && renderer.compile && scene && camera) renderer.compile(scene, camera);
-  } catch (e) {}
-}, 900);
+    fn();
+    if (typeof markAppPerf === 'function') markAppPerf(name + '-done');
+  } catch (err) {
+    if (typeof markAppPerf === 'function') markAppPerf(name + '-failed');
+    console.warn('[boot] ' + name + ' failed:', err);
+  }
+}
+/* Three r128 没有 compileAsync。用只含克隆节点的临时场景分批预热：
+ * 材质 / 几何 / 灯光参数保持一致，但不搬动原场景，也不编译当前不可见的歌词与预设。 */
+var startupSceneCompileState = { done: false, reason: 'not-started' };
+function scheduleStartupSceneCompile() {
+  if (typeof renderer === 'undefined' || !renderer || typeof renderer.compile !== 'function'
+    || typeof scene === 'undefined' || !scene || typeof camera === 'undefined' || !camera
+    || typeof THREE === 'undefined' || !THREE.Scene || rendererUnavailableReason || renderer.domElementIsInertStub) {
+    startupSceneCompileState.done = true;
+    startupSceneCompileState.reason = 'unsupported';
+    return;
+  }
+  if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-scheduled');
+  setTimeout(function(){
+    if (startupSceneCompileState.done) return;
+    startupSceneCompileState.done = true;
+    startupSceneCompileState.reason = 'deadline';
+    if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-deadline');
+    console.warn('[boot] startup scene compile exceeded 8s; releasing first render');
+  }, 8000);
+  scheduleVisualApply(function(){
+    var targets = [];
+    scene.traverseVisible(function(obj){
+      if (!obj.material || (obj.layers && camera.layers && !obj.layers.test(camera.layers))) return;
+      var materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (var i = 0; i < materials.length; i += 1) {
+        if (materials[i] && materials[i].visible !== false) { targets.push(obj); return; }
+      }
+    });
+    if (!targets.length) {
+      startupSceneCompileState.done = true;
+      startupSceneCompileState.reason = 'empty';
+      if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-skipped-empty');
+      return;
+    }
+    var compileScene = new THREE.Scene();
+    compileScene.fog = scene.fog || null;
+    compileScene.background = scene.background || null;
+    compileScene.environment = scene.environment || null;
+    scene.traverseVisible(function(obj){
+      if (obj.isLight && (!obj.layers || !camera.layers || obj.layers.test(camera.layers))) {
+        compileScene.add(obj.clone());
+      }
+    });
+    var index = 0;
+    var batchSize = 1;
+    if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-start');
+    function runBatch() {
+      var clones = [];
+      var end = Math.min(index + batchSize, targets.length);
+      try {
+        for (var i = index; i < end; i += 1) {
+          var clone = targets[i].clone(false);
+          clones.push(clone);
+          compileScene.add(clone);
+        }
+        renderer.compile(compileScene, camera);
+      } catch (err) {
+        for (var c = 0; c < clones.length; c += 1) compileScene.remove(clones[c]);
+        startupSceneCompileState.done = true;
+        startupSceneCompileState.reason = 'failed';
+        if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-failed');
+        console.warn('[boot] startup scene compile batch failed:', err);
+        return;
+      }
+      for (var j = 0; j < clones.length; j += 1) compileScene.remove(clones[j]);
+      index = end;
+      if (index < targets.length) {
+        scheduleVisualApply(runBatch, 0, 120);
+      } else {
+        startupSceneCompileState.done = true;
+        startupSceneCompileState.reason = 'complete';
+        if (typeof markAppPerf === 'function') markAppPerf('startup-scene-compile-done');
+      }
+    }
+    runBatch();
+  }, 900, 360);
+}
+scheduleVisualApply(function(){ runStartupWarmStep('startup-control-glass-map', updateControlGlassDisplacementMap); }, 500, 220);
+scheduleVisualApply(function(){ runStartupWarmStep('startup-search-glass-map', updateSearchBoxGlassDisplacementMap); }, 620, 240);
+scheduleVisualApply(function(){ runStartupWarmStep('startup-search-pill-glass-map', updateSearchPillGlassDisplacementMap); }, 740, 260);
+scheduleStartupSceneCompile();
 applyUserCapsuleAutoHideState();
 applyFxFabAutoHideState();
 applyControlsAutoHidePreference();
@@ -1433,18 +1529,16 @@ applyWallpaperModeState(false);
 setShelfMode(fx.shelf);
 applyStartupStarfieldPreset();
 applyPlaylistPanelPinState(false);
-// 重资产初始化挪到首帧后，缩短 splash 内同步阻塞
-scheduleUiWarmTask(function(){
-  if (fx.floatLayer) {
-    try { createFloatLayer(); } catch (err) { console.warn('[boot] createFloatLayer failed:', err); }
-  }
-  if (fx.particleLyrics && !isClassicPresetActive()) {
-    try { createLyricsParticles(); } catch (err) { console.warn('[boot] createLyricsParticles failed:', err); }
-  }
-  if (fx.backCover) {
-    try { createBackCoverLayer(); } catch (err) { console.warn('[boot] createBackCoverLayer failed:', err); }
-  }
-}, 0);
+// 重资产初始化挪到首帧后；scheduleVisualApply 的 delay 是真延迟，不是 idle timeout。
+scheduleVisualApply(function(){
+  if (fx.floatLayer) runStartupWarmStep('startup-float-layer', createFloatLayer);
+}, 0, 220);
+scheduleVisualApply(function(){
+  if (fx.particleLyrics && !isClassicPresetActive()) runStartupWarmStep('startup-lyric-particles', createLyricsParticles);
+}, 120, 260);
+scheduleVisualApply(function(){
+  if (fx.backCover) runStartupWarmStep('startup-back-cover', createBackCoverLayer);
+}, 240, 300);
 initIdleGuideCanvas();
 } catch (bootErr) {
   console.error('[boot] startup block failed (continuing to main-loop):', bootErr);

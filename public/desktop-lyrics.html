@@ -21,6 +21,7 @@
       --lyric-feather:5.5%;
       --lyric-fit-x:1;
       --lyric-scroll-x:0px;
+      --lyric-control-push:0px;
       --lyric-edge-width:92px;
       --lyric-mask-edge-width:92px;
       --lyric-vertical-feather:46px;
@@ -69,7 +70,9 @@
       -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 var(--lyric-mask-edge-width),#000 calc(100% - var(--lyric-mask-edge-width)),transparent 100%);
       mask-image:linear-gradient(90deg,transparent 0,#000 var(--lyric-mask-edge-width),#000 calc(100% - var(--lyric-mask-edge-width)),transparent 100%);
       filter:drop-shadow(0 1px 2.4px rgba(4,6,12,.58)) drop-shadow(0 0 4.8px rgba(4,6,12,.30));
-      transform:translateZ(0);
+      /* 小屏 + 多行时歌词块几乎铺满窗口，顶部放不下控制条；只在那种情况下
+         整体下移几像素让出顶栏（--lyric-control-push 由 positionLyricControlBar 算）。 */
+      transform:translate3d(0,var(--lyric-control-push,0px),0);
       will-change:transform,filter;
     }
     body.unlocked .stage.hint-visible .lyric-viewport{pointer-events:auto;cursor:move;-webkit-app-region:no-drag}
@@ -77,7 +80,7 @@
       display:inline-block;
       /* 倾斜 = 绕 Y 轴的三维旋转（perspective 让远近有透视），不是画面内旋转。
          多行时这段容器 display:none，旋转交给 .lyric-stack，不会转两次。 */
-      transform:perspective(800px) rotateY(var(--lyric-tilt, 0deg)) translate3d(var(--lyric-scroll-x),0,0) scaleX(var(--lyric-fit-x));
+      transform:perspective(var(--lyric-tilt-perspective,800px)) rotateY(var(--lyric-tilt, 0deg)) translate3d(var(--lyric-scroll-x),0,0) scaleX(var(--lyric-fit-x));
       transform-origin:center;
       will-change:transform;
       backface-visibility:hidden;
@@ -199,14 +202,22 @@
       justify-content:center;
       gap:var(--lyric-row-gap, 24px);
       width:100%;
-      /* 绕 Y 轴旋转：左右两端一近一远，产生「整块被转过去一点」的三维感 */
-      transform:perspective(800px) rotateY(var(--lyric-tilt, 0deg));
+      /* 绕 Y 轴旋转：左右两端一近一远，产生「整块被转过去一点」的三维感。
+         贴边对齐档把旋转原点移到贴边端（该点 Z=0，投影后位置固定，不会跑出窗口），
+         并加大透视距离削弱字形形变；居中档保持 800px / 中心原点的原设计。 */
+      transform:perspective(var(--lyric-tilt-perspective,800px)) rotateY(var(--lyric-tilt, 0deg));
       transform-origin:center center;
       transition:transform .38s cubic-bezier(.22,.8,.24,1);
       pointer-events:none;
       will-change:transform;
     }
     body.stack-mode .lyric-stack{display:flex}
+    /* 切换对齐档会同时改 --lyric-tilt-perspective 与 transform-origin，
+       若走 0.38s 的 transform 过渡，两者会被插值，前 2~3 帧文字块平滑位移
+       （实测 57px「漂移」）；控制条也会从窗口中间滑到歌词同侧。
+       切档瞬间临时关掉两者的位移过渡，倾斜滑块拖动仍保留平滑。 */
+    body.align-switch .lyric-stack{transition:none}
+    body.align-switch .lock-hint{transition:opacity .16s ease}
     .line-row{
       display:block;
       max-width:100%;
@@ -280,10 +291,33 @@
     body.motion-float:not(.paused) .line-row.active{animation:row-breathe 4.6s ease-in-out infinite}
     body.motion-float:not(.paused) .line-row.active.enter{animation:row-float-in .55s cubic-bezier(.2,.8,.24,1) both,row-breathe 4.6s .55s ease-in-out infinite}
     body.motion-none .line-row{transition:opacity .18s linear}
+    /* ---- 文字对齐（2026-11-14）：居中 / 左对齐 / 右对齐 ------------------
+     * stage 本身已被 fitLyricText 拉到全窗宽，对齐落点有两层：
+     * ① lyric-viewport（固定宽、margin:0 auto 居中）在 stage 里的水平位置；
+     * ② viewport 内文字（含多行栈的 align-items）的对齐方向。
+     * 超长句滚动锚点也随对齐变（见 fitLyricText/updateLyricScroll 的 align 分支）。 */
+    body.align-left .stage,body.align-right .stage{padding-left:16px;padding-right:16px}
+    /* 贴边档倾斜：绕容器中心转会把贴边端推到透视极端，字形被放大/压缩 2.6 倍
+     * （实测左对齐 +35° 首字 103px、末字 50px；-35° 整行压到 215px、字宽 19px）。
+     * 改绕贴边端旋转（该点固定不动，不再需要位置补偿）+ 2400px 弱透视后，
+     * 字宽差降到 8px 内，贴边位置全角度恒定。 */
+    body.align-left,body.align-right{--lyric-tilt-perspective:2400px}
+    body.align-left .lyric-viewport{text-align:left}
+    body.align-left .lyric-stack{align-items:flex-start;transform-origin:left center}
+    body.align-left .line{text-align:left}
+    body.align-left .lyric-scroll{transform-origin:left center}
+    body.align-right .lyric-viewport{text-align:right}
+    body.align-right .lyric-stack{align-items:flex-end;transform-origin:right center}
+    body.align-right .line{text-align:right}
+    body.align-right .lyric-scroll{transform-origin:right center}
     .lock-hint{
       position:absolute;
       z-index:4;
       left:50%;
+      /* 默认 72px 是「单行档」的标定值（stage padding-top 104px - 胶囊 30px）。
+         多行档 stage padding-top 只有 22px，写死 72px 会让胶囊压在第一行歌词上
+         （实测 3 行时 hint 130..162、viewport 80..258）。运行时由
+         positionLyricControlBar() 用实测 padding-top 覆写 style.top，这里只作兜底。 */
       top:72px;
       display:flex;
       align-items:center;
@@ -342,6 +376,12 @@
     body.unlocked .lyrics-close{display:flex}
     body.unlocked .stage.hint-visible .lock-hint{pointer-events:auto;-webkit-app-region:no-drag}
     .stage.hint-visible .lock-hint{opacity:.94;transform:translateX(-50%) translateY(0) scale(1)}
+    /* 控制条跟随歌词对齐：固定在窗口居中时，左对齐的歌词会把控制条甩到「右边」。
+       按档落到歌词同侧、位于歌词正上方（stage 顶部 padding 区内，不压字）。 */
+    body.align-left .lock-hint{left:16px;transform:translateX(0) translateY(-8px) scale(.92)}
+    body.align-left .stage.hint-visible .lock-hint{transform:translateX(0) translateY(0) scale(1)}
+    body.align-right .lock-hint{left:auto;right:16px;transform:translateX(0) translateY(-8px) scale(.92)}
+    body.align-right .stage.hint-visible .lock-hint{transform:translateX(0) translateY(0) scale(1)}
     /* 悬停播放控制条：酷狗式桌面歌词行为。跟随 hint-visible 显隐，锁定时不出现
        （锁定态窗口鼠标穿透，本来就点不到按钮）。 */
     .lyrics-controls{
@@ -415,6 +455,7 @@
     var lyricsControls = document.getElementById('lyricsControls');
     var dpr = 1;
     var lastText = '';
+    var lastAlign = '';
     var lastNextText = '';
     var progressText = '';
     var displayedProgress = 0;
@@ -433,6 +474,8 @@
     var hoverInside = false;
     var hintVisible = false;
     var hintTimer = 0;
+    var hintTopPx = null;
+    var controlPushPx = 0;
     var lastPointerEvent = null;
     var scrollState = { needed:false, overflow:0, limit:0, offset:0, dir:-1, holdUntil:0, lastAt:0 };
     var particles = [];
@@ -442,7 +485,7 @@
       playbackTime:0,playbackDuration:0,playbackRate:1,playbackReceivedAt:0,beatMapKey:'',
       size:1,opacity:.92,clickThrough:true,lyricGlowParticles:false,cinema:true,highlightFollow:false,frameRate:60,
       lyricGlow:true,lyricGlowBeat:true,lyricGlowStrength:.35,highBloom:0,beatGlow:0,beatPulse:0,bass:0,feather:.055,
-      lineCount:1,lines:null,tilt:0,lyricMotion:'slide',
+      lineCount:1,lines:null,tilt:0,lyricMotion:'slide',align:'center',
       fontFamily:'Inter,"Noto Sans SC","PingFang SC","Microsoft YaHei",Arial,sans-serif',
       fontWeight:900,letterSpacing:0,lineHeight:1,lyricScale:1,
       colors:{primary:'#f6fdff',secondary:'#a8f6ff',highlight:'#fff0b8',glow:'#9cffdf'},
@@ -803,7 +846,12 @@
     function fitLyricText(force) {
       var safeWidth = Math.max(300, innerWidth - 8);
       var edgeWidth = Math.round(clamp(safeWidth * .085, 54, 116, 92));
-      var viewportWidth = Math.round(Math.max(280, Math.min(safeWidth - 12, innerWidth - Math.min(240, Math.max(88, innerWidth * .13)))));
+      // 左/右对齐：viewport 铺满窗口、渐隐区收窄到 ~35%（贴边的歌词不该离窗边 90px+）
+      var aligned = state.align === 'left' || state.align === 'right';
+      if (aligned) edgeWidth = Math.max(32, Math.round(edgeWidth * .35));
+      var viewportWidth = aligned
+        ? Math.max(280, safeWidth - 48)
+        : Math.round(Math.max(280, Math.min(safeWidth - 12, innerWidth - Math.min(240, Math.max(88, innerWidth * .13)))));
       var clearWidth = Math.max(160, viewportWidth - edgeWidth * 2);
       var readableWidth = clearWidth;
       var maxHeight = Math.max(64, innerHeight - 188);
@@ -815,14 +863,24 @@
         state.letterSpacing,
         state.lineHeight,
         innerWidth,
-        innerHeight
+        innerHeight,
+        state.align
       ].join('|');
       if (!force && nextLayoutKey === layoutKey) return;
       layoutKey = nextLayoutKey;
+      // 对齐档：viewport 铺满窗口（margin 0），文字靠 text-align 定位；stage 侧 padding
+      // 已由 body.align-* 收窄，edge 渐隐区也按档收窄（居中档保持原有居中布局不动）。
+      if (state.align === 'center') {
+        lyricViewport.style.marginLeft = 'auto';
+        lyricViewport.style.marginRight = 'auto';
+      } else {
+        lyricViewport.style.marginLeft = '0px';
+        lyricViewport.style.marginRight = '0px';
+      }
       stage.style.width = safeWidth + 'px';
       stage.style.maxWidth = safeWidth + 'px';
       lyricViewport.style.width = viewportWidth + 'px';
-      lyricViewport.style.maxWidth = Math.max(280, safeWidth - 12) + 'px';
+      lyricViewport.style.maxWidth = Math.max(280, (aligned ? safeWidth - 48 : safeWidth - 12)) + 'px';
       setRootVar('--lyric-edge-width', edgeWidth + 'px');
       var size = baseFontSize;
       fitScaleX = 1;
@@ -850,8 +908,15 @@
       var travelWidth = Math.max(0, scaledWidth - clearWidth);
       var clearTailMargin = Math.max(58, Math.min(edgeWidth * 1.18, size * 1.08));
       var centeredTailLimit = scaledWidth > clearWidth * 1.28 ? Math.max(0, scaledWidth / 2 - clearWidth * .18) : 0;
-      scrollState.limit = travelWidth > 0 ? Math.max(travelWidth / 2 + clearTailMargin, centeredTailLimit) : 0;
-      scrollState.overflow = scrollState.limit * 2;
+      // 滚动行程按对齐锚点：居中=静止时居中，滚半个行程即可露出另一端；
+      // 左/右对齐=静止时贴该侧边缘，要滚过完整 travelWidth 才能露出另一端。
+      if (state.align === 'left' || state.align === 'right') {
+        scrollState.limit = travelWidth > 0 ? travelWidth + clearTailMargin : 0;
+        scrollState.overflow = scrollState.limit;
+      } else {
+        scrollState.limit = travelWidth > 0 ? Math.max(travelWidth / 2 + clearTailMargin, centeredTailLimit) : 0;
+        scrollState.overflow = scrollState.limit * 2;
+      }
       scrollState.needed = travelWidth > Math.max(16, size * .18);
       var maskEdgeWidth = scrollState.needed ? Math.round(clamp(edgeWidth * .44, 26, 58, 42)) : edgeWidth;
       if (!scrollState.needed) {
@@ -874,6 +939,7 @@
       setRootVar('--lyric-fit-x', fitScaleX.toFixed(4));
       setRootVar('--lyric-mask-edge-width', maskEdgeWidth + 'px');
       setRootVar('--lyric-scroll-x', scrollState.offset.toFixed(2) + 'px');
+      positionLyricControlBar();
       sendHotBounds();
     }
     function updateLyricScroll(nowMs, progress) {
@@ -898,10 +964,15 @@
         var endGate = clamp(.84 - longLineBias * .38 - shortLineBias * .50, .62, .88, .78);
         if (endGate <= startGate + .12) endGate = startGate + .12;
         var travel = lyricScrollEase((p - startGate) / (endGate - startGate));
-        var targetOffset = -limit * travel;
-        if (p >= endGate) targetOffset = -limit;
+        // 右对齐时静止贴右缘、向右滚（正位移）才能露出左端；居中/左对齐向左滚（负位移）
+        var sgn = state.align === 'right' ? 1 : -1;
+        var targetOffset = sgn * limit * travel;
+        if (p >= endGate) targetOffset = sgn * limit;
         if (nowMs < scrollState.holdUntil && p < startGate) targetOffset = 0;
-        scrollState.offset = Math.max(-limit, Math.min(0, Math.min(scrollState.offset, targetOffset)));
+        var lo = Math.min(0, sgn * limit), hi = Math.max(0, sgn * limit);
+        var prev = scrollState.offset;
+        var next = sgn < 0 ? Math.min(prev, targetOffset) : Math.max(prev, targetOffset);
+        scrollState.offset = Math.max(lo, Math.min(hi, next));
       }
       setRootVar('--lyric-scroll-x', scrollState.offset.toFixed(2) + 'px');
     }
@@ -924,6 +995,9 @@
     }
     function normalizeRowMotion(value) {
       return /^(slide|flip|float|none)$/.test(String(value || '')) ? String(value) : 'slide';
+    }
+    function normalizeLyricsAlign(value) {
+      return /^(left|center|right)$/.test(String(value || '')) ? String(value) : 'center';
     }
     /* 行数越多单行越小；当前句比相邻句再大一点，形成图片里那种「中间一句最亮」的层次 */
     function rowFontFor(count, active) {
@@ -975,6 +1049,9 @@
       if (denom <= 0.2) return Math.round(half);
       return Math.max(0, Math.round((half * Math.cos(rad)) / denom - half));
     }
+    /* 贴边档的倾斜由 CSS 处理：body.align-* 把 .lyric-stack 的 transform-origin
+     * 移到贴边端（该点 Z=0，投影后固定不动，无需位置补偿），并用
+     * --lyric-tilt-perspective 加大透视距离削弱字形形变。 */
     /* 每行的可用宽度上限（和 fitRowText 里同一条公式，供倾斜预留量复用） */
     function stackRowMaxWidth() {
       return Math.max(220, Math.min(innerWidth - 96, 1180));
@@ -1009,6 +1086,7 @@
         stackActiveIdx = -1;
         stackSignature = '';
         stackActiveProgress = 0;
+        positionLyricControlBar();
         return;
       }
       ensureStackRows(count);
@@ -1052,6 +1130,7 @@
         void activeRow.offsetWidth;
         activeRow.classList.add('enter');
       }
+      positionLyricControlBar();
       if (force) sendHotBounds();
     }
     /* 锁图标：Lucide lock / lock-open（24×24 stroke，锁体 + 锁梁两段子路径）。
@@ -1099,6 +1178,59 @@
       if (window.desktopOverlay && window.desktopOverlay.setLyricsPointerCapture) {
         window.desktopOverlay.setLyricsPointerCapture(active).catch(function(){});
       }
+    }
+    /* 控制条放到歌词正上方（2026-11-15）：胶囊原来固定 top:72px，是按单行档
+     * stage padding-top:104px 标定的；多行档 stage padding 只有 22px，于是胶囊
+     * 直接落在歌词块中间（用户截图：功能按钮压在第一/二行歌词上）。
+     * lyricViewport 是 stage 里唯一的普通流子元素，所以
+     *   viewport.top === stage.top + stage.paddingTop
+     * 成立，且 paddingTop 只由 stack-mode 决定，与文字内容/宽度/字号动画无关。
+     * 因此用 paddingTop 反推胶囊 top：单行 104-32-10=62px，多行 22-32-10=-20px。
+     * 这样切对齐档、换行、字号过渡都不会让胶囊上下跳；只有窗口极矮时按
+     * 「窗口顶部至少留 8px」夹紧，避免胶囊跑到窗口外看不见。 */
+    /* 预测「最坏情况下」歌词 viewport 距窗口顶部还有多远。只用行数/字号/行高/窗口高度，
+       与具体歌词文字宽度无关 —— 否则每换一句（长句会压小字号）下移量都变，歌词就会上下跳。
+       取行号上限（rowFontFor 的最大字号 × count）+ fitStackByHeight 的高度上限，
+       得到的是保守下界：实际文字只会比它更靠下。 */
+    function lyricPredictedViewportTop() {
+      var count = state.lineCount;
+      if (count <= 1) return innerHeight;
+      var lh = Number(state.lineHeight) || 1;
+      var gap = 6 + 18 * lh;
+      var factor = count === 3 ? .80 : (count === 5 ? .68 : (count === 7 ? .58 : .46));
+      var maxFont = Math.max(11, Math.round(baseFontSize * factor));
+      var cap = Math.max(160, innerHeight * .94);
+      var stackH = Math.min(count * maxFont * lh + (count - 1) * gap, cap);
+      var stageH = 22 + 26 + 8 + stackH;
+      return Math.max(0, (innerHeight - stageH) / 2) + 22 + 3;
+    }
+    function positionLyricControlBar() {
+      if (!lockHint || !stage || !lyricViewport) return;
+      var padTop = parseFloat(getComputedStyle(stage).paddingTop);
+      if (!isFinite(padTop)) padTop = 104;
+      var hintH = lockHint.offsetHeight || 30;
+      var vpRect = lyricViewport.getBoundingClientRect();
+      // 把已生效的下移量扣掉，回到未下移的基线，避免「下移 → 量到更靠下 → 继续下移」的反馈。
+      var baseBottom = vpRect.bottom - controlPushPx;
+      var wantPush = Math.max(0, hintH + 16 - lyricPredictedViewportTop());
+      var roomBottom = Math.max(0, innerHeight - baseBottom - 6);
+      var push = Math.min(wantPush, roomBottom);
+      var pushChanged = Math.abs(push - controlPushPx) >= 1;
+      if (pushChanged) {
+        controlPushPx = push;
+        setRootVar('--lyric-control-push', push.toFixed(1) + 'px');
+      }
+      var top = Math.round(padTop + push - hintH - 10);
+      var stageTop = stage.getBoundingClientRect().top;
+      if (isFinite(stageTop)) top = Math.max(top, Math.round(8 - stageTop));
+      if (top === hintTopPx) {
+        if (pushChanged) sendHotBounds();
+        return;
+      }
+      hintTopPx = top;
+      lockHint.style.top = top + 'px';
+      // 胶囊挪出歌词块后，热区上沿也跟着变；只在位置真的变了才重报，避免每帧 IPC。
+      sendHotBounds();
     }
     function sendHotBounds() {
       if (!window.desktopOverlay || !window.desktopOverlay.setLyricsHotBounds) return;
@@ -1171,6 +1303,7 @@
       state.lines = Array.isArray(state.lines) ? state.lines : null;
       state.tilt = clamp(state.tilt == null ? 0 : state.tilt, -35, 35, 0);
       state.lyricMotion = normalizeRowMotion(state.lyricMotion);
+      state.align = normalizeLyricsAlign(state.align);
       state.displayColors = {
         primary: normalizeLyricColor(state.colors.primary || '#f6fdff', '#f6fdff'),
         secondary: normalizeLyricColor(state.colors.secondary || '#a8f6ff', '#a8f6ff'),
@@ -1197,6 +1330,25 @@
       setRootVar('--lyric-row-line-height', String(state.lineHeight));
       document.body.classList.remove('motion-slide', 'motion-flip', 'motion-float', 'motion-none');
       document.body.classList.add('motion-' + state.lyricMotion);
+      document.body.classList.remove('align-left', 'align-center', 'align-right');
+      document.body.classList.add('align-' + state.align);
+      if (state.align !== lastAlign) {
+        // 切对齐必须清滚动偏移：上一档（居中/左）残留的负位移会把文字推到窗口外，
+        // 右对齐的正位移锚点也会基于错误起点重新收敛 —— 表现为歌词乱跳、显示不全。
+        lastAlign = state.align;
+        scrollState.offset = 0;
+        scrollState.dir = -1;
+        scrollState.holdUntil = performance.now() + lyricScrollInitialHoldMs();
+        layoutKey = '';
+        // 律动状态也复位：live.scale/lift 从上一档的脉动值平滑收敛会让贴边文字
+        // 在切档后一 two 秒内继续晃（探针实测右档瞬态 27px），直接归零即切即稳。
+        live.scale = 1;
+        live.lift = 0;
+        // 透视距离/变换原点随对齐档变，走 0.38s 过渡会让文字块在切档后
+        // 平滑漂移数帧；临时挂 align-switch 禁掉位移过渡，两帧后恢复。
+        document.body.classList.add('align-switch');
+        setTimeout(function () { document.body.classList.remove('align-switch'); }, 60);
+      }
       document.body.classList.toggle('show', !!state.enabled);
       document.body.classList.toggle('paused', !state.playing);
       document.body.classList.toggle('highlight', state.highlightFollow === true);
@@ -1312,7 +1464,15 @@
       var rotY = Math.sin(now * .74 + 1.3) * -2.75 + motionBeat * .34;
       var scale = 1 + motionBeat * .115 + motionSolar * .034 + motionBass * .026;
       live.scale += (scale - live.scale) * (scale > live.scale ? .46 : .16);
-      stage.style.transform = 'translate3d(' + bobX.toFixed(2) + 'px,' + bobY.toFixed(2) + 'px,0) rotateX(' + rotX.toFixed(3) + 'deg) rotateY(' + rotY.toFixed(3) + 'deg) scale(' + live.scale.toFixed(4) + ')';
+      // 三档统一关掉几何律动（漂浮/旋转/缩放）：这些律动围绕窗口中心，
+      // 贴边文字会被旋转半径放大成 ±25px，居中档切回来也会持续漂移
+      // （实测切回居中后 480ms 内 20~68px，用户两次反馈「到处动 / 位置漂移」）。
+      // cinema 的亮度/发光律动保留（filter 与 --lyric-css-beat-glow 不受影响）。
+      bobX = 0; bobY = 0; rotX = 0; rotY = 0;
+      // 缩放输出也归一：live.scale 是平滑变量（被律动目标持续拉动），归零目标值
+      // 不会让它停，直接输出 1 才能即切即稳。
+      var outScale = 1;
+      stage.style.transform = 'translate3d(' + bobX.toFixed(2) + 'px,' + bobY.toFixed(2) + 'px,0) rotateX(' + rotX.toFixed(3) + 'deg) rotateY(' + rotY.toFixed(3) + 'deg) scale(' + outScale.toFixed(4) + ')';
       stage.style.filter = 'brightness(' + (1.04 + motionBeat * .12 + motionSolar * .05).toFixed(3) + ') saturate(' + (1.08 + motionBeat * .10).toFixed(3) + ')';
       setRootVar('--lyric-css-beat-glow', (state.lyricGlow ? clamp(motionBeat * 8 + motionSolar * 3, 0, 12, 0) : 0).toFixed(2) + 'px');
     }
@@ -1482,19 +1642,23 @@
     function pointInStage(evt) {
       if (!state.enabled || !evt) return false;
       if (dragging) return true;
+      var hintRect = lockHint ? lockHint.getBoundingClientRect() : null;
       if (!isLocked()) {
         var stageRect = stage.getBoundingClientRect();
-        return pointInRect(evt, stageRect, 0, 0);
+        if (pointInRect(evt, stageRect, 0, 0)) return true;
+        // 控制条现在位于歌词块正上方、可能整个落在 stage 盒子外面；
+        // 不把它并进命中区，鼠标一移到按钮上就会判成「离开」→ 胶囊消失 → 按钮点不到。
+        return !!(hintVisible && hintRect && hintRect.width > 0 && pointInRect(evt, hintRect, 12, 12));
       }
       var padX = Math.max(24, Math.min(68, innerWidth * .034));
       var padY = Math.max(22, Math.min(46, innerHeight * .045));
       var lyricRect = lyricViewport.getBoundingClientRect();
       if (pointInRect(evt, lyricRect, padX, padY)) return true;
-      var hintRect = lockHint.getBoundingClientRect();
-      return pointInRect(evt, hintRect, 10, 10);
+      return !!(hintRect && pointInRect(evt, hintRect, 10, 10));
     }
     function setHintVisible(visible) {
       hintVisible = !!visible;
+      if (hintVisible) positionLyricControlBar();
       stage.classList.toggle('hint-visible', hintVisible);
       setPointerCapture(!isLocked() && (hintVisible || dragging) && hoverInside);
     }

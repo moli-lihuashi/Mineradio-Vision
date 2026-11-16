@@ -139,6 +139,18 @@ function fxControlBlock(id) {
   if (!el) return null;
   return el.closest('.fx-slider,.lyric-color-row,.lyric-color-grid,.fx-seg,.preset-grid,.user-archive-grid,.fx-font-grid') || el;
 }
+// 只替换标题的直接文本节点，保留 <small> 等说明子元素。
+// 原来用 textContent 整体覆盖，会把「只影响桌面歌词窗口」这类作用范围说明删掉，
+// 两组帧率看起来又没有区别了。
+function fxSetLabelTextKeepChildren(el, text) {
+  if (!el) return;
+  var node = null;
+  for (var i = 0; i < el.childNodes.length; i++) {
+    if (el.childNodes[i].nodeType === 3) { node = el.childNodes[i]; break; }
+  }
+  if (node) node.nodeValue = text;
+  else el.insertBefore(document.createTextNode(text), el.firstChild);
+}
 function setFxSectionBefore(id, text) {
   var block = fxControlBlock(id);
   if (!block || !block.parentNode) return;
@@ -148,7 +160,7 @@ function setFxSectionBefore(id, text) {
     prev.className = 'fx-section-label';
     block.parentNode.insertBefore(prev, block);
   }
-  prev.textContent = text;
+  fxSetLabelTextKeepChildren(prev, text);
 }
 function setFxSliderLabel(id, text) {
   var block = fxControlBlock(id);
@@ -163,7 +175,7 @@ function setFxSectionBeforeNode(node, text) {
     prev.className = 'fx-section-label';
     node.parentNode.insertBefore(prev, node);
   }
-  prev.textContent = text;
+  fxSetLabelTextKeepChildren(prev, text);
 }
 function moveToggleToGrid(toggleId, grid) {
   var node = document.getElementById(toggleId);

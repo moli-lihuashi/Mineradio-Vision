@@ -100,6 +100,7 @@ function readSavedLyricLayout() {
       desktopLyricsLines: normalizeDesktopLyricsLineCount(raw.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : raw.desktopLyricsLines),
       desktopLyricsTilt: clampRange(raw.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(raw.desktopLyricsTilt), lyricsTiltLimits.min, lyricsTiltLimits.max),
       desktopLyricsMotion: normalizeDesktopLyricsMotion(raw.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
+      desktopLyricsAlign: normalizeDesktopLyricsAlign(raw.desktopLyricsAlign || fxDefaults.desktopLyricsAlign),
       desktopLyricsClickThrough: desktopLyricsSchemaReady ? raw.desktopLyricsClickThrough === true : fxDefaults.desktopLyricsClickThrough,
       desktopLyricsCinema: desktopLyricsSchemaReady ? raw.desktopLyricsCinema !== false : fxDefaults.desktopLyricsCinema,
       desktopLyricsHighlight: desktopLyricsSchemaReady ? raw.desktopLyricsHighlight === true : fxDefaults.desktopLyricsHighlight,
@@ -261,6 +262,7 @@ function saveLyricLayout() {
       desktopLyricsLines: normalizeDesktopLyricsLineCount(fx.desktopLyricsLines == null ? fxDefaults.desktopLyricsLines : fx.desktopLyricsLines),
       desktopLyricsTilt: clampRange(fx.desktopLyricsTilt == null ? fxDefaults.desktopLyricsTilt : Number(fx.desktopLyricsTilt), DESKTOP_LYRICS_TILT_MIN, DESKTOP_LYRICS_TILT_MAX),
       desktopLyricsMotion: normalizeDesktopLyricsMotion(fx.desktopLyricsMotion || fxDefaults.desktopLyricsMotion),
+      desktopLyricsAlign: normalizeDesktopLyricsAlign(fx.desktopLyricsAlign || fxDefaults.desktopLyricsAlign),
       desktopLyricsClickThrough: fx.desktopLyricsClickThrough === true,
       desktopLyricsCinema: fx.desktopLyricsCinema !== false,
       desktopLyricsHighlight: fx.desktopLyricsHighlight === true,
@@ -452,6 +454,9 @@ function normalizeDesktopLyricsLineCount(value) {
 // 桌面歌词换行动效：slide（上浮）/ flip（3D 翻转）/ float（呼吸漂移）/ none（静止）
 function normalizeDesktopLyricsMotion(value) {
   return /^(slide|flip|float|none)$/.test(String(value || '')) ? String(value) : 'slide';
+}
+function normalizeDesktopLyricsAlign(value) {
+  return /^(left|center|right)$/.test(String(value || '')) ? String(value) : 'center';
 }
 function desktopLyricsMotionLabel(value) {
   return { slide: '上浮', flip: '3D 翻转', float: '呼吸', none: '静止' }[normalizeDesktopLyricsMotion(value)] || '上浮';

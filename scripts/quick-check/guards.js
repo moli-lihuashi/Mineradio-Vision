@@ -2802,6 +2802,90 @@ function checkDesktopLyricsMotionGuard() {
   if (!/state\.lyricMotion !== 'none'/.test(html)) {
     fail('stacked layout must skip the replay in "static" mode instead of forcing a reflow every line');
   }
+  /* 桌面歌词文字对齐（2026-11-14）：居中/左/右。链路 = 默认值 → normalize → payload
+   * → 页面 body.align-* → viewport/stack/text-align 三层 CSS；超长句滚动锚点随对齐变
+   * （右对齐向右滚、正位移）。 */
+  const settingsText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '00-state', '12d-fx-runtime-globals.js'), 'utf8');
+  const layoutText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '03c-lyrics-layout-settings.js'), 'utf8');
+  const overlayText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '10-shell', '04-desktop-overlay-fullscreen.js'), 'utf8');
+  const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  if (!/desktopLyricsAlign: 'center'/.test(settingsText)) fail('desktopLyricsAlign default is missing in fxDefaults');
+  if (!/function normalizeDesktopLyricsAlign/.test(layoutText)) fail('normalizeDesktopLyricsAlign is missing');
+  if (!/desktopLyricsAlign: normalizeDesktopLyricsAlign/.test(layoutText)) fail('align must flow through the layout settings read/write');
+  if (!/align: normalizeDesktopLyricsAlign\(fx\.desktopLyricsAlign/.test(overlayText)) fail('desktop lyrics payload must carry align');
+  if (!/payload\.align/.test(overlayText)) fail('payload change-key must include align so a switch re-pushes');
+  if (!/data-desktop-lyrics-align="left"/.test(indexText) || !/desktop-lyrics-align-seg/.test(indexText)) fail('align segment control is missing in the fx panel');
+  if (!/body\.align-left \.lyric-viewport\{[^}]*text-align:left/.test(html) || !/body\.align-right \.lyric-viewport\{[^}]*text-align:right/.test(html)) fail('align CSS branches for the viewport are missing');
+  if (!/body\.align-left \.lyric-stack\{align-items:flex-start;/.test(html) || !/body\.align-right \.lyric-stack\{align-items:flex-end;/.test(html)) fail('stack alignment CSS branches are missing');
+  if (!/document\.body\.classList\.add\('align-' \+ state\.align\)/.test(html)) fail('page must apply body align class from the payload');
+  if (!/state\.align === 'right' \? 1 : -1/.test(html)) fail('scroll direction must follow the align setting (right-aligned lyrics scroll rightwards)');
+  /* 左/右对齐 + 倾斜（2026-11-15）：绕容器中心 rotateY 会把贴边端推到透视极端，
+   * 字形被放大/压缩 2.6 倍（实测左对齐 +35° 首字 103px、末字 50px；-35° 整行
+   * 压到 215px、字宽 19px），用户明确反馈「字体被拉伸、看着奇怪」。
+   * 正解 = 贴边端做旋转原点（该点投影后固定，不需要位置补偿）+ 2400px 弱透视；
+   * 居中档保持 800px / 中心原点原设计。 */
+  if (!/body\.align-left,body\.align-right\{--lyric-tilt-perspective:2400px\}/.test(html)) {
+    fail('aligned lyrics must use a weaker perspective (2400px) so tilt does not stretch glyphs');
+  }
+  if (!/body\.align-left \.lyric-stack\{align-items:flex-start;transform-origin:left center\}/.test(html) ||
+      !/body\.align-right \.lyric-stack\{align-items:flex-end;transform-origin:right center\}/.test(html)) {
+    fail('stacked lyrics must rotate around the aligned edge so the first/last character stays put');
+  }
+  if (!/transform:perspective\(var\(--lyric-tilt-perspective,800px\)\) rotateY\(var\(--lyric-tilt, 0deg\)\);/.test(html)) {
+    fail('stack transform lost the align-aware perspective');
+  }
+  if (!/perspective\(var\(--lyric-tilt-perspective,800px\)\) rotateY\(var\(--lyric-tilt, 0deg\)\) translate3d/.test(html)) {
+    fail('single-line transform lost the align-aware perspective');
+  }
+  if (/--lyric-stack-tilt-shift|alignStackTiltShift|applyStackTiltShift/.test(html)) {
+    fail('obsolete tilt position compensation must not come back: the origin-based approach replaces it');
+  }
+  /* 控制条位置 + 切档稳定（2026-11-15）：控制条固定在窗口居中时，左对齐歌词
+   * 会把它甩到「右边」；居中档残留的 cinema 几何律动与 transform 过渡会让
+   * 切档后文字持续漂移（实测 20~68px）。 */
+  if (!/body\.align-left \.lock-hint\{left:16px/.test(html) ||
+      !/body\.align-right \.lock-hint\{left:auto;right:16px/.test(html)) {
+    fail('lyrics control bar must follow the alignment so it sits above the lyrics, not to their right');
+  }
+  if (!/body\.align-left \.stage\.hint-visible \.lock-hint\{transform:translateX\(0\)/.test(html) ||
+      !/body\.align-right \.stage\.hint-visible \.lock-hint\{transform:translateX\(0\)/.test(html)) {
+    fail('aligned control bar must drop the translateX(-50%) centering transform');
+  }
+  if (!/bobX = 0; bobY = 0; rotX = 0; rotY = 0;/.test(html) || !/var outScale = 1;/.test(html)) {
+    fail('all three align modes must disable geometric cinema motion, otherwise switching align drifts');
+  }
+  if (/state\.align === 'left' \|\| state\.align === 'right'\) \? 1 : live\.scale/.test(html)) {
+    fail('per-alignment geometry motion must not come back');
+  }
+  if (!/body\.align-switch \.lyric-stack\{transition:none\}/.test(html) ||
+      !/body\.align-switch \.lock-hint\{transition:opacity \.16s ease\}/.test(html) ||
+      !/document\.body\.classList\.add\('align-switch'\)/.test(html)) {
+    fail('align switching must suppress transform transitions for the stack and the control bar');
+  }
+  /* 控制条垂直位置（2026-11-15）：胶囊写死 top:72px 只对单行档成立（stage 顶部
+   * padding 104px）；多行档 padding 只有 22px，实测 3 行时胶囊 130..162 而
+   * viewport 80..258 —— 功能按钮压在第一行歌词上，用户明确要求「放到歌词顶上」。
+   * 正解 = 用 stage 的实测 paddingTop 反推（viewport.top = stage.top + paddingTop），
+   * 该值只由 stack-mode 决定，与文字宽度/字号过渡无关，切档换行都不跳。 */
+  if (!/function positionLyricControlBar/.test(html) ||
+      !/parseFloat\(getComputedStyle\(stage\)\.paddingTop\)/.test(html) ||
+      !/lockHint\.style\.top = top \+ 'px'/.test(html) ||
+      (html.match(/positionLyricControlBar\(\);/g) || []).length < 4) {
+    fail('lyrics control bar must be positioned above the viewport from the live stage padding, and re-synced on every layout path');
+  }
+  if (!/hintVisible && hintRect && hintRect\.width > 0/.test(html)) {
+    fail('unlocked hover hit test must include the control bar once it sits above the stage box, otherwise its buttons cannot be clicked');
+  }
+  /* 小屏 + 多行（600px 屏 / 10 行 / 504px 窗口）歌词块几乎铺满窗口，顶部只剩 27px，
+   * 胶囊放不进去。用文字无关的预测值把歌词块微量下移让出顶栏；必须扣掉已生效的
+   * 下移量再算基线，否则会自反馈越推越下。 */
+  if (!/--lyric-control-push:0px/.test(html) ||
+      !/transform:translate3d\(0,var\(--lyric-control-push,0px\),0\)/.test(html) ||
+      !/function lyricPredictedViewportTop/.test(html) ||
+      !/vpRect\.bottom - controlPushPx/.test(html) ||
+      !/var roomBottom = Math\.max\(0, innerHeight - baseBottom - 6\)/.test(html)) {
+    fail('short-window control-bar clearance must be text-independent and free of push feedback');
+  }
   console.log('[OK] desktop lyrics honour all four line-motion presets in both single-line and stacked layouts.');
 }
 
@@ -3519,6 +3603,41 @@ function checkFirstLaunchDefaultsAndSplashGuard() {
   console.log(`[OK] ${keys.length} captured defaults match; splash motion is 5.2s/4.2s while entry stays ready at 1.5s/0.65s; archive actions stay in one row.`);
 }
 
+/* 桌面覆盖层不得产生第二个任务栏窗口（2026-11-16）
+ * Windows 上 Electron 的 skipTaskbar 只做一次 ITaskbarList::DeleteTab，不写 WS_EX_TOOLWINDOW；
+ * 覆盖层是 show:false 创建、之后 showInactive()/setAlwaysOnTop()/setIgnoreMouseEvents()，
+ * 任务栏会重新登记这个无 owner 的顶层窗口 —— 实测出现「Mineradio」+「Mineradio Desktop Lyrics」
+ * 两个缩略图。type:'toolbar' 是 Windows 上唯一受支持的窗口类型，建窗时加 WS_EX_TOOLWINDOW，
+ * 任务栏与 Alt+Tab 都不再收录；探针证明置顶/透明/鼠标穿透/opacity 不受影响。 */
+function checkOverlayTaskbarGuard() {
+  logStep('Desktop overlay taskbar guard');
+  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
+  const wallpaperText = fs.readFileSync(path.join(appRoot, 'desktop', 'wallpaper-mode-runtime.js'), 'utf8');
+  const toolbarOption = "process.platform === 'win32' ? { type: 'toolbar' } : {}";
+  const lyricsStart = mainText.indexOf('function createDesktopLyricsWindow');
+  const lyricsEnd = mainText.indexOf('function closeDesktopLyricsWindow', lyricsStart);
+  if (lyricsStart < 0 || lyricsEnd < 0) fail('desktop lyrics window creation block not found');
+  const lyricsBlock = mainText.slice(lyricsStart, lyricsEnd);
+  if (!/skipTaskbar: true/.test(lyricsBlock)) fail('desktop lyrics window lost skipTaskbar');
+  if (lyricsBlock.indexOf(toolbarOption) < 0) {
+    fail('desktop lyrics window needs type:toolbar on Windows, otherwise it creates a second taskbar thumbnail');
+  }
+  const wallStart = wallpaperText.indexOf('createWindow() {');
+  const wallEnd = wallpaperText.indexOf('win.setIgnoreMouseEvents(true)', wallStart);
+  if (wallStart < 0 || wallEnd < 0) fail('desktop wallpaper window creation block not found');
+  const wallBlock = wallpaperText.slice(wallStart, wallEnd);
+  if (!/skipTaskbar: true/.test(wallBlock)) fail('desktop wallpaper window lost skipTaskbar');
+  if (wallBlock.indexOf(toolbarOption) < 0) {
+    fail('desktop wallpaper window needs type:toolbar on Windows, otherwise it creates a second taskbar thumbnail');
+  }
+  const mainStart = mainText.indexOf('mainWindow = new BrowserWindow({');
+  const mainBlock = mainText.slice(mainStart, mainStart + 900);
+  if (mainStart < 0 || /type:\s*'toolbar'/.test(mainBlock)) {
+    fail('the main player window must stay a normal taskbar window (type:toolbar belongs to overlays only)');
+  }
+  console.log('[OK] both desktop overlays use the Windows tool-window style while the main window stays on the taskbar.');
+}
+
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard, checkOverlayTaskbarGuard
 };

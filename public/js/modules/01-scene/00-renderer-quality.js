@@ -308,8 +308,10 @@ function createInertRendererStub(host) {
 
 var rendererUnavailableReason = '';
 var renderer = (function createMineradioRenderer() {
+  if (typeof markAppPerf === 'function') markAppPerf('renderer-create-start');
   try {
     var real = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
+    if (typeof markAppPerf === 'function') markAppPerf('renderer-context-ready');
     real.setClearColor(0x000000, 0);
     real.setPixelRatio(getRenderPixelRatio());
     real.setSize(innerWidth, innerHeight);
@@ -322,6 +324,7 @@ var renderer = (function createMineradioRenderer() {
     if (host) host.appendChild(real.domElement);
     return real;
   } catch (rendererErr) {
+    if (typeof markAppPerf === 'function') markAppPerf('renderer-create-failed');
     rendererUnavailableReason = (rendererErr && rendererErr.message) || String(rendererErr);
     console.error('[renderer] WebGL 不可用，已降级为惰性桩（3D 舞台失效，其余功能继续）:', rendererUnavailableReason);
     try {

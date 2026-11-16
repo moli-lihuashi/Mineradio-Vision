@@ -50,11 +50,11 @@ const {
 } = require('./server/qishui/account');
 
 const {
-  createQishuiPcQrLogin,
-  checkQishuiPcQrLogin,
+  // 扫码/OAuth 换 token 那条链路（createQishuiPcQrLogin / checkQishuiPcQrLogin /
+  // exchangeQishuiOAuthCode）已于 2026-11-14 删除：全仓零调用者，且它把
+  // error_code 7 当 'wait'，与路由的中性 upstream_code_7 形成两套语义。
   saveQishuiAccessToken,
   clearQishuiAccessToken,
-  exchangeQishuiOAuthCode,
 } = require('./server/qishui/auth');
 
 const {
@@ -94,9 +94,6 @@ module.exports = {
   qishuiCookieHasLogin,
   getQishuiOAuthConfig,
   buildQishuiOAuthAuthorizeUrl,
-  exchangeQishuiOAuthCode,
-  createQishuiPcQrLogin,
-  checkQishuiPcQrLogin,
   saveQishuiAccessToken,
   clearQishuiAccessToken,
   handleQishuiSearch,

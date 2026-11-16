@@ -25,22 +25,26 @@ body.fx-fab-auto-hide #fx-fab{right:-76px;opacity:0;visibility:hidden;pointer-ev
 body.fx-fab-auto-hide.fx-fab-peek #fx-fab{right:24px;opacity:1;visibility:visible;pointer-events:auto;transition:right .28s cubic-bezier(.16,1,.3,1),bottom .38s cubic-bezier(.16,1,.3,1),opacity .16s,transform .24s,background .28s,border-color .28s,color .28s,box-shadow .28s}
 body.fx-fab-auto-hide #fx-fab-hide-btn{right:-76px;opacity:0;visibility:hidden;pointer-events:none;transform:translateX(6px) scale(.92);transition:right .28s cubic-bezier(.16,1,.3,1),bottom .38s cubic-bezier(.16,1,.3,1),opacity .18s,visibility 0s linear .18s,transform .18s,background .18s,color .18s,border-color .18s}
 body.fx-fab-auto-hide.fx-fab-peek #fx-fab-hide-btn{right:84px;opacity:1;visibility:visible;pointer-events:auto;transform:translateX(0) scale(1);transition:right .28s cubic-bezier(.16,1,.3,1),bottom .38s cubic-bezier(.16,1,.3,1),opacity .16s,transform .18s,background .18s,color .18s,border-color .18s}
+/* 视觉控制台开关（#fx-fab）和它的自动隐藏箭头（#fx-fab-hide-btn）固定在右下角，
+   不随底部控制条升起（用户 2026-11-14 要求）。控制条 z-index:6 < fab 的 19，
+   水平上多数情况也不重叠，固定位置更好找。
+   保留这组高特异性选择器并写回基础值，是为了压住任何 controls-visible 抬升规则。 */
 body.controls-visible #fx-fab-hide-btn,
-body.desktop-shell.diy-mode.controls-visible #fx-fab-hide-btn{bottom:139px}
+body.desktop-shell.diy-mode.controls-visible #fx-fab-hide-btn{bottom:37px!important}
 body.immersive-mode #fx-fab-hide-btn{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
 body.desktop-shell.diy-mode #fx-panel{top:64px;bottom:132px;max-height:none}
 body.desktop-shell.diy-mode #fx-fab{bottom:24px}
 body.desktop-shell.diy-mode #fx-fab-hide-btn{bottom:37px}
 body.controls-visible #fx-fab,
-body.desktop-shell.diy-mode.controls-visible #fx-fab{bottom:126px}
+body.desktop-shell.diy-mode.controls-visible #fx-fab{bottom:24px!important}
 body.desktop-shell.diy-mode #bottom-bar,
 body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,calc(100vw - 72px))}
 @media (max-height:760px){
   body.desktop-shell.diy-mode #fx-panel{top:56px;bottom:116px;width:min(410px,calc(100vw - 48px));padding:14px}
   body.desktop-shell.diy-mode #fx-fab{bottom:22px}
   body.desktop-shell.diy-mode #fx-fab-hide-btn{bottom:35px}
-  body.desktop-shell.diy-mode.controls-visible #fx-fab{bottom:112px}
-  body.desktop-shell.diy-mode.controls-visible #fx-fab-hide-btn{bottom:125px}
+  body.desktop-shell.diy-mode.controls-visible #fx-fab{bottom:22px!important}
+  body.desktop-shell.diy-mode.controls-visible #fx-fab-hide-btn{bottom:35px!important}
 }
 @media (max-width:980px){
   body.desktop-shell.diy-mode #fx-panel{left:18px;right:18px;width:auto;top:62px;bottom:132px}
@@ -285,6 +289,12 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 #fx-panel .fx-slider[hidden],
 #fx-panel .fx-seg[hidden],
 #fx-panel .fx-section-label[hidden]{display:none}
+
+/* 壁纸设置与桌面歌词设置分开：统一容器 + 顶部分隔线，避免两条帧率条挨在一起被当成一组 */
+#fx-panel .wallpaper-settings-group[hidden]{display:none}
+.wallpaper-settings-group{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.fx-label-scope{margin-left:6px;font-size:9px;font-weight:600;letter-spacing:0;text-transform:none;
+  color:rgba(255,255,255,.4)}
 
 /* --- 三态分段 --- */
 .fx-seg{display:flex;border-radius:11px;border:1px solid rgba(255,255,255,.08);overflow:hidden;background:rgba(255,255,255,.026);margin-bottom:10px}
