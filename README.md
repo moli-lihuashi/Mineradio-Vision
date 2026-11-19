@@ -189,10 +189,3 @@ npm run build:win
 ## 许可证
 
 GPL-3.0，详见 [LICENSE](./LICENSE) 与 [NOTICE.md](./NOTICE.md)。修改内容记录在 [MODIFICATIONS.md](./MODIFICATIONS.md)，版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
-
-## Contributors
-
-| Contributor | Role |
-| --- | --- |
-| [**moli-lihuashi**](https://github.com/moli-lihuashi) | 架构重构、多音乐源接入、视觉系统与功能开发 |
-| **GLM**（智谱 AI） | AI 结对开发助手，参与代码实现、问题修复与文档编写 |
