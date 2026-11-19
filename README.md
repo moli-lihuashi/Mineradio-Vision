@@ -99,6 +99,7 @@
 
 - **Windows 安装包（推荐）**：[Mineradio-3.3.2-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-3.3.2-Setup.exe)
 - **免安装便携版**：[Mineradio-Vision-v3.3.2-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-Vision-v3.3.2-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
+- **国内网盘镜像（夸克网盘，永久有效、无需提取码）**：[Mineradio Vision v3.3.2 安装包与免安装包](https://pan.quark.cn/s/659755e8dc52) —— GitHub 直连较慢时用这个，含上面两个文件，打开后可单独下载或转存到自己的网盘
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可安装。
