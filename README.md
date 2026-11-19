@@ -93,7 +93,9 @@
 
 ## 界面预览
 
-![Mineradio Vision 歌词舞台](./docs/media/hero-lyric-stage-2026-11-14.png)
+![Mineradio Vision 歌词舞台（深色）](./docs/media/lyric-stage-dark-2026-11-19.jpg)
+
+![Mineradio Vision 歌词舞台（浅色）](./docs/media/lyric-stage-light-2026-11-19.jpg)
 
 ## 下载安装
 
