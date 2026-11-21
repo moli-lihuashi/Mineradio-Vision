@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.3.3 · 2026-11-21
+
+### 壁纸模式：与桌面壁纸共生
+
+- 新增独立桌面效果层窗口（`desktop/desktop-stage-window.js`）：透明、鼠标穿透、不抢焦点、跳过任务栏、常驻桌面底部。不改系统壁纸、不写注册表、不注入 WorkerW 壁纸宿主，与 Wallpaper Engine 等动态壁纸同时存在。
+- 主窗口在壁纸模式下只做控制不渲染：渲染器缩至 4×4、摘除舞台层、用纯色补不透明底，避免两份渲染互相压帧；显示「歌词写真已投到桌面」提示。
+- 舞台页复用 `applyPlaybackSession`，以静音二次解码镜像播放会话，歌词与粒子跟随当前歌曲推进。
+- README 新增「壁纸模式」章节与展示图。
+
+### 酷狗
+
+- **SVIP 被误判为普通 VIP**：unionVip 的超级会员到期时间字段是 `su_vip_end_time`，归一化此前只认 `svip_` / `super_vip_` / `luxury_vip_` 前缀；同时 `kugouTimeState` 用 `Number()` 解析 `"YYYY-MM-DD HH:mm:ss"` 字符串得 `NaN` 被跳过。两处补齐后 `isSvip` 正确。
+- **个人歌单 20017**：cloudlist 校验「请求身份 == token 签发身份」，此前扫码用 1001、换 token 用 1005、歌单请求用 3116，三方不一致。统一到 3116/11440，并保留 1005 自动回退。实测 3116 token 请求 `/v7/get_all_list` 返回 `status=1`。
+- 升级后需要重新扫码登录一次，旧 token 不会自动迁移。
+
+### 其他
+
+- Folia 模组：移除 visualizer-jump，新增 huajian / miside-drop / visualizer52hz。
+- 删除死代码 `09b-playback-core.js`、`05-prismal-fill.js`。
+- 新增 12 个回归测试（壁纸舞台、桌面歌词、模组兼容、酷狗会员与登录身份等）。
+
 ## v3.3.2 · 2026-11-16 重新构建批次
 
 本次按发布要求**不升版本号**，资产替换了 2026-11-14 的构建；以 Release 正文首行的构建 commit 与 SHA256 为准。
