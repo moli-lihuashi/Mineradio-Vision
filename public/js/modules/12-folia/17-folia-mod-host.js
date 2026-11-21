@@ -470,11 +470,17 @@ function foliaModDriveInstance(inst) {
 
   var theme = live.theme || null;
   var count = live.lines ? live.lines.length : 0;
+  /* linesRev：歌词表被重算过（换歌 / 歌词异步到 / 译文补齐）。行数可能一样，
+   * 但内容换了，只比 count 会漏通知 —— 模组的「换歌重建」就一直不触发。 */
+  var linesRev = Number(live.linesRev);
+  if (!isFinite(linesRev)) linesRev = -1;
   if (live.index !== inst.lastIndex || count !== inst.lastCount || theme !== inst.lastTheme
+      || linesRev !== inst.lastLinesRev
       || live.showText !== inst.lastShowText || live.showTranslation !== inst.lastShowTranslation
       || live.fontScale !== inst.lastFontScale) {
     inst.lastIndex = live.index;
     inst.lastCount = count;
+    inst.lastLinesRev = linesRev;
     inst.lastTheme = theme;
     inst.lastShowText = live.showText;
     inst.lastShowTranslation = live.showTranslation;
@@ -550,6 +556,14 @@ function foliaModRegisterVisualizer(entry, modMeta) {
         lastShowText: undefined,
         lastShowTranslation: undefined,
         lastFontScale: undefined,
+        lastLinesRev: -1,
+        /* 挂载那一刻的歌词行数。花笺这类模组只在 mount 时读一次歌词（director.attach
+         * 是快照），之后补来的歌词它读不到 —— 见 tick 里的「歌词晚到就静默重挂」。
+         * 必须在这里（create）就记，不能等首帧 tick：开屏期间主循环不跑 Folia，
+         * 等第一帧 tick 时歌词可能已经加载完，那就永远检测不出「挂载时是空的」。 */
+        mountLines: (foliaCtx && foliaCtx.lines) ? foliaCtx.lines.length : 0,
+        relinkDone: false,
+        lastRelinkTryAt: 0,
         errorShown: false,
         disposed: false
       };
@@ -578,6 +592,33 @@ function foliaModRegisterVisualizer(entry, modMeta) {
     tick: function (inst, foliaCtx) {
       if (!inst || inst.disposed) return;
       inst.live = foliaCtx;
+      /* 歌词比世界晚到：挂载时 ctx.lines 是空的，而花笺这类模组只在 mount 时读一次
+       * 歌词（director.attach 是快照），之后补来的歌词它永远看不到 ——
+       * 症状就是「打开播放器 Folia 里没歌词，切一下样式/世界就恢复」。
+       * 判据用 create 时记下的 mountLines：开屏期间主循环不跑 Folia，等首帧 tick
+       * 才记的话，那时歌词可能已经加载完，就永远检测不出来。 */
+      if (!inst.relinkDone) {
+        var lineCount = (foliaCtx && foliaCtx.lines) ? foliaCtx.lines.length : 0;
+        if (inst.mountLines > 0) {
+          /* 挂载时就有歌词：模组读到的就是完整的，不需要重建。 */
+          inst.relinkDone = true;
+        } else if (lineCount > 0) {
+          var tickNowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          /* 500ms 节流：重建失败（世界正在切样式 / 实例 pending）时别每帧都试一遍。 */
+          if (tickNowMs - (Number(inst.lastRelinkTryAt) || 0) >= 500) {
+            inst.lastRelinkTryAt = tickNowMs;
+            var relinked = false;
+            if (typeof foliaWorldRelinkCurrentMode === 'function') {
+              try { relinked = !!foliaWorldRelinkCurrentMode('lyric-ready-after-mount'); } catch (_) { relinked = false; }
+            }
+            if (relinked) {
+              inst.relinkDone = true;
+              /* 本帧到此为止：旧实例已交给退役流程，别再往它身上跑回调。 */
+              return;
+            }
+          }
+        }
+      }
       foliaModDriveInstance(inst);
       /* ctx.every：宿主统一驱动，模组自己不开 setInterval。 */
       var tickNow = Number(foliaCtx && foliaCtx.now) || performance.now();
@@ -954,12 +995,26 @@ function foliaModRestoreSavedMode() {
     var want = raw.mode;
     if (!want || typeof want !== 'string') return;
     if (typeof foliaWorld === 'undefined' || !foliaWorld) return;
-    if (foliaWorld.mode === want) return;
-    if (typeof getFoliaMode !== 'function' || !getFoliaMode(want)) return;
+    if (foliaWorld.mode === want) {
+      /* 读档时没被校正（样式当时已注册）：pending 是空的，什么都不用做。 */
+      if (typeof clearFoliaWorldPendingMode === 'function') clearFoliaWorldPendingMode();
+      return;
+    }
+    if (typeof getFoliaMode !== 'function' || !getFoliaMode(want)) {
+      /* 清单也加载完了还是没有这个样式：确实是已移除的 id。
+       * 把 pending 清掉并落盘，别让「待恢复」永远指着一个不存在的样式。 */
+      if (foliaWorld.pendingMode === want) {
+        if (typeof clearFoliaWorldPendingMode === 'function') clearFoliaWorldPendingMode();
+        if (typeof saveFoliaWorldPrefs === 'function') saveFoliaWorldPrefs();
+      }
+      return;
+    }
     if (foliaWorld.active && typeof foliaWorldSetMode === 'function') {
+      /* setMode 会自己清 pending。 */
       foliaWorldSetMode(want);
     } else {
       foliaWorld.mode = want;
+      if (typeof clearFoliaWorldPendingMode === 'function') clearFoliaWorldPendingMode();
       if (typeof refreshFoliaWorldUi === 'function') refreshFoliaWorldUi();
     }
     console.log('[FoliaMod] 已恢复存档样式', want);

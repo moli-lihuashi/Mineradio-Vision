@@ -142,6 +142,11 @@ function foliaWorldBuildContext(now, dt) {
     time: time,
     index: index,
     lines: lines,
+    /* 歌词表版本：换歌 / 歌词异步加载完 / 译文补齐都会 +1。
+     * 模组宿主用它判断「挂载时抓住的那份歌词已经变了」。 */
+    linesRev: (typeof foliaWorldLineCache !== 'undefined' && foliaWorldLineCache)
+      ? Number(foliaWorldLineCache.rev) || 0
+      : 0,
     theme: foliaWorldTheme(),
     audio: audioState,
     audioBands: audioState.bands,
@@ -312,6 +317,29 @@ function foliaWorldCreateInstance() {
   }
 }
 
+/* 同一样式静默重建：给「挂载时还没有歌词」的模组一次重新挂载的机会。
+ *
+ * 为什么需要：Folia 模组拿歌词是 mount 时一次快照（花笺 director.attach({lines})），
+ * 之后宿主再改 ctx.lines 它也不会重新 attach。启动时世界比歌词先就绪 →
+ * 模组带着空歌词挂上去 → 画面永远没有词，直到用户切一下样式。
+ * foliaWorldCreateInstance 会把旧实例的最后一帧垫在下面、等新实例画出第一帧再撤，
+ * 所以这次重建在视觉上是「原地换一版」，不会闪白。 */
+function foliaWorldRelinkCurrentMode(reason) {
+  if (!foliaWorld.active || !foliaWorld.instance) return false;
+  /* 上一次异步创建还没落地：等它自己完成，别再叠一层。 */
+  if (foliaWorld.instance.__pending) return false;
+  var def = getFoliaMode(foliaWorld.mode);
+  if (!def) return false;
+  try {
+    var ok = foliaWorldCreateInstance();
+    if (ok) console.log('[FoliaWorld] 歌词就绪后重建样式实例:', foliaWorld.mode, reason || '');
+    return ok;
+  } catch (err) {
+    console.warn('[FoliaWorld] 歌词就绪后重建失败:', err);
+    return false;
+  }
+}
+
 function foliaWorldEnter(opts) {
   opts = opts || {};
   /* 只有「真的在渲染」才早退。半死状态（active 有、instance 没有）必须继续往下建，
@@ -393,6 +421,9 @@ function foliaWorldSetMode(id) {
     if (typeof showToast === 'function') showToast('壁纸模式下不可用该样式');
     return;
   }
+  /* 走到这里说明 id 真的存在（用户点的 / 模组恢复的）：存档里那个「待恢复」
+   * 的旧 id 作废，之后落盘按当前 mode 走。 */
+  if (typeof clearFoliaWorldPendingMode === 'function') clearFoliaWorldPendingMode();
   if (foliaWorld.mode === id) {
     if (typeof refreshFoliaWorldUi === 'function') refreshFoliaWorldUi();
     return;

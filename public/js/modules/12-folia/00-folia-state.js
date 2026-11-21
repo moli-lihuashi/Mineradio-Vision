@@ -23,7 +23,12 @@ var foliaWorld = {
   instance: null,       // 当前模式的运行时实例
   bgHost: null,         // 背景宿主（root 的第一个子节点，模式宿主盖在它上面）
   bgInstance: null,     // 当前背景实例
-  bgDef: null           // 当前背景的注册项
+  bgDef: null,          // 当前背景的注册项
+  /* 存档里的样式 id 在「模组还没注册」时会被校正成 classic。原 id 留在这里：
+   * 落盘时继续写它，模组就绪后 foliaModRestoreSavedMode 再切回来。
+   * 不这么做的话，启动时 foliaWorldEnter() 的 save 会把 classic 写回存档，
+   * 用户的模组样式（花笺等）被永久抹掉 —— 症状就是「重启后变回流光」。 */
+  pendingMode: ''
 };
 
 var FOLIA_WORLD_INTENSITIES = ['calm', 'normal', 'chaotic'];
@@ -48,10 +53,16 @@ function readFoliaWorldPrefs() {
     if (typeof raw.mode === 'string' && raw.mode) foliaWorld.mode = raw.mode;
     if (typeof raw.background === 'string' && raw.background) foliaWorld.background = raw.background;
     if (FOLIA_WORLD_INTENSITIES.indexOf(raw.intensity) >= 0) foliaWorld.intensity = raw.intensity;
-    /* 存档里的 id 可能指向已经不存在的样式/背景（棱镜、星潮已移除）。
+    /* 存档里的 id 可能指向还不存在/已移除的样式（模组是异步注册的；棱镜、星潮已移除）。
      * 运行时对未知 id 有兜底（模式→still，背景→none），但那样面板里会
-     * 「实际在画 A、卡片高亮却是 B」。这里在读档时就校正回默认值。 */
-    if (typeof getFoliaMode === 'function' && !getFoliaMode(foliaWorld.mode)) foliaWorld.mode = 'classic';
+     * 「实际在画 A、卡片高亮却是 B」。这里在读档时就校正回默认值。
+     * 关键区别：模组样式「还没注册」≠「已移除」——
+     *   原 id 存进 pendingMode，落盘时继续写它，等模组就绪由
+     *   foliaModRestoreSavedMode 切回来；真已移除的由它收尾时清掉。 */
+    if (typeof getFoliaMode === 'function' && !getFoliaMode(foliaWorld.mode)) {
+      if (foliaWorld.mode !== 'classic') foliaWorld.pendingMode = foliaWorld.mode;
+      foliaWorld.mode = 'classic';
+    }
     if (typeof hasFoliaBackground === 'function' && !hasFoliaBackground(foliaWorld.background)) foliaWorld.background = 'none';
   } catch (_) {}
   return foliaWorld;
@@ -64,11 +75,18 @@ function saveFoliaWorldPrefs() {
   try {
     localStorage.setItem(FOLIA_WORLD_STORE_KEY, JSON.stringify({
       active: !!foliaWorld.active,
-      mode: foliaWorld.mode || 'classic',
+      /* 模组样式还没注册时内存里是 classic：落盘要写用户原本选的 id，
+       * 否则启动时的一次 enter 就会把花笺永久改成流光。 */
+      mode: foliaWorld.pendingMode || foliaWorld.mode || 'classic',
       background: foliaWorld.background || 'none',
       intensity: foliaWorld.intensity || 'normal'
     }));
   } catch (_) {}
+}
+
+/* 用户显式选样式 / 模组就绪后完成恢复：清掉「待恢复」标记，之后按内存 mode 落盘。 */
+function clearFoliaWorldPendingMode() {
+  foliaWorld.pendingMode = '';
 }
 
 function foliaWorldSetIntensity(level) {
@@ -179,7 +197,13 @@ function foliaTranslationFontStack(fontStyle) {
 
 
 /* ---- 歌词适配：本项目 { t, text, translation, words:{t,d} } → Folia Line ---- */
-var foliaWorldLineCache = { ref: null, len: 0, lines: [] };
+/* lines 是**稳定数组**：模组在 mount 时会把 ctx.lines 的引用抓走（花笺的
+ * director.attach({ lines: ctx.lines }) 就是一次快照，之后只重建场景、不重新 attach）。
+ * 以前每次重算都换一个新数组，模组手里的引用永远停在「挂载那一刻」——
+ * 启动时歌词还没加载 → 挂载拿到空数组 → 之后歌词到了也读不到，
+ * 症状就是「打开播放器 Folia 里没歌词，切一下世界/样式就好」。
+ * 现在原地刷新同一个数组，并给 rev 让宿主能通知「歌词换了」。 */
+var foliaWorldLineCache = { ref: null, len: 0, lines: [], rev: 0 };
 
 function foliaWorldLines() {
   var src = (typeof lyricsLines !== 'undefined' && lyricsLines) ? lyricsLines : [];
@@ -222,8 +246,14 @@ function foliaWorldLines() {
       out[i].endTime = out[i].startTime + (isFinite(dur) && dur > 0 ? dur : 4.8);
     }
   }
-  foliaWorldLineCache = { ref: src, len: src.length, lines: out };
-  return out;
+  /* 原地刷新：保持数组身份，模组挂载时抓住的引用能一直读到最新歌词。 */
+  var stable = foliaWorldLineCache.lines;
+  stable.length = 0;
+  for (i = 0; i < out.length; i++) stable.push(out[i]);
+  foliaWorldLineCache.ref = src;
+  foliaWorldLineCache.len = src.length;
+  foliaWorldLineCache.rev = (Number(foliaWorldLineCache.rev) || 0) + 1;
+  return stable;
 }
 
 /* ---- 时钟：复用原生歌词同一条时间轴（含歌词校时偏移） ---- */
