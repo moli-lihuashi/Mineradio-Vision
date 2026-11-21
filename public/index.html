@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.3.2">
+<html lang="zh-CN" data-app-version="3.3.3">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,6 +18,28 @@
      项目自身不嵌任何 frame，原有功能不受影响；iframe 侧另有 sandbox="allow-scripts" 锁内嵌页。 -->
 <title>Mineradio</title>
 <meta name="referrer" content="no-referrer">
+<!-- 桌面效果层首帧闸门。壁纸模式现在是「主窗口不动 + 另一张透明效果层窗口」，
+     效果层加载的是同一份 index.html，导航 URL 带 ?stage=1&stageWorld=…：
+     在**任何样式表生效之前**就给 <html> 打上舞台态标记，CSS 才能从第一帧起就不画标题栏/首页/控制条。
+     没有这一步的话，页面会先完整画出整个播放器、等 JS 起来再把它们隐藏 —— 那一下闪烁在桌面壁纸上
+     非常刺眼，而且隐藏动作本身会参与合成层历史（残影的来源之一）。
+     只读 location.search，不依赖任何模块、不依赖 DOM 就绪，出错也不许影响启动。 -->
+<script>
+(function () {
+  try {
+    var q = String(location.search || '');
+    var stagePage = /[?&]stage=1(?:&|$)/.test(q);
+    var legacyWallpaper = /[?&]wallpaper=1(?:&|$)/.test(q);
+    if (!stagePage && !legacyWallpaper) return;
+    window.__MINERADIO_STAGE_PAGE__ = true;
+    var root = document.documentElement;
+    root.classList.add('wp-stage');
+    var world = (q.match(/[?&]stageWorld=([^&]*)/) || [])[1] || '';
+    try { world = decodeURIComponent(world); } catch (_) {}
+    if (world === 'folia') root.classList.add('wp-stage-folia');
+  } catch (_) {}
+})();
+</script>
 <!-- Google Fonts 不可阻塞启动：离线/墙/超时会卡住 DOMContentLoaded ~30s，表现为进程在但几乎 0 CPU、长时间黑屏 -->
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" media="print" onload="this.media='all'">
@@ -73,6 +95,8 @@ try {
 <link rel="stylesheet" href="css/06-fx/prismal-chrome.css?v=3.0.13-nofire">
 <link rel="stylesheet" href="css/07-fx/fx-particle-fire-lock.css?v=3.2.24-lock">
 <link rel="stylesheet" href="css/10-shell/shell.css?v=3.0.3-spotify">
+<!-- 壁纸模式只留舞台（粒子+歌词 / 仅 Folia 歌词）：必须在 shell.css 之后，靠 !important 压住十几处显隐 -->
+<link rel="stylesheet" href="css/10-shell/wallpaper-stage.css?v=2.3.1-host-cast-round">
 <link rel="stylesheet" href="css/05-playback/home-insight.css?v=3.0.0-modular">
 <link rel="stylesheet" href="css/07-fx/lyric-shader-market.css?v=3.0.0-modular">
 <!-- 必须最后加载：它要接管 glass.css / fx-glass.css 对 #fx-panel 的 !important 覆盖 -->
@@ -649,11 +673,11 @@ try {
 <div id="fx-panel" class="fx-css-glass">
   <div class="fx-scroll">
   <div class="fx-head">
-    <div><div class="fx-title">视觉控制台</div><div class="fx-sub">MINERADIO VISUALS · 鼠标移开自动隐藏</div></div>
+    <div><div class="fx-title">视觉控制台</div><div class="fx-sub">鼠标移开自动隐藏</div></div>
   </div>
   <div class="fx-console-search-row" role="search">
     <span class="fx-console-search-icon" aria-hidden="true">⌕</span>
-    <input id="fx-console-search" class="fx-console-search" type="search" autocomplete="off" spellcheck="false" aria-label="搜索视觉控制台功能" placeholder="搜索功能，如：粒子、缓存、歌词">
+    <input id="fx-console-search" class="fx-console-search" type="search" autocomplete="off" spellcheck="false" aria-label="搜索视觉控制台功能" placeholder="搜索设置">
     <div id="fx-console-search-results" class="fx-console-popover fx-console-search-results" hidden></div>
   </div>
 
@@ -662,7 +686,7 @@ try {
 
   <div class="fx-fold" id="fx-folia-fold">
     <div class="fx-fold-head" onclick="toggleFoliaWorldFold()">
-      <span class="fx-fold-title"><strong>Folia 世界</strong><small>独立歌词世界 · 与预设互斥</small></span><span class="arrow">▶</span>
+      <span class="fx-fold-title"><strong>Folia 世界</strong><small>独立歌词世界</small></span><span class="arrow">▶</span>
     </div>
     <div class="fx-fold-body">
       <div class="fx-folia-switch-row">
@@ -1124,9 +1148,9 @@ try {
         <div class="fx-toggle" id="t-edge" onclick="toggleFx('edge')"><span>轮廓高亮</span><span class="dot"></span></div>
         <div class="fx-toggle" id="t-desktopLyrics" onclick="toggleFx('desktopLyrics')" title="在桌面上置顶显示歌词（快捷键 Alt+L），打开后可调整大小 / 行数 / 动效"><span>桌面歌词</span><span class="dot"></span></div>
         <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsClickThrough" onclick="toggleFx('desktopLyricsClickThrough')" title="锁定后防误触；鼠标移到桌面歌词上按中键可锁定/解锁"><span>桌面歌词锁定</span><span class="dot"></span></div>
-        <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsCinema" onclick="toggleFx('desktopLyricsCinema')" title="桌面歌词绑定鼓点电影震动，基础漂浮始终保留"><span>桌面歌词电影震动</span><span class="dot"></span></div>
+        <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsCinema" onclick="toggleFx('desktopLyricsCinema')" title="桌面歌词跟随鼓点做亮度与辉光律动（位移/旋转已关闭，避免贴边漂移）"><span>桌面歌词电影律动</span><span class="dot"></span></div>
         <div class="fx-toggle fx-dl-dependent" id="t-desktopLyricsHighlight" onclick="toggleFx('desktopLyricsHighlight')" title="桌面歌词按播放进度高亮"><span>桌面歌词高亮跟随</span><span class="dot"></span></div>
-        <div class="fx-toggle" id="t-wallpaperMode" onclick="toggleFx('wallpaperMode')" title="把完整 Mineradio 放到 Windows 桌面当壁纸；退出请点托盘图标（左键直接切回窗口）"><span>壁纸模式</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-wallpaperMode" onclick="toggleFx('wallpaperMode')" title="把粒子与歌词放到桌面上（原世界：粒子+歌词 / Folia：只留歌词）；播放器窗口和任务栏保持原样，再点一次关闭"><span>壁纸模式</span><span class="dot"></span></div>
       </div>
       <div class="fx-dl-hint" id="fx-desktop-lyrics-hint">打开「桌面歌词」后，这里会出现大小 / 透明度 / 行数 / 动效 / 倾斜等设置</div>
       <div class="fx-dl-settings" id="fx-desktop-lyrics-settings">
@@ -1363,7 +1387,7 @@ try {
 <!-- 歌单/队列面板 (左侧贴边自动显示, 无关闭按钮) -->
 <div id="playlist-panel">
   <div class="queue-head">
-    <div><div class="fx-title">歌单 / 队列</div><div class="fx-sub">QUEUE · 鼠标移开自动隐藏</div></div>
+    <div><div class="fx-title">歌单 / 队列</div><div class="fx-sub">鼠标移开自动隐藏</div></div>
     <div class="queue-head-act">
       <button id="playlist-pin-btn" class="fx-mini-btn ghost playlist-pin-btn" onclick="togglePlaylistPanelPinned()" title="常开歌单" aria-label="常开歌单"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6"/><path d="M5 15l4 4"/><path d="M14 4l-2 5-4 4-3 2 4 4 2-3 4-4 5-2z"/><path d="M9 19l-4 4"/></svg></button>
       <button class="fx-mini-btn ghost" onclick="shuffleQueue()">随机</button>
@@ -1514,8 +1538,38 @@ try {
   <div class="cp-container">
     <div class="cp-left">
       <div class="cp-cover-wrap">
-        <div class="cp-cover" id="cp-cover"></div>
-        <div class="cp-cover-shadow"></div>
+        <div class="cp-vinyl" aria-hidden="true">
+          <div class="cp-vinyl-halo"></div>
+          <div class="cp-vinyl-disc">
+            <div class="cp-vinyl-grooves"></div>
+            <div class="cp-vinyl-rim"></div>
+            <div class="cp-cover" id="cp-cover"></div>
+          </div>
+          <div class="cp-vinyl-sheen"></div>
+          <svg class="cp-vinyl-arm" viewBox="-40 -40 180 180" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="cpVinylArmRod" x1="90" y1="-8" x2="77" y2="21.2" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#f4f4f6"></stop>
+                <stop offset="1" stop-color="#dcdce0"></stop>
+              </linearGradient>
+              <filter id="cpVinylArmShadow" filterUnits="userSpaceOnUse" x="-40" y="-40" width="180" height="180">
+                <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" flood-color="#000000" flood-opacity="0.4"></feDropShadow>
+              </filter>
+            </defs>
+            <g filter="url(#cpVinylArmShadow)">
+              <path d="M 90 -8 L 85.64 12.07 Q 85 15 82.63 16.83 L 77 21.2" fill="none" stroke="url(#cpVinylArmRod)" stroke-width="1.9" stroke-opacity="0.94" stroke-linecap="round" stroke-linejoin="round"></path>
+              <g transform="rotate(142 77 21.2)">
+                <rect x="71.5" y="18.7" width="11" height="5" rx="2.5" fill="#f2f2f4" fill-opacity="0.88"></rect>
+                <rect x="71.5" y="18.7" width="11" height="2.2" rx="1.1" fill="#ffffff" fill-opacity="0.35"></rect>
+                <rect x="71.5" y="21.6" width="11" height="2.1" rx="1.05" fill="#000000" fill-opacity="0.07"></rect>
+                <circle cx="81.4" cy="21.2" r="0.95" fill="#3a3a3e"></circle>
+              </g>
+              <circle cx="90" cy="-8" r="4.3" fill="#f6f6f8" fill-opacity="0.9"></circle>
+              <circle cx="90" cy="-8" r="4.3" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="0.45"></circle>
+              <circle cx="90" cy="-8" r="1.8" fill="#2a2a2e"></circle>
+            </g>
+          </svg>
+        </div>
       </div>
       <div class="cp-song-info">
         <div class="cp-song-name" id="cp-song-name">--</div>
@@ -2036,6 +2090,24 @@ try {
   </div>
 </div>
 
+<!-- 壁纸模式：效果已经在桌面效果层里画，播放器窗口只留一条说明。
+     显示判据是 body.wallpaper-host-cast（04-desktop-overlay-fullscreen 维护），
+     效果层页面永远不会带这个 class；首页与经典播放器下也会自动让位。 -->
+<div id="wallpaper-cast-hint" role="status" aria-live="polite">
+  <div class="wp-cast-card">
+    <div class="wp-cast-glyph" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="4" width="19" height="12.6" rx="2.2"></rect>
+        <path d="M8 20.2h8"></path>
+        <path d="M12 16.6v3.6"></path>
+        <path d="M17.4 7.6l1.05 2.35 2.35 1.05-2.35 1.05-1.05 2.35-1.05-2.35-2.35-1.05 2.35-1.05z"></path>
+      </svg>
+    </div>
+    <div class="wp-cast-title">歌词写真已投到桌面</div>
+    <div class="wp-cast-sub">播放器窗口已暂停绘制舞台效果，播放与操作不受影响。<br>再点一次「壁纸模式」即可关闭，播放器画面会自动恢复。</div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <div id="cuefield-feedback" aria-live="polite" aria-label="Cuefield AutoMix 反馈">
   <div class="cuefield-feedback-kicker">CUEFIELD · LOCAL FEEDBACK</div>
@@ -2148,8 +2220,10 @@ try {
   </div>
 </div>
 
-<!-- 壁纸模式控制器（完整桌面模式）：附着到桌面后没有窗口边框、任务栏里也点不到，
-     右上角留一个常驻把手（平时半透明，靠近才展开），退出 / 图标显隐 / 软件锁都在这里 -->
+<!-- 壁纸模式控制器（旧 WorkerW 附着形态的遗留 DOM）。
+     2026-11-21 起壁纸模式 = 主窗口不动 + 独立桌面效果层窗口：主窗口一直可点、任务栏一直在，
+     不再需要桌面上的「唯一出口」。这个 dock 只在 body.desktop-wallpaper-mode.desktop-wallpaper-interactive
+     下显示，而这两个 class 现在不会再被挂上，所以它永远不出现；保留节点只为旧脚本引用不报错。 -->
 <div id="desktop-mode-control-dock" class="desktop-mode-control-dock" role="group" aria-label="壁纸模式控制器">
   <button id="desktop-mode-control-handle" class="desktop-mode-control-handle" type="button"
           aria-controls="desktop-mode-control-panel" aria-expanded="false"

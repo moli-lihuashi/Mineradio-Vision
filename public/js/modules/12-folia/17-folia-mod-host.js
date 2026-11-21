@@ -268,8 +268,40 @@ function foliaModFail(inst, err) {
   } catch (_) {}
 }
 
-/* Folia 的时钟是一个对象，不是数字：ctx.currentTime.get() 取当前秒，
- * ctx.currentTime.on('change', cb) 订阅并返回退订函数（巨幕用的是这个）。
+/* 容器尺寸推送：ResizeObserver 与 onResize 注册共用，同尺寸不重复通知。 */
+function foliaModContainerSize(inst) {
+  var el = inst && inst.container;
+  if (!el || typeof el.getBoundingClientRect !== 'function') return { width: 0, height: 0 };
+  var r = el.getBoundingClientRect();
+  return {
+    width: Math.max(0, Math.round(Number(r.width) || 0)),
+    height: Math.max(0, Math.round(Number(r.height) || 0))
+  };
+}
+
+function foliaModNotifyResize(inst, force) {
+  if (!inst || inst.disposed) return;
+  var size = foliaModContainerSize(inst);
+  if (!force && size.width === inst.lastW && size.height === inst.lastH) return;
+  inst.lastW = size.width;
+  inst.lastH = size.height;
+  for (var i = inst.resizeListeners.length - 1; i >= 0; i--) {
+    try { inst.resizeListeners[i](size); } catch (err) { foliaModFail(inst, err); }
+  }
+}
+
+/* 音频门面：门面对象本身稳定，数值每次从 inst.live.audio 现读（tick 会换 live）。 */
+function foliaModBuildAudioFacade(inst) {
+  function liveAudio() { return (inst.live && inst.live.audio) || null; }
+  return {
+    getPower: function () { var a = liveAudio(); return a ? Math.max(0, Number(a.power) || 0) : 0; },
+    getBeat: function () { var a = liveAudio(); return a ? Math.max(0, Number(a.beat) || 0) : 0; },
+    getBands: function () { var a = liveAudio(); return (a && a.bands) || {}; },
+    getSpectrum: function () { var a = liveAudio(); return (a && a.spectrum) || []; }
+  };
+}
+
+/* Folia 的时钟是一个对象，不是数字：ctx.currentTime.get() 取当前秒， * ctx.currentTime.on('change', cb) 订阅并返回退订函数（巨幕用的是这个）。
  * 逐字歌词那一路叫 ctx.lyricTime，接口同形（跳一跳用的是这个）。
  * 两个指向同一条时间轴，共用一个订阅表 —— 以前这里错写成返回数字，
  * 巨幕的 ctx.currentTime.get() 会直接 TypeError。 */
@@ -305,10 +337,30 @@ function foliaModBuildContext(inst) {
       var live = inst.live || {};
       return isFinite(Number(live.staticLineIndex)) ? Number(live.staticLineIndex) : -1;
     },
+    /* 当前是否暂停：黑胶/星潮这类模组要靠它停唱片、停粒子。 */
+    isPaused: function () { return !!(inst.live && inst.live.paused); },
+    /* 当前歌曲封面：黑胶当碟心、胶片类当底图。 */
+    getCoverUrl: function () {
+      var song = (inst.live && inst.live.song) || {};
+      return String(song.coverUrl || song.cover || '');
+    },
+    /* 当前曲目总时长（秒）：花笺导演按它排整首歌词的节奏。 */
+    getDuration: function () {
+      try { return (typeof audio !== 'undefined' && audio && isFinite(audio.duration)) ? Number(audio.duration) : 0; }
+      catch (_) { return 0; }
+    },
+    /* 稳定的随机种子（同曲不变），miside 的立体掉落用它排字位。 */
+    get seed() {
+      var live = inst.live || {};
+      return String(live.seed || (live.song && live.song.id) || '');
+    },
+    get isPreview() { return false; },
     getTheme: function () { return (inst.live && inst.live.theme) || {}; },
     /* 音频能量（0..1）与频谱段：町景的雨量、霓虹呼吸跟着它走。
      * 宿主没采到（没在播 / 分析没跑）时给 power:0，样式侧自己兜。 */
     getAudio: function () { return (inst.live && inst.live.audio) || { power: 0, beat: 0, bands: {} }; },
+    /* Folium 1.2 的音频门面：52Hz / 星潮按方法读，不接受每次重建对象。 */
+    audio: inst.audioFacade,
     /* 永远读归一化后的那一份（面板改完立刻生效），不是 mount 时的快照。 */
     getSettings: function () { return foliaModSettingsFor(inst.modeId); },
     getLineIndex: function () {
@@ -317,14 +369,27 @@ function foliaModBuildContext(inst) {
     },
     getDisplay: function () {
       var live = inst.live || {};
+      var scale = isFinite(Number(live.fontScale)) ? Number(live.fontScale) : 1;
       return {
         showText: live.showText !== false,
         showTranslation: live.showTranslation !== false,
-        fontScale: isFinite(Number(live.fontScale)) ? Number(live.fontScale) : 1
+        /* 旧字段名（本项目）与新字段名（模组）同时给，避免两套实现打架。 */
+        fontScale: scale,
+        lyricsFontScale: scale,
+        lyricFontScale: scale
       };
     },
     /* 本项目的世界自己画背景，舞台对模组来说永远不透明、且宿主已铺背景。 */
-    getSurface: function () { return { transparent: false, hostBackground: true }; },
+    /* 效果层（桌面壁纸）的 Folia root 是透明的，背景壳层也被 CSS 摘掉了；
+     * 这里必须如实告诉模组，否则花笺这类「按不透明面画暗角/补光」的样式
+     * 会在桌面上铺一层灰底（2026-11-21 实机反馈）。 */
+    getSurface: function () {
+      var stagePage = false;
+      try { stagePage = typeof isWallpaperStagePage === 'function' && isWallpaperStagePage(); } catch (_) {}
+      return stagePage
+        ? { transparent: true, hostBackground: false }
+        : { transparent: false, hostBackground: true };
+    },
     onLyricTime: function (cb) {
       if (typeof cb !== 'function') return function () {};
       inst.timeListeners.push(cb);
@@ -339,6 +404,45 @@ function foliaModBuildContext(inst) {
       return function () {
         var i = inst.changeListeners.indexOf(cb);
         if (i >= 0) inst.changeListeners.splice(i, 1);
+      };
+    },
+    /* Folium 1.3 的别名：新模组用 ctx.subscribe 代替 ctx.onChange。 */
+    subscribe: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      inst.changeListeners.push(cb);
+      return function () {
+        var i = inst.changeListeners.indexOf(cb);
+        if (i >= 0) inst.changeListeners.splice(i, 1);
+      };
+    },
+    /* 宿主帧循环：由 tick 驱动，mount 的清理函数 / 实例销毁时自动摘掉。 */
+    onFrame: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      inst.frameListeners.push(cb);
+      return function () {
+        var i = inst.frameListeners.indexOf(cb);
+        if (i >= 0) inst.frameListeners.splice(i, 1);
+      };
+    },
+    /* 容器尺寸：ResizeObserver 观察 mount 容器；注册时先补一次当前尺寸。 */
+    onResize: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      inst.resizeListeners.push(cb);
+      foliaModNotifyResize(inst, true);
+      return function () {
+        var i = inst.resizeListeners.indexOf(cb);
+        if (i >= 0) inst.resizeListeners.splice(i, 1);
+      };
+    },
+    /* 定时器：不自己养 setInterval，由 tick 统一驱动并在销毁时清空。 */
+    every: function (ms, cb) {
+      if (typeof cb !== 'function') return function () {};
+      var step = Math.max(16, Number(ms) || 1000);
+      var timer = { ms: step, at: performance.now() + step, cb: cb };
+      inst.everyTimers.push(timer);
+      return function () {
+        var i = inst.everyTimers.indexOf(timer);
+        if (i >= 0) inst.everyTimers.splice(i, 1);
       };
     }
   };
@@ -432,6 +536,13 @@ function foliaModRegisterVisualizer(entry, modMeta) {
         settings: null,
         timeListeners: [],
         changeListeners: [],
+        frameListeners: [],
+        resizeListeners: [],
+        everyTimers: [],
+        resizeObserver: null,
+        audioFacade: null,
+        lastW: -1,
+        lastH: -1,
         lastTime: NaN,
         lastIndex: undefined,
         lastCount: -1,
@@ -443,6 +554,7 @@ function foliaModRegisterVisualizer(entry, modMeta) {
         disposed: false
       };
       inst.settings = foliaModSettingsFor(entry.id);
+      inst.audioFacade = foliaModBuildAudioFacade(inst);
       foliaModInstances[entry.id] = inst;
       try {
         /* ctx 留在实例上：模组自己基本用不到，但排查「面板改了画面没变」时
@@ -452,16 +564,43 @@ function foliaModRegisterVisualizer(entry, modMeta) {
       } catch (err) {
         foliaModFail(inst, err);
       }
+      /* canvas 类模组靠 onResize 建画布：容器尺寸变化要推给它们。
+       * 观察器挂在容器上，实例销毁时断开。 */
+      if (typeof ResizeObserver === 'function') {
+        try {
+          inst.resizeObserver = new ResizeObserver(function () { foliaModNotifyResize(inst, false); });
+          inst.resizeObserver.observe(container);
+        } catch (_) {}
+      }
+      foliaModNotifyResize(inst, true);
       return inst;
     },
     tick: function (inst, foliaCtx) {
       if (!inst || inst.disposed) return;
       inst.live = foliaCtx;
       foliaModDriveInstance(inst);
+      /* ctx.every：宿主统一驱动，模组自己不开 setInterval。 */
+      var tickNow = Number(foliaCtx && foliaCtx.now) || performance.now();
+      for (var e = inst.everyTimers.length - 1; e >= 0; e--) {
+        var timer = inst.everyTimers[e];
+        if (tickNow >= timer.at) {
+          timer.at = tickNow + timer.ms;
+          try { timer.cb(); } catch (err) { foliaModFail(inst, err); }
+        }
+      }
+      /* 帧回调（星潮的星海、52Hz 的年轮、黑胶的逐字高亮）都挂在这里。
+       * 倒序跑：回调里退订自己不会把数组下标打乱。 */
+      for (var i = inst.frameListeners.length - 1; i >= 0; i--) {
+        try { inst.frameListeners[i](); } catch (err) { foliaModFail(inst, err); }
+      }
     },
     destroy: function (inst) {
       if (!inst) return;
       inst.disposed = true;
+      if (inst.resizeObserver) {
+        try { inst.resizeObserver.disconnect(); } catch (_) {}
+        inst.resizeObserver = null;
+      }
       if (foliaModInstances[inst.modeId] === inst) delete foliaModInstances[inst.modeId];
       try { if (typeof inst.cleanup === 'function') inst.cleanup(); } catch (err) {
         console.warn('[FoliaMod] 清理失败:', err);
@@ -473,6 +612,9 @@ function foliaModRegisterVisualizer(entry, modMeta) {
       inst.container = null;
       inst.timeListeners.length = 0;
       inst.changeListeners.length = 0;
+      inst.frameListeners.length = 0;
+      inst.resizeListeners.length = 0;
+      inst.everyTimers.length = 0;
     }
   };
 
@@ -530,11 +672,177 @@ function foliaModSegmentWords(line) {
   return out;
 }
 
+/* ---------------- Folium 1.2/1.3 兼容面 ----------------
+ * 新模组（星潮 / MiSide / 52Hz / 花笺）比跳一跳多用了 host / env / storage / secrets /
+ * net / playback / settingsSections 这些面。这里按「能跑、缺能力就降级」实现：
+ *   - storage / secrets：localStorage，Promise 接口；
+ *   - settingsSections：只给模组存值 + onChange（v1 不渲染模组的独立设置页）；
+ *   - playback：只读快照 + 队列窗口，够「下一首预告」与桌面小组件用；
+ *   - net.fetch：直通 fetch（CSP 仍会拦外部域名，AI 导演会降级到本地导演）；
+ *   - stageLayers / progressButtons / tunings：v1 未实现，给空 register，别让模组在 activate 崩掉。 */
+function foliaModCreateKv(prefix) {
+  return {
+    get: function (key) {
+      return Promise.resolve().then(function () {
+        try {
+          var raw = localStorage.getItem(prefix + key);
+          return raw == null ? null : JSON.parse(raw);
+        } catch (_) { return null; }
+      });
+    },
+    set: function (key, value) {
+      return Promise.resolve().then(function () {
+        try { localStorage.setItem(prefix + key, JSON.stringify(value)); return true; }
+        catch (_) { return false; }
+      });
+    },
+    remove: function (key) {
+      return Promise.resolve().then(function () {
+        try { localStorage.removeItem(prefix + key); return true; }
+        catch (_) { return false; }
+      });
+    }
+  };
+}
+
+function foliaModCreateSecrets(prefix) {
+  var base = foliaModCreateKv(prefix);
+  var listeners = [];
+  return {
+    get: base.get,
+    remove: base.remove,
+    set: function (key, value) {
+      return base.set(key, value).then(function (ok) {
+        if (ok) {
+          for (var i = 0; i < listeners.length; i++) {
+            try { listeners[i](key); } catch (_) {}
+          }
+        }
+        return ok;
+      });
+    },
+    subscribe: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      listeners.push(cb);
+      return function () {
+        var i = listeners.indexOf(cb);
+        if (i >= 0) listeners.splice(i, 1);
+      };
+    }
+  };
+}
+
+/* 模组的独立设置分区：给一个可读写的值对象 + onChange。v1 没有面板入口，
+ * 值走默认值；模组自己的样式参数仍在「歌词样式」的调参面板里。 */
+function foliaModRegisterSettingsSection(entry, modMeta) {
+  var id = String((entry && entry.id) || 'main');
+  var key = 'folia-mod-section:' + ((modMeta && modMeta.id) || '?') + ':' + id;
+  var schema = Array.isArray(entry && entry.settings) ? entry.settings : [];
+  var defaults = {};
+  schema.forEach(function (s) { if (s && s.key) defaults[s.key] = s.defaultValue; });
+  var values;
+  try { values = Object.assign({}, defaults, JSON.parse(localStorage.getItem(key) || '{}') || {}); }
+  catch (_) { values = Object.assign({}, defaults); }
+  var listeners = [];
+  var settings = {
+    get: function () { return Object.assign({}, values); },
+    set: function (k, v) {
+      values[k] = v;
+      try { localStorage.setItem(key, JSON.stringify(values)); } catch (_) {}
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](k, v); } catch (_) {}
+      }
+    },
+    onChange: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      listeners.push(cb);
+      return function () {
+        var i = listeners.indexOf(cb);
+        if (i >= 0) listeners.splice(i, 1);
+      };
+    }
+  };
+  return {
+    id: id,
+    label: (entry && entry.label) || id,
+    settings: settings,
+    unregister: function () { listeners.length = 0; }
+  };
+}
+
+function foliaModPlaybackApi() {
+  function song() {
+    try { return (typeof playQueue !== 'undefined' && playQueue && currentIdx >= 0) ? playQueue[currentIdx] : null; }
+    catch (_) { return null; }
+  }
+  function loopMode() {
+    try {
+      if (playMode === 'single') return 'one';
+      if (playMode === 'shuffle' || playMode === 'loop') return 'all';
+    } catch (_) {}
+    return 'off';
+  }
+  function state() {
+    var s = song();
+    return {
+      song: s,
+      playing: typeof playing !== 'undefined' && !!playing,
+      position: (typeof audio !== 'undefined' && audio && isFinite(audio.currentTime)) ? Number(audio.currentTime) : 0,
+      duration: (typeof getPlaybackDurationSeconds === 'function' ? Number(getPlaybackDurationSeconds()) || 0 : 0),
+      volume: (typeof audio !== 'undefined' && audio && isFinite(audio.volume)) ? Number(audio.volume) : 1,
+      muted: !!(typeof audio !== 'undefined' && audio && audio.muted)
+    };
+  }
+  function queue(opts) {
+    var list = [];
+    try { list = (typeof playQueue !== 'undefined' && Array.isArray(playQueue)) ? playQueue : []; } catch (_) {}
+    var offset = Math.max(0, Math.round(Number(opts && opts.offset) || 0));
+    var limit = Math.max(1, Math.round(Number(opts && opts.limit) || list.length || 1));
+    var items = [];
+    for (var i = offset; i < Math.min(list.length, offset + limit); i++) {
+      items.push({ index: i, song: list[i] });
+    }
+    return {
+      kind: 'stage',
+      currentIndex: (typeof currentIdx !== 'undefined') ? currentIdx : -1,
+      length: list.length,
+      items: items
+    };
+  }
+  return {
+    getState: state,
+    getQueue: queue,
+    getLoopMode: loopMode,
+    play: function () { try { if (typeof togglePlay === 'function' && !(typeof playing !== 'undefined' && playing)) togglePlay(); } catch (_) {} },
+    pause: function () { try { if (typeof togglePlay === 'function' && typeof playing !== 'undefined' && playing) togglePlay(); } catch (_) {} },
+    toggle: function () { try { if (typeof togglePlay === 'function') togglePlay(); } catch (_) {} },
+    next: function () { try { if (typeof nextTrack === 'function') nextTrack(); } catch (_) {} },
+    previous: function () { try { if (typeof prevTrack === 'function') prevTrack(); } catch (_) {} },
+    seek: function (t) {
+      try { if (typeof audio !== 'undefined' && audio && isFinite(t)) audio.currentTime = Math.max(0, Number(t)); } catch (_) {}
+    }
+  };
+}
+
 /* 给模组的 folium 对象。只实现这两个模组实际用到的面：visualizers.register / lyrics / log / theme。 */
 function foliaModBuildHostApi(modMeta) {
   return {
     version: FOLIUM_HOST_VERSION,
+    /* Folium 版本面：模组按 host.folium.minor 判能力（52Hz≥2、MiSide≥3、花笺≥7）。
+     * 这里声明 1.3：onFrame/onResize/audio/subscribe 都已实现；花笺会提示 AI 面不足，
+     * 自动落回本地导演。 */
+    host: { version: FOLIUM_HOST_VERSION, folium: { major: 1, minor: 3 } },
+    env: { context: 'main', platform: 'desktop', locale: (typeof navigator !== 'undefined' && navigator.language) || 'zh-CN' },
     mod: { id: modMeta.id, version: modMeta.version, dir: modMeta.dir },
+    storage: foliaModCreateKv('folia-mod:' + modMeta.id + ':'),
+    secrets: foliaModCreateSecrets('folia-mod-secret:' + modMeta.id + ':'),
+    net: {
+      fetch: function (url, init) { return fetch(url, init); }
+    },
+    playback: foliaModPlaybackApi(),
+    experimental: {
+      'ponder.targets': { register: function () { return null; } }
+    },
     lyrics: {
       segmentWords: foliaModSegmentWords,
       segmentGraphemes: function (text) {
@@ -574,6 +882,24 @@ function foliaModBuildHostApi(modMeta) {
       visualizers: {
         register: function (entry) { return foliaModRegisterVisualizer(entry, modMeta); }
       },
+      /* 花笺用 settingsSections 存它自己的服务商/模型；v1 没有独立设置页，
+       * 但值对象与 onChange 是真的，模组不会在 activate 阶段崩。 */
+      settingsSections: {
+        register: function (entry) { return foliaModRegisterSettingsSection(entry, modMeta); }
+      },
+      /* 新模组顺手注册的其它面：v1 未实现，给空 register，避免 undefined.register。 */
+      commands: {
+        register: function () { return { dispose: function () {} }; }
+      },
+      stageLayers: {
+        register: function () { return { unregister: function () {} }; }
+      },
+      progressButtons: {
+        register: function () { return null; }
+      },
+      tunings: {
+        register: function () { return null; }
+      },
       /* v1 不支持模组背景：静默忽略，别让模组因为缺能力而报错。 */
       backgrounds: {
         register: function () { return null; }
@@ -608,7 +934,9 @@ function foliaModLoadOne(item) {
     .then(function (mod) {
       var activate = mod && (mod.default || mod.activate);
       if (typeof activate !== 'function') throw new Error('client 未导出 activate()');
-      activate(foliaModBuildHostApi(meta));
+      /* activate 可能是 async（花笺要读 storage / 建导演），必须把 Promise 接回链上：
+       * 否则异步入栈的错误会变成 unhandled rejection，清单也会在注册完成前就 resolve。 */
+      return Promise.resolve(activate(foliaModBuildHostApi(meta)));
     })
     .catch(function (err) {
       var msg = String((err && err.message) || err);
@@ -617,7 +945,7 @@ function foliaModLoadOne(item) {
     });
 }
 
-/* 读档比模组注册早：存档里存的是 'jump-course' 时，readFoliaWorldPrefs() 那一刻
+/* 读档比模组注册早：存档里存的是某个模组样式的 id 时，readFoliaWorldPrefs() 那一刻
  * 这个样式还不存在，会被当成「已移除的样式」校正回 classic。等模组加载完再把
  * 用户的选择捡回来 —— 否则「选了跳一跳，重启后变回流光」看着像模组没生效。 */
 function foliaModRestoreSavedMode() {

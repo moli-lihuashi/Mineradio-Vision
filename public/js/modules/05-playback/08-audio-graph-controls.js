@@ -566,7 +566,18 @@ function updateVolumeUiFrom(level) {
   var icon = document.getElementById('volume-icon');
   var wrap = document.getElementById('volume-control');
   var pct = Math.round(level * 100);
-  if (slider && Math.abs(parseFloat(slider.value) - level) > 0.001) slider.value = level;
+  if (slider && Math.abs(parseFloat(slider.value) - level) > 0.001) {
+    slider.value = level;
+    /* 滚轮/键盘/静音走弹簧逐帧到这里，直接赋值 value 不会派发 input 事件，
+     * Prismal 轨道的 --prism-fill 只在 input/change 里同步 —— 不补这一步，
+     * 胶囊 thumb 会动而填充条不动。生效模块是 06-fx/05-prismal-chrome.js。
+     * 不能改成 dispatchEvent('input')：会触发 slider 自己的 input 监听
+     * → setVolume(中间值) → 弹簧重入抖动。 */
+    var prismChrome = window.MineradioPrismalChrome;
+    if (prismChrome && typeof prismChrome.syncRangeFill === 'function') {
+      prismChrome.syncRangeFill(slider);
+    }
+  }
   if (value) value.textContent = pct + '%';
   if (wrap) wrap.classList.toggle('muted', level <= 0.01);
   if (icon) {

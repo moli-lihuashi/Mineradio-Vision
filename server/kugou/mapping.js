@@ -145,8 +145,17 @@ function kugouTimeState(objects, keys) {
   for (const obj of objects || []) {
     if (!obj || typeof obj !== 'object') continue;
     for (const key of keys || []) {
-      const value = Number(obj[key]);
-      if (!isFinite(value) || value <= 0) continue;
+      const raw = obj[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      let value = Number(raw);
+      if (!isFinite(value) || value <= 0) {
+        /* unionVip 的 svip 到期时间是字符串 "2026-12-02 16:04:39"，
+         * Number() 会得到 NaN 从而被整条跳过 —— 这是 SVIP 识别不出来的原因之一。
+         * 字符串按本地时区解析（酷狗返回的就是北京时间）。 */
+        const parsed = Date.parse(String(raw).trim().replace(' ', 'T'));
+        if (!isFinite(parsed) || parsed <= 0) continue;
+        value = parsed;
+      }
       if (value > 100000000000) {
         present = true;
         if (value > nowMs) future = true;
@@ -217,7 +226,9 @@ function normalizeKugouVipPayloadV2(payload, fallback) {
   const svipType = firstPositiveKugouNumber(objects, [
     'svipType', 'svip_type', 'SVIPType', 'isSVIP', 'isSvip', 'is_svip', 'superVip', 'super_vip',
     'superVipLevel', 'super_vip_level', 'super_vip_type', 'luxury_vip_type', 'vip_luxury_type',
-    'svip_level', 'svip_status', 'svip'
+    'svip_level', 'svip_status', 'svip',
+    // 酷狗 unionVip 真实字段名（实测 2026-11-21）：su_vip_* = 超级会员
+    'su_vip_type', 'suVipType'
   ]);
   const vipExpiry = kugouTimeState(objects, [
     'vip_end_time', 'vipEndTime', 'vip_expire_time', 'vipExpireTime', 'vip_expire', 'vipExpire',
@@ -225,7 +236,10 @@ function normalizeKugouVipPayloadV2(payload, fallback) {
   ]);
   const svipExpiry = kugouTimeState(objects, [
     'svip_end_time', 'svipEndTime', 'svip_expire_time', 'svipExpireTime',
-    'super_vip_end_time', 'superVipEndTime', 'luxury_vip_end_time', 'luxuryVipEndTime'
+    'super_vip_end_time', 'superVipEndTime', 'luxury_vip_end_time', 'luxuryVipEndTime',
+    /* 酷狗 unionVip 真实字段（实测 2026-11-21，账号 su_vip_end_time=2026-12-02）：
+     * 之前只认 svip_/super_vip_/luxury_vip_ 前缀，漏了 su_vip_，导致 SVIP 恒被判成普通 VIP。 */
+    'su_vip_end_time', 'suVipEndTime', 'su_vip_y_endtime', 'suVipYEndTime'
   ]);
   const isSvip = svipExpiry.future || (svipType > 0 && !svipExpiry.present) ||
     (objects.some(obj => obj && obj.isSvip === true) && !svipExpiry.present);

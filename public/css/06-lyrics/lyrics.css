@@ -22,10 +22,20 @@ body.empty-home-active #classic-player.active{z-index:2;opacity:1!important;poin
 .cp-left{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:0 0 40%;padding-left:5%;padding-right:2%}
 .cp-cover-wrap{position:relative;width:min(20vw,280px);aspect-ratio:1/1;margin-bottom:32px}
 
-/* 封面。如果想要图1的圆角矩形，把 50% 改为 24px */
-
-.cp-cover{position:absolute;inset:0;border-radius:50%;background-size:cover;background-position:center;box-shadow:0 24px 64px rgba(0,0,0,.6)}
-.cp-cover-shadow{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 35% 35%,rgba(255,255,255,.15),transparent 55%);pointer-events:none}
+/* 黑胶唱片（2026-11-21）：碟面 + 纹路 + 碟心封面 + 固定高光 + 唱臂。
+ * 播放时唱片转、唱臂落下；暂停时唱臂抬起、唱片停转。
+ * JS 只切 #classic-player.cp-playing 这一个 class，转动是合成器动画，逐帧零成本。 */
+.cp-vinyl{position:absolute;inset:0;pointer-events:none}
+.cp-vinyl-halo{position:absolute;inset:-13%;border-radius:50%;opacity:.9;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.12),rgba(255,255,255,.04) 42%,transparent 68%);filter:blur(calc(min(20vw,280px) * 0.09))}
+.cp-vinyl-disc{position:absolute;inset:0;border-radius:50%;overflow:hidden;background:radial-gradient(circle at 50% 50%,#262626 0%,#1b1b1b 30%,#121212 70%,#0d0d0d 100%);box-shadow:0 18px 60px rgba(0,0,0,.45);animation:cp-vinyl-spin var(--cp-vinyl-spin,20s) linear infinite;animation-play-state:paused;will-change:transform}
+#classic-player.cp-playing .cp-vinyl-disc{animation-play-state:running}
+@keyframes cp-vinyl-spin{to{transform:rotate(360deg)}}
+.cp-vinyl-grooves{position:absolute;inset:0;border-radius:50%;background:repeating-radial-gradient(circle at 50% 50%,rgba(255,255,255,.045) 0px,rgba(255,255,255,.045) 1px,rgba(255,255,255,0) 1px,rgba(255,255,255,0) 4px)}
+.cp-vinyl-rim{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 50% 50%,transparent 0 96.4%,rgba(255,255,255,.10) 97%,transparent 97.8%)}
+.cp-cover{position:absolute;left:50%;top:50%;width:60%;height:60%;transform:translate(-50%,-50%);border-radius:50%;background-color:#1f1a15;background-size:cover;background-position:center;box-shadow:0 0 0 1px rgba(0,0,0,.65),0 0 0 2.5px rgba(255,255,255,.05)}
+.cp-vinyl-sheen{position:absolute;inset:0;border-radius:50%;pointer-events:none;mix-blend-mode:screen;background:conic-gradient(from 205deg at 50% 50%,rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 28deg,rgba(255,255,255,.09) 46deg,rgba(255,255,255,.02) 60deg,rgba(255,255,255,0) 74deg,rgba(255,255,255,0) 196deg,rgba(255,255,255,.06) 214deg,rgba(255,255,255,.01) 228deg,rgba(255,255,255,0) 242deg,rgba(255,255,255,0) 360deg)}
+.cp-vinyl-arm{position:absolute;inset:-40%;width:180%;height:180%;pointer-events:none;transform-origin:72.22% 17.78%;transform:rotate(-50deg);transition:transform .9s cubic-bezier(.3,1.2,.45,1)}
+#classic-player.cp-playing .cp-vinyl-arm{transform:rotate(0deg)}
 .cp-song-info{text-align:center;min-width:0;max-width:100%}
 .cp-song-name{font-size:clamp(24px,2.8vw,36px);font-weight:700;color:#fff;letter-spacing:.5px;margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .cp-artist{font-size:clamp(14px,1.4vw,18px);color:rgba(255,255,255,.6);margin-bottom:6px}
@@ -45,7 +55,6 @@ body.empty-home-active #classic-player.active{z-index:2;opacity:1!important;poin
 
 /* 节拍呼吸脉动：JS 每帧设置 --cp-beat-pulse (0~1)，用 filter 避免与 JS transform 冲突 */
 .cp-cover-wrap{transform:scale(calc(1 + var(--cp-beat-pulse,0) * 0.03));transition:transform .12s ease-out}
-.cp-cover{box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 calc(40px * var(--cp-beat-pulse,0)) rgba(255,255,255,.12)}
 
 /* 逐字高亮（卡拉OK）：JS 将 active 行文字拆为 char span，已唱部分加 .cp-sung */
 /* --cp-beat-glow 由 JS 每帧设置，驱动节拍呼吸光晕 */
@@ -84,4 +93,3 @@ body.empty-home-active #classic-player.active{z-index:2;opacity:1!important;poin
   .fx-slider{grid-template-columns:74px minmax(0,1fr) 40px 28px;gap:8px;padding:8px}
   .lyric-color-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
-

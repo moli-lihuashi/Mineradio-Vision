@@ -150,7 +150,20 @@ async function fetchKugouVipInfo(cookie, auth) {
       }),
     ]);
     const primaryMembership = normalizeKugouVipPayloadV2(primary, { userid: auth.userid });
-    if (primaryMembership.membershipKnown) return primary;
+    if (primaryMembership.membershipKnown) {
+      /* unionVip 只报主会员（vip_type=1 = 普通 VIP），会漏掉 SVIP / 黑钻：
+         实测同一账号 roleinfo 回 role=11（SVIP），unionVip 仍回 is_vip=1,vip_type=1。
+         这里补一次 roleinfo，但只用于把等级**升级**到 SVIP，不推翻主探测结论；
+         roleinfo 失败/非 SVIP 时原样返回 primary。见 issue #1 问题 3。 */
+      if (!primaryMembership.isSvip) {
+        const svipRoleInfo = await fetchKugouWebVipInfo(cookie, auth).catch(() => null);
+        if (svipRoleInfo) {
+          const svipMembership = normalizeKugouVipPayloadV2(svipRoleInfo, { userid: auth.userid });
+          if (svipMembership.membershipKnown && svipMembership.isSvip) return svipRoleInfo;
+        }
+      }
+      return primary;
+    }
 
     // unionVip 主探测未确认会员（接口失败/未知）时，补充网页端 roleinfo 探测。
     // web role 常能识别 unionVip 漏判的会员身份，作为 fail-open 兜底而非覆盖。

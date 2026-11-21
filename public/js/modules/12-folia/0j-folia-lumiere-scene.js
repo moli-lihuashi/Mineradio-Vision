@@ -571,9 +571,12 @@ const resolveLumiereDarkField = (theme, darkField) => {
     const background = rgbOf(theme.backgroundColor, [0, 0, 0]);
     const strength = Number.isFinite(darkField) ? Math.min(1, Math.max(0, darkField)) : 0;
     const bright = luminance(background) > BRIGHT_BACKGROUND_LUMINANCE;
+    /* 壁纸效果层：暗场整块去掉。绘光的「绘」是亮笔画，压暗层是为播放器里的暗场画面服务的；
+     * 桌面上要透出自己的壁纸，只留笔画（用户反馈「绘光还是黑底」）。 */
+    const stagePage = typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true;
     return {
         color: scaleRgb(background, DARK_FIELD_SHADE),
-        alpha: bright ? Math.max(strength, LUMIERE_BRIGHT_DARK_FIELD_FLOOR) : strength,
+        alpha: stagePage ? 0 : (bright ? Math.max(strength, LUMIERE_BRIGHT_DARK_FIELD_FLOOR) : strength),
     };
 };
 

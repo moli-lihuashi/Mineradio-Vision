@@ -112,6 +112,22 @@ function resetVisualIconColor() {
   setVisualIconColor(fxDefaults.visualIconColor || '#7fd8ff');
 }
 function applyCustomBackground() {
+  /* 桌面效果层不画任何内置背景（#custom-bg 在 wallpaper-stage.css 里整层隐藏），
+   * 但这条函数仍会把用户的自定义背景视频塞进 <video> 并 play() —— 等于在效果层里
+   * 多解一份 1080p/4K 视频，而画面上一个像素都看不到。这里直接跳过并确保视频是停的。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) {
+    var stageBgVideo = document.getElementById('custom-bg-video');
+    if (stageBgVideo) {
+      try { stageBgVideo.pause(); } catch (_) {}
+      try {
+        if (stageBgVideo.getAttribute('src')) {
+          stageBgVideo.removeAttribute('src');
+          stageBgVideo.load();
+        }
+      } catch (_) {}
+    }
+    return;
+  }
   var color = normalizeHexColor(fx.backgroundColor || '#000000', '#000000');
   var albumMode = typeof customBackgroundUsesAlbumCover === 'function' && customBackgroundUsesAlbumCover();
   var media = typeof customBackgroundActiveMedia === 'function' ? customBackgroundActiveMedia() : normalizeCustomBackgroundMedia(fx.backgroundMedia || fx.backgroundImage);
@@ -156,6 +172,11 @@ function applyCustomBackground() {
     /* Folia 世界把壁纸整块盖住：不拉起播放（退出世界时统一恢复），但 src 照常设置，
      * 退出后恢复逻辑能看到正确的视频。 */
     if (typeof foliaWorldActive === 'function' && foliaWorldActive()) return;
+    /* 壁纸只控态：背景层已被 CSS 摘掉，这路视频解码纯浪费；src 留着，退出时 applyCustomBackground 会恢复。 */
+    if (typeof isWallpaperHostCastRenderSuppressed === 'function' && isWallpaperHostCastRenderSuppressed()) {
+      try { video.pause(); } catch (_) {}
+      return;
+    }
     var p = video.play();
     if (p && p.catch) p.catch(function(){});
   }

@@ -20,6 +20,8 @@ const {
 const secretStore = require('./secret-store');
 // QQ 登录窗口的收尾判定（纯函数，单测覆盖；见 tests/qq-login-decision.test.js）
 const { decideQQLoginOutcome } = require('../server/lib/qq-login-decision');
+// 桌面效果层窗口（壁纸模式的新承载：主窗口不动，效果单独一张透明窗）
+const { DesktopStageWindow } = require('./desktop-stage-window');
 
 // WE 协议必须在 app ready 前注册；库实例/运行时改为按需加载
 const { registerWallpaperEngineScheme } = require('./wallpaper-engine-library');
@@ -88,6 +90,10 @@ let desktopLyricsCursorTimer = null;
 let desktopLyricsCursorInside = false;
 let desktopLyricsCursorHoldUntil = 0;
 let desktopLyricsDragUntil = 0;
+/* 一次拖动会话内累计到的窗口位置。拖动时每一步都用它做基准，不能回读
+ * getBounds()：Windows 上 setBounds 是异步生效的，回读常常还是上一步的坐标，
+ * 快速拖会丢掉一半位移（表现为「拖不动 / 越拖越偏」）。 */
+let desktopLyricsDragBounds = null;
 /* 桌面歌词的位置不再有面板滑块（用户直接拖窗口），所以「上次拖到哪」要跨重启记住。
  * 只存比例，不存像素：换分辨率 / 换行数导致窗口尺寸变化时，位置仍然对得上。 */
 let desktopLyricsAnchor = null;
@@ -104,7 +110,36 @@ const registeredGlobalHotkeys = new Map();
 let wallpaperEngineLibrary = null;
 let wallpaperEngineRuntime = null;
 let fullDesktopModeRuntime = null;
+let desktopStageWindowRuntime = null;
 let loginEasterEggGate = null;
+
+/* 壁纸模式当前由「桌面效果层窗口」承载（desktop/desktop-stage-window.js）。
+ * screen 是 ready-gated 代理，所以这个实例只能在 app ready 之后构造。 */
+function ensureDesktopStageWindowRuntime() {
+  if (desktopStageWindowRuntime) return desktopStageWindowRuntime;
+  desktopStageWindowRuntime = new DesktopStageWindow({
+    BrowserWindow,
+    screen,
+    preloadPath: path.join(__dirname, 'preload.js'),
+    overlayUrl: () => {
+      const port = mainServerPort || process.env.PORT || 3000;
+      const tokenQuery = mineradioApiToken ? `&token=${encodeURIComponent(mineradioApiToken)}` : '';
+      const world = desktopStageWindowRuntime && desktopStageWindowRuntime.overlayWorld === 'folia'
+        ? '&stageWorld=folia'
+        : '';
+      return `http://127.0.0.1:${port}/?stage=1${world}${tokenQuery}&_=${overlayBootToken}`;
+    },
+    logger: console,
+    onStatus: (status) => {
+      broadcastDesktopWallpaperStatus(status).catch(() => {});
+    },
+  });
+  desktopStageWindowRuntime.mainWindowBounds = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    try { return mainWindow.getBounds(); } catch (_) { return null; }
+  };
+  return desktopStageWindowRuntime;
+}
 
 function ensureWallpaperEngineLibrary() {
   if (wallpaperEngineLibrary) return wallpaperEngineLibrary;
@@ -153,10 +188,15 @@ function ensureFullDesktopModeRuntime() {
 let wallpaperEngineCaptureSourceId = '';
 let wallpaperEngineCaptureGrant = null;
 let wallpaperEngineCaptureOperation = 0;
-let fullDesktopEscapeRegistered = false;
-let fullDesktopEnableOperation = 0;
 let fullDesktopQuitDisposePending = false;
-
+/* 「这个进程里曾经成功启动过一次吗」。
+ * createWindow() 每次进来都会把 startupCompleted 重置成 false —— 这对首次启动是对的，
+ * 但壁纸模式重建窗口走的是同一个函数：重建期间任何一处进程级未捕获异常，都会被当成
+ * 「启动失败」，于是 reportWindowCreationFailure 销毁刚建好的窗口并 app.quit()。
+ * 实测：旧渲染进程被 destroy 导致在途音频流中断 → 服务端 ERR_HTTP_HEADERS_SENT →
+ * 用户点一次壁纸模式，整个播放器直接退出，窗口留下 ERR_CONNECTION_REFUSED 错误页。
+ * 首次启动成功后置 true，此后「启动失败即退出」这条只对真·冷启动生效。 */
+let appEverStarted = false;
 const APP_PACKAGE_INFO = (() => { try { return require('../package.json'); } catch (_) { return {}; } })();
 const APP_VERSION = APP_PACKAGE_INFO.version || '0.0.0';
 // 内测版通道:electron-builder 的 extraMetadata.mineradio 会在打包时合并进 package.json,
@@ -234,6 +274,14 @@ const CHROMIUM_PERFORMANCE_SWITCHES = [
   // tests/wallpaper-media-protocol-guard.test.js）。
   ['disable-direct-composition-video-overlays'],
   ['disable-hardware-overlays'],
+  /* 壁纸模式必须关掉 Chrome 的「原生窗口遮挡计算」。
+   * 窗口被 SetParent 进 WorkerW 之后，它不再是普通的顶层前台窗口，Chrome 的
+   * CalculateNativeWinOcclusion 会把它判成「被别的窗口遮挡」→ 按后台页面处理 →
+   * requestAnimationFrame 降到 1Hz。实测（2026-11-20，壁纸模式）：
+   *   canvas 尺寸与 visibility 都正常，但 rAF 只有 1 帧/秒，画面像卡住。
+   * disable-backgrounding-occluded-windows 只管「浏览器层的不遮蔽降级」，
+   * 管不到 Windows 原生遮挡计算这一层，两个都得关。 */
+  ['disable-features', 'CalculateNativeWinOcclusion'],
 ];
 for (const [name, value] of CHROMIUM_PERFORMANCE_SWITCHES) {
   if (value == null) app.commandLine.appendSwitch(name);
@@ -512,6 +560,19 @@ function getDisplayState(win) {
   };
 }
 
+/* 壁纸模式是否开着。
+ * 现在它只是「桌面上多了一张透明效果层窗口」，主窗口状态完全不受影响，
+ * 所以 win.isVisible() 一直是可信的 —— 这段判据只剩托盘/状态用。 */
+function wallpaperAttachedForState() {
+  try {
+    return !!(desktopStageWindowRuntime
+      && typeof desktopStageWindowRuntime.getStatus === 'function'
+      && desktopStageWindowRuntime.getStatus('state').enabled === true);
+  } catch (_) {
+    return false;
+  }
+}
+
 function getWindowState(win) {
   if (!win || win.isDestroyed()) return {
     isMaximized: false,
@@ -564,20 +625,8 @@ function createOrUpdateTray() {
   try {
     tray = new Tray(APP_ICON_ICO);
     tray.setToolTip(APP_NAME);
-    /* 壁纸模式下窗口贴在桌面图标层后面，直接 focus 是没用的：
-       先把窗口从桌面摘回来（恢复到普通窗口），再显示到前台。 */
-    const trayPrimaryAction = () => {
-      const embedded = !!(fullDesktopModeRuntime
-        && typeof fullDesktopModeRuntime.isEnabled === 'function'
-        && fullDesktopModeRuntime.isEnabled());
-      if (!embedded) {
-        focusMainWindow();
-        return;
-      }
-      Promise.resolve(disableFullDesktopMode('tray-restore-window'))
-        .catch(() => {})
-        .then(() => { focusMainWindow(); });
-    };
+    /* 壁纸模式不再动主窗口（效果是单独的桌面层），所以托盘左键就是普通的「显示窗口」。 */
+    const trayPrimaryAction = () => { focusMainWindow(); };
     tray.on('click', trayPrimaryAction);
     tray.on('double-click', trayPrimaryAction);
     const send = (code) => {
@@ -589,15 +638,12 @@ function createOrUpdateTray() {
       }
     };
     const menu = Menu.buildFromTemplate([
-      /* 「显示」必须和左键同一条路径：壁纸模式下窗口是桌面的子窗口，
-         不先退出壁纸模式，focus() 唤不出来（用户会以为程序卡死）。 */
+      /* 「显示」就是普通显示：主窗口从未被改写过，不需要先退出壁纸模式。 */
       { label: '显示 ' + APP_NAME, click: () => trayPrimaryAction() },
-      /* 壁纸模式的逃生通道之一：附着到桌面后主窗口在图标层后面，
-         焦点一旦被别的程序抢走，页面里的 Esc 就收不到；托盘永远点得到。 */
-      ...(fullDesktopModeRuntime && typeof fullDesktopModeRuntime.isEnabled === 'function' && fullDesktopModeRuntime.isEnabled()
+      ...(wallpaperAttachedForState()
         ? [
             { type: 'separator' },
-            { label: '退出壁纸模式（回到普通窗口）', click: () => { disableFullDesktopMode('tray-exit-wallpaper').catch(() => {}); } },
+            { label: '退出壁纸模式', click: () => { disableFullDesktopMode('tray-exit-wallpaper').catch(() => {}); } },
           ]
         : []),
       { type: 'separator' },
@@ -1645,6 +1691,19 @@ function saveDesktopLyricsAnchor(anchor) {
   if (desktopLyricsAnchorSaveTimer.unref) desktopLyricsAnchorSaveTimer.unref();
 }
 
+/* 退出前把防抖中的锚点立刻落盘（400ms 防抖 + unref 会让最后一段拖动丢掉）。 */
+function flushDesktopLyricsAnchor() {
+  if (!desktopLyricsAnchorSaveTimer) return;
+  clearTimeout(desktopLyricsAnchorSaveTimer);
+  desktopLyricsAnchorSaveTimer = null;
+  try {
+    const file = desktopLyricsAnchorPath();
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...desktopLyricsAnchor }, null, 2), 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (_) {}
+}
+
 function desktopLyricsAnchorFromBounds(bounds) {
   if (!bounds) return null;
   const area = screen.getDisplayMatching(bounds).bounds;
@@ -1920,34 +1979,51 @@ function positionDesktopLyricsWindow(payload = desktopLyricsState, options = {})
   } else {
     setDesktopLyricsBounds(desired);
   }
-  if (typeof desktopLyricsWindow.setOpacity === 'function') {
-    desktopLyricsWindow.setOpacity(clampNumber(payload.opacity, 0.28, 1, 0.92));
-  }
+  /* 透明度统一由页面 body 应用（desktop-lyrics.html 里 body.style.opacity）。
+   * 这里不要再 setOpacity：两边同时设会让实际透明度变成平方（0.5 → 0.25）。 */
 }
 
-function sendDesktopLyricsState() {
+/* desktopLyricsState 是「累积合并」的：一旦某次 payload 带了 beatMap，这张图就会
+ * 一直留在状态里。如果每条状态都全量发，页面那边每次都要 unpack + 排序并把节拍
+ * 脉冲清零（实测相机数组每帧换新引用、pulseDrive 归零），IPC 也会从 KB 级涨到
+ * 几十~几百 KB。所以 beatMap 只在「本次更新的 payload 明确携带」时下发；
+ * 窗口刚加载完时补一条带图的全量，避免新页面永远等不到图。 */
+function desktopLyricsBeatMapSnapshot() {
+  const out = { beatMapKey: desktopLyricsState.beatMapKey || '' };
+  if (Object.prototype.hasOwnProperty.call(desktopLyricsState, 'beatMap')) {
+    out.beatMap = desktopLyricsState.beatMap;
+  }
+  return out;
+}
+
+function sendDesktopLyricsState(updatePayload) {
   if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
-  desktopLyricsWindow.webContents.send('mineradio-desktop-lyrics-state', desktopLyricsState);
+  const contents = desktopLyricsWindow.webContents;
+  if (!contents || contents.isDestroyed()) return;
+  const nextState = Object.assign({}, desktopLyricsState, updatePayload || {});
+  if (!updatePayload || !Object.prototype.hasOwnProperty.call(updatePayload, 'beatMap')) {
+    delete nextState.beatMap;
+  }
+  try {
+    contents.send('mineradio-desktop-lyrics-state', nextState);
+  } catch (e) {
+    console.warn('Desktop lyrics state send failed:', e.message);
+  }
 }
 
 function createDesktopLyricsWindow(payload = {}) {
   const previousAnchor = { lineCount: desktopLyricsState.lineCount };
-  const previousOpacity = desktopLyricsState.opacity;
   desktopLyricsState = { ...desktopLyricsState, ...payload, enabled: true };
   const layoutChanged = desktopLyricsLayoutChanged(previousAnchor, payload, desktopLyricsState);
-  const opacityChanged = Object.prototype.hasOwnProperty.call(payload || {}, 'opacity')
-    && Math.abs(clampNumber(desktopLyricsState.opacity, 0.28, 1, 0.92) - clampNumber(previousOpacity, 0.28, 1, 0.92)) > 0.001;
   if (layoutChanged) desktopLyricsUserBounds = null;
   if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
     /* 只有「行数变了」才重排窗口。状态推送每秒好几次，如果每次都 setBounds，
      * 正在拖动的手感会被打断（而且 userBounds 可能还没跟上，窗口会被拽回起点）。 */
     if (layoutChanged) {
       positionDesktopLyricsWindow(desktopLyricsState, { force: true });
-    } else if (opacityChanged && typeof desktopLyricsWindow.setOpacity === 'function') {
-      desktopLyricsWindow.setOpacity(clampNumber(desktopLyricsState.opacity, 0.28, 1, 0.92));
     }
     applyDesktopLyricsMouseBehavior();
-    sendDesktopLyricsState();
+    sendDesktopLyricsState(payload);
     return desktopLyricsWindow;
   }
 
@@ -1992,19 +2068,43 @@ function createDesktopLyricsWindow(payload = {}) {
   desktopLyricsWindow.once('ready-to-show', () => {
     if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
     desktopLyricsWindow.showInactive();
-    sendDesktopLyricsState();
+    // 新页面必须收到一次带图的初始状态（后续状态为省带宽不再带 beatMap）
+    sendDesktopLyricsState(desktopLyricsBeatMapSnapshot());
   });
-  desktopLyricsWindow.webContents.once('did-finish-load', sendDesktopLyricsState);
+  desktopLyricsWindow.webContents.once('did-finish-load', () => {
+    sendDesktopLyricsState(desktopLyricsBeatMapSnapshot());
+  });
+  /* closed 是异步事件：关掉再立刻打开时，新窗口可能已经接管了全局引用。
+   * 这里只处理「自己仍是当前窗口」的情况，否则会把新窗口的引用清成 null
+   * （新窗口从此既关不掉也不再收状态）。 */
+  const createdLyricsWindow = desktopLyricsWindow;
   desktopLyricsWindow.on('closed', () => {
+    if (desktopLyricsWindow !== createdLyricsWindow) return;
     // 与 closeDesktopLyricsWindow() 保持一致：窗口以任何路径销毁都要停掉
     // 常驻的 powershell 轮询子进程，否则会留下一个每 24ms 唤醒的孤儿进程。
     stopDesktopLyricsMousePoller();
     stopDesktopLyricsCursorWatcher();
     desktopLyricsWindow = null;
     desktopLyricsMouseIgnored = null;
+    desktopLyricsDragBounds = null;
+    desktopLyricsHotBounds = null;
+    /* 窗口被外部销毁（渲染进程崩溃 / OOM / 系统强制关闭）时必须把状态一起复位：
+     * 否则面板开关还显示「开」、桌面却什么都没有，而 update 分支只合并状态、
+     * 不会重建窗口，用户只能手动关再开。正常关闭走 closeDesktopLyricsWindow()，
+     * 那里已经先把 enabled 置成 false 并把引用清空，不会再走到这里。 */
+    if (desktopLyricsState.enabled) {
+      desktopLyricsState = { ...desktopLyricsState, enabled: false };
+      desktopLyricsPointerCapture = false;
+      broadcastDesktopLyricsEnabledState(false);
+    }
   });
   desktopLyricsWindow.on('moved', rememberDesktopLyricsBounds);
-  desktopLyricsWindow.loadURL(overlayUrl('desktop-lyrics.html')).catch((e) => console.warn('Desktop lyrics load failed:', e.message));
+  desktopLyricsWindow.loadURL(overlayUrl('desktop-lyrics.html')).catch((e) => {
+    console.warn('Desktop lyrics load failed:', e.message);
+    /* 加载失败时 ready-to-show 不会触发，窗口永远不显示；不能留下「面板显示开、桌面没东西」的假状态。 */
+    try { closeDesktopLyricsWindow(); } catch (_) {}
+    broadcastDesktopLyricsEnabledState(false);
+  });
   return desktopLyricsWindow;
 }
 
@@ -2013,6 +2113,7 @@ function closeDesktopLyricsWindow() {
   desktopLyricsPointerCapture = false;
   desktopLyricsMouseIgnored = null;
   desktopLyricsHotBounds = null;
+  desktopLyricsDragBounds = null;
   stopDesktopLyricsMousePoller();
   stopDesktopLyricsCursorWatcher();
   if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
@@ -2029,46 +2130,41 @@ function nativeWindowHandleDecimal(win) {
   return String(handle.readUInt32LE(0));
 }
 
-/* ===== 壁纸模式（完整桌面模式）=====
- * 打开开关后，主窗口整体附着到 Windows 桌面（WorkerW），整个 Mineradio HUD 就是动态壁纸。
- * 纯壁纸模式下窗口被压在桌面图标层下面：点不到、没有任务栏条目、也拿不到键盘焦点，
- * 所以唯一可靠的出口是托盘（左键直接切回窗口 / 菜单里的「退出壁纸模式」）。 */
-function wallpaperOpacityValue(value) {
-  return clampNumber(value == null ? wallpaperState.opacity : value, 0.35, 1, 1);
-}
-
-function applyWallpaperModeOpacity(value) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  try { mainWindow.setOpacity(wallpaperOpacityValue(value)); } catch (_) {}
-}
-
-function restoreWallpaperModeOpacity() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  try { mainWindow.setOpacity(1); } catch (_) {}
-}
-
-  async function enableFullDesktopMode(win, payload = {}) {
-    const runtime = ensureFullDesktopModeRuntime();
-    wallpaperState = { ...wallpaperState, ...(payload || {}), enabled: true };
-    fullDesktopEnableOperation += 1;
-    /* 默认走标准 WorkerW 附着（稳定，Win10 / Win11 24H2 都支持，实测画面能出来）。
-       桌面内可交互（explorer 分层色键内嵌）依赖未公开行为，只有显式要求时才尝试，
-       失败就保持「纯壁纸」——用户至少能看到画面，退出走托盘。 */
-    const interactive = payload && payload.interactive === true;
-    const result = await runtime.enable(win, { reason: 'wallpaper-mode-toggle', interactive });
+/* ===== 壁纸模式（桌面效果层）=====
+ * 打开开关后，主窗口**完全不动**（任务栏、焦点、交互照常），另建一张透明、穿透、
+ * 置底的整屏窗口来画粒子/歌词（desktop/desktop-stage-window.js）。
+ * 效果层不显示内置壁纸，桌面背景交给用户自己的 Wallpaper Engine；
+ * 退出就是再点一次开关（托盘菜单里也有同一个入口），不再有全局 Esc。 */
+/* 开启壁纸模式：**只建效果层窗口，不动播放器窗口**。
+ * 这是用户要求「窗口和任务栏不应该不见、播放器要正常使用」的唯一实现方式：
+ * 同一张窗口不可能既贴在桌面层又保留任务栏与焦点。 */
+async function enableFullDesktopMode(win, payload = {}) {
+  wallpaperState = { ...wallpaperState, ...(payload || {}), enabled: true };
+  const runtime = ensureDesktopStageWindowRuntime();
+  let result;
+  try {
+    result = await runtime.open({
+      opacity: payload.opacity,
+      frameRate: payload.frameRate,
+      stageWorld: payload.stageWorld,
+    });
+  } catch (e) {
+    result = { ok: false, enabled: false, error: e && e.message || 'STAGE_OPEN_FAILED' };
+  }
   if (result && result.ok === true) {
-    fullDesktopEscapeRegistered = true;
-    applyWallpaperModeOpacity(wallpaperState.opacity);
-    broadcastDesktopWallpaperStatus();
+    result.status = { ...(result.status || {}), escapeShortcutRegistered: false };
+    broadcastDesktopWallpaperStatus(result.status);
   }
   return result;
 }
 
 async function disableFullDesktopMode(reason = 'wallpaper-mode-toggle') {
-  fullDesktopEnableOperation += 1;
-  restoreWallpaperModeOpacity();
-  if (!fullDesktopModeRuntime) return { ok: true, enabled: false };
-  const result = await fullDesktopModeRuntime.disable(reason);
+  wallpaperState = { ...wallpaperState, enabled: false };
+  if (!desktopStageWindowRuntime) {
+    broadcastDesktopWallpaperStatus({ enabled: false });
+    return { ok: true, enabled: false, status: { enabled: false } };
+  }
+  const result = await desktopStageWindowRuntime.disable(reason);
   broadcastDesktopWallpaperStatus(result && result.status ? result.status : { enabled: false });
   return result;
 }
@@ -2077,16 +2173,57 @@ async function createWallpaperWindow(payload = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return { ok: false, enabled: false, error: 'NO_MAIN_WINDOW' };
   }
+  /* 2026-11-21 定案：壁纸模式 = 主窗口不动 + 独立效果层窗口。
+   * 旧路径（重建主窗口 / 挂 WorkerW）已废弃：它会让窗口和任务栏一起消失，
+   * 与用户要求正面冲突。这里只负责效果层窗口的开与关。 */
   return enableFullDesktopMode(mainWindow, payload);
 }
 
+/* 临时诊断：壁纸进出只在用户机器上出问题，沙箱里复现不出来。
+ * 每一步落一行到 dist/Mineradio/exit-trace.log，定位完删除。 */
+function traceWallpaperExit(step, extra) {
+  try {
+    const file = path.join(path.dirname(process.resourcesPath), 'exit-trace.log');
+    fs.appendFileSync(file, `${new Date().toISOString()} ${step} ${JSON.stringify(extra || {})}\n`);
+  } catch (_) {}
+}
+
+let wallpaperExitPromise = null;
+
 async function closeWallpaperWindow() {
-  return disableFullDesktopMode('wallpaper-mode-off');
+  wallpaperState = { ...wallpaperState, enabled: false };
+  if (wallpaperExitPromise) return wallpaperExitPromise;
+  wallpaperExitPromise = (async () => {
+    const result = await disableFullDesktopMode('wallpaper-mode-off');
+    traceWallpaperExit('stage-closed', { ok: !!(result && result.ok) });
+    /* 主窗口不需要任何恢复动作：它从来没被改过。这里只把焦点还给它，
+     * 让用户点完开关之后能继续用键盘（Esc 关弹层之类）。 */
+    if (!appQuitting && !forceQuitting && mainWindow && !mainWindow.isDestroyed()) {
+      try { if (!mainWindow.isVisible()) mainWindow.show(); } catch (_) {}
+    }
+    return result && typeof result === 'object' ? result : { ok: true, enabled: false };
+  })();
+  try { return await wallpaperExitPromise; }
+  finally { wallpaperExitPromise = null; }
 }
 
 function closeOverlayWindows() {
   closeDesktopLyricsWindow();
   Promise.resolve(closeWallpaperWindow()).catch(() => {});
+}
+
+/* 效果层铺的是「主窗口所在的那块显示器」。用户把播放器拖到另一块屏时，
+ * screen 的 display-* 事件不会触发，只有主窗口自己的 move 会响 —— 这里去抖后
+ * 让效果层跟过去。同一块屏的移动由 runtime 自己判掉，不会反复 setBounds。 */
+let stageFollowDisplayTimer = 0;
+function scheduleStageWindowFollowDisplay() {
+  if (stageFollowDisplayTimer) clearTimeout(stageFollowDisplayTimer);
+  stageFollowDisplayTimer = setTimeout(() => {
+    stageFollowDisplayTimer = 0;
+    if (!desktopStageWindowRuntime) return;
+    if (desktopStageWindowRuntime.getStatus('follow-display').enabled !== true) return;
+    try { desktopStageWindowRuntime.reposition('main-window-moved'); } catch (_) {}
+  }, 400);
 }
 
 // ========== 辅助函数：IPC 信任检查 ==========
@@ -2097,6 +2234,20 @@ function isTrustedMainDocumentUrl(value) {
     const url = String(value);
     const port = mainServerPort || process.env.PORT || 3000;
     return url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith(`http://localhost:${port}/`);
+  } catch (_) {
+    return false;
+  }
+}
+
+/* 桌面歌词的 IPC 允许两个来源：主窗口（面板/脚本）与歌词窗口自己（关闭、锁定、拖动）。
+ * 其他 renderer（含 iframe）一律拒绝。 */
+function isTrustedDesktopLyricsIpc(event) {
+  if (isTrustedMainWindowIpc(event)) return true;
+  try {
+    if (!event || !event.sender || !desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return false;
+    if (event.sender.isDestroyed()) return false;
+    if (event.senderFrame && event.senderFrame.parent) return false;
+    return event.sender === desktopLyricsWindow.webContents;
   } catch (_) {
     return false;
   }
@@ -2116,6 +2267,21 @@ function isTrustedMainWindowIpc(event) {
 
 function isTrustedWallpaperEngineIpc(event) {
   return isTrustedMainWindowIpc(event);
+}
+
+/* 效果层窗口（壁纸模式）自己的 IPC：只认那张窗口的主框架。
+ * 它加载的是同一份 index.html（?stage=1），所以文档 URL 判据与主窗口一致。 */
+function isTrustedStageIpc(event) {
+  try {
+    if (!event || !event.sender || !desktopStageWindowRuntime) return false;
+    const win = desktopStageWindowRuntime.window;
+    if (!win || win.isDestroyed() || event.sender !== win.webContents || event.sender.isDestroyed()) return false;
+    if (event.senderFrame && event.senderFrame.parent) return false;
+    const sourceUrl = event.senderFrame && event.senderFrame.url || event.sender.getURL();
+    return isTrustedMainDocumentUrl(sourceUrl);
+  } catch (_) {
+    return false;
+  }
 }
 
 // ========== Spotify OAuth 辅助函数 ==========
@@ -2467,11 +2633,13 @@ function wallpaperEngineProvidesDesktopBackdrop() {
 
 async function broadcastDesktopWallpaperStatus(status) {
   if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
-  const desktopStatus = fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('broadcast') : { enabled: false };
+  const desktopStatus = desktopStageWindowRuntime
+    ? desktopStageWindowRuntime.getStatus('broadcast')
+    : { enabled: false, supported: process.platform === 'win32' };
   mainWindow.webContents.send('mineradio-wallpaper-runtime-state', {
     ...(status || desktopStatus),
     recoveryTrayAvailable: !!tray,
-    escapeShortcutRegistered: fullDesktopEscapeRegistered === true,
+    escapeShortcutRegistered: false,
   });
   if (tray) createOrUpdateTray();
 }
@@ -3273,7 +3441,8 @@ ipcMain.handle('mineradio-restart-app', async () => {
   }
 });
 
-ipcMain.handle('mineradio-desktop-lyrics-set-enabled', async (_event, enabled, payload) => {
+ipcMain.handle('mineradio-desktop-lyrics-set-enabled', async (event, enabled, payload) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     if (enabled) {
       createDesktopLyricsWindow(payload || {});
@@ -3291,7 +3460,8 @@ ipcMain.handle('mineradio-desktop-lyrics-set-enabled', async (_event, enabled, p
    （sendGlobalHotkeyAction → 'mineradio-global-hotkey' → executeHotkeyAction），
    主窗口渲染层零改动。 */
 const DESKTOP_LYRICS_PLAYBACK_ACTIONS = new Set(['togglePlay', 'prevTrack', 'nextTrack']);
-ipcMain.handle('mineradio-desktop-lyrics-playback-action', async (_event, action) => {
+ipcMain.handle('mineradio-desktop-lyrics-playback-action', async (event, action) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   const key = String(action || '');
   if (!DESKTOP_LYRICS_PLAYBACK_ACTIONS.has(key)) {
     return { ok: false, error: 'DESKTOP_LYRICS_ACTION_UNSUPPORTED' };
@@ -3300,7 +3470,8 @@ ipcMain.handle('mineradio-desktop-lyrics-playback-action', async (_event, action
   return { ok: true, action: key };
 });
 
-ipcMain.handle('mineradio-desktop-lyrics-update', async (_event, payload) => {
+ipcMain.handle('mineradio-desktop-lyrics-update', async (event, payload) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     const nextState = { ...desktopLyricsState, ...(payload || {}) };
     if (nextState.enabled) {
@@ -3317,11 +3488,8 @@ ipcMain.handle('mineradio-desktop-lyrics-update', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('mineradio-desktop-lyrics-set-dragging', async () => {
-  return { ok: true };
-});
-
-ipcMain.handle('mineradio-desktop-lyrics-set-pointer-capture', async (_event, active) => {
+ipcMain.handle('mineradio-desktop-lyrics-set-pointer-capture', async (event, active) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     if (active) {
       desktopLyricsPointerCapture = true;
@@ -3337,7 +3505,8 @@ ipcMain.handle('mineradio-desktop-lyrics-set-pointer-capture', async (_event, ac
   }
 });
 
-ipcMain.handle('mineradio-desktop-lyrics-set-hot-bounds', async (_event, bounds) => {
+ipcMain.handle('mineradio-desktop-lyrics-set-hot-bounds', async (event, bounds) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     const left = clampNumber(bounds && bounds.left, -2000, 4000, 0);
     const top = clampNumber(bounds && bounds.top, -2000, 4000, 0);
@@ -3350,7 +3519,8 @@ ipcMain.handle('mineradio-desktop-lyrics-set-hot-bounds', async (_event, bounds)
   }
 });
 
-ipcMain.handle('mineradio-desktop-lyrics-set-lock-state', async (_event, locked) => {
+ipcMain.handle('mineradio-desktop-lyrics-set-lock-state', async (event, locked) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     desktopLyricsState = { ...desktopLyricsState, clickThrough: !!locked };
     if (desktopLyricsState.clickThrough !== false) desktopLyricsPointerCapture = false;
@@ -3382,16 +3552,22 @@ function applyDesktopLyricsDrag(bounds, dx, dy) {
   // 拖动期间窗口必须一直可接收鼠标：光标稍有偏离热区也不能立刻恢复穿透
   desktopLyricsDragUntil = Date.now() + 700;
   desktopLyricsWindow.setBounds(next, false);
+  desktopLyricsDragBounds = next;
   desktopLyricsUserBounds = next;
   saveDesktopLyricsAnchor(desktopLyricsAnchorFromBounds(next));
   return next;
 }
 
-ipcMain.handle('mineradio-desktop-lyrics-move-by', async (_event, dx, dy) => {
+ipcMain.handle('mineradio-desktop-lyrics-move-by', async (event, dx, dy) => {
+  if (!isTrustedDesktopLyricsIpc(event)) return { ok: false, error: 'DESKTOP_LYRICS_UNTRUSTED_SENDER' };
   try {
     if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return { ok: false, error: 'NO_DESKTOP_LYRICS_WINDOW' };
     if (desktopLyricsState.clickThrough !== false) return { ok: false, error: 'DESKTOP_LYRICS_LOCKED' };
-    applyDesktopLyricsDrag(desktopLyricsWindow.getBounds(), dx, dy);
+    /* 拖动会话内必须用累计位置做基准：setBounds 在 Windows 上异步生效，
+     * 回读 getBounds() 常常还是上一步的坐标，快速拖会丢掉位移。
+     * 距上一步超过 700ms 视为新会话，重新以真实窗口位置为起点。 */
+    if (Date.now() >= desktopLyricsDragUntil) desktopLyricsDragBounds = null;
+    applyDesktopLyricsDrag(desktopLyricsDragBounds || desktopLyricsWindow.getBounds(), dx, dy);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message || 'DESKTOP_LYRICS_MOVE_FAILED' };
@@ -3406,7 +3582,7 @@ ipcMain.handle('mineradio-wallpaper-set-enabled', async (event, enabled, payload
       : await closeWallpaperWindow();
     const normalized = result && typeof result === 'object' ? result : { ok: false, enabled: false };
     const status = normalized.status
-      || (fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('wallpaper-set') : { enabled: false });
+      || (desktopStageWindowRuntime ? desktopStageWindowRuntime.getStatus('wallpaper-set') : { enabled: false });
     return { ...normalized, enabled: normalized.enabled === true || status.enabled === true, status };
   } catch (e) {
     return { ok: false, enabled: false, error: e.message || 'WALLPAPER_FAILED' };
@@ -3417,11 +3593,12 @@ ipcMain.handle('mineradio-wallpaper-update', async (event, payload) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'WALLPAPER_UNTRUSTED_SENDER' };
   try {
     wallpaperState = { ...wallpaperState, ...(payload || {}) };
-    if (fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled()) {
-      applyWallpaperModeOpacity(wallpaperState.opacity);
-    }
-    const status = fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('renderer-update') : { enabled: false };
-    return { ok: true, enabled: status.enabled === true, status };
+    if (!desktopStageWindowRuntime) return { ok: true, enabled: false, status: { enabled: false } };
+    const result = await desktopStageWindowRuntime.update({
+      opacity: wallpaperState.opacity,
+      frameRate: wallpaperState.frameRate || wallpaperState.wallpaperFps,
+    });
+    return { ok: true, enabled: result && result.enabled === true, status: result && result.status || { enabled: false } };
   } catch (e) {
     return { ok: false, error: e.message || 'WALLPAPER_UPDATE_FAILED' };
   }
@@ -3429,15 +3606,44 @@ ipcMain.handle('mineradio-wallpaper-update', async (event, payload) => {
 
 ipcMain.handle('mineradio-wallpaper-get-status', async (event) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, enabled: false, error: 'WALLPAPER_UNTRUSTED_SENDER' };
-  const status = fullDesktopModeRuntime ? fullDesktopModeRuntime.getStatus('renderer-query') : { enabled: false };
+  const status = desktopStageWindowRuntime
+    ? desktopStageWindowRuntime.getStatus('renderer-query')
+    : { enabled: false, supported: process.platform === 'win32' };
   return {
     ok: true,
     status: {
       ...status,
       recoveryTrayAvailable: !!tray,
-      escapeShortcutRegistered: fullDesktopEscapeRegistered === true,
+      escapeShortcutRegistered: false,
     },
   };
+});
+
+/* 播放状态镜像：主窗口每秒把「同一首歌同一秒」推给效果层窗口。
+ * 只允许主窗口发；效果层窗口自己不能改主窗口状态。 */
+ipcMain.handle('mineradio-stage-session', async (event, session) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'STAGE_UNTRUSTED_SENDER' };
+  if (!desktopStageWindowRuntime) return { ok: false, error: 'STAGE_NOT_INITIALIZED' };
+  try {
+    desktopStageWindowRuntime.setSession(session || null);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message || 'STAGE_SESSION_FAILED' };
+  }
+});
+
+/* 效果层页面加载完成或从后台恢复：把当前会话再发一遍（页面可能错过了首帧那条）。 */
+ipcMain.handle('mineradio-stage-ready', async (event) => {
+  if (!isTrustedStageIpc(event)) return { ok: false, error: 'STAGE_UNTRUSTED_SENDER' };
+  if (!desktopStageWindowRuntime) return { ok: false, error: 'STAGE_NOT_INITIALIZED' };
+  desktopStageWindowRuntime.sendState('stage-ready');
+  desktopStageWindowRuntime.sendSession('stage-ready');
+  /* 让主窗口立刻补一条 full：效果层刚加载完时手上没有任何曲目上下文，
+   * 只等 15s 的定时刷新会让桌面先空十几秒（实测 12s 才出声）。 */
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    try { mainWindow.webContents.send('mineradio-stage-window-ready'); } catch (_) {}
+  }
+  return { ok: true, status: desktopStageWindowRuntime.getStatus('stage-ready') };
 });
 
 // ========== 启动状态记录 / 错误日志 / 闪屏重试 ==========
@@ -3552,6 +3758,15 @@ function buildStartupErrorMessage(context, code, logInfo, error) {
 }
 
 function reportWindowCreationFailure(context, error) {
+  /* 已经成功启动过就不是「启动失败」：壁纸模式重建窗口会重走 createWindow，
+   * 期间 startupCompleted 被重置为 false，这条路径上的任何异常都不该拉起错误框、
+   * 更不该销毁窗口后 app.quit()。只落日志，让人能从 startup-error.log 里查到。 */
+  if (appEverStarted) {
+    const code = resolveStartupErrorCode(context, error);
+    try { writeStartupErrorLog(`${context} (post-startup, not fatal)`, code, error); } catch (_) {}
+    console.error(`[${code}] ${context} (post-startup, not fatal):`, error);
+    return;
+  }
   const code = resolveStartupErrorCode(context, error);
   const logInfo = writeStartupErrorLog(context, code, error);
   writeStartupState('failed', { context: String(context || ''), code, error: startupErrorText(error).slice(0, 1200) });
@@ -3574,14 +3789,16 @@ function reportWindowCreationFailure(context, error) {
 
 function bindStartupFailureHandlers() {
   process.on('uncaughtException', (error) => {
-    if (startupCompleted) {
+    // 冷启动阶段才把异常当「启动失败」；跑起来之后的偶发异常只记日志，
+    // 绝不能因为一次请求处理出错就把用户的播放器和窗口一起收掉。
+    if (startupCompleted || appEverStarted) {
       console.error('[UncaughtException]', error);
       return;
     }
     reportWindowCreationFailure('Uncaught exception', error);
   });
   process.on('unhandledRejection', (reason) => {
-    if (startupCompleted) {
+    if (startupCompleted || appEverStarted) {
       console.error('[UnhandledRejection]', reason);
       return;
     }
@@ -3808,16 +4025,20 @@ async function ensureLocalServerStarted() {
   return localServerStartPromise;
 }
 
-async function loadMainWindowWithRetry(win) {
+async function loadMainWindowWithRetry(win, extraQuery = '') {
   const port = mainServerPort || process.env.PORT || 3000;
   const baseUrl = `http://127.0.0.1:${port}`;
   // 首页是唯一注入明文 API_TOKEN 的响应，服务端因此要求它自带 token（防「GET / 即拿 token」）。
   // 渲染进程用 query 携带：token 只在这次导航的 URL 里，页面脚本照旧读 window.__MINERADIO_API_TOKEN__。
   const tokenQuery = mineradioApiToken ? `&token=${encodeURIComponent(mineradioApiToken)}` : '';
+  /* extraQuery 用来把「这次启动是不是舞台态」带给页面：index.html 的 head 内联脚本
+     在第一次绘制之前就读它，直接给 <html> 加 wp-stage —— 壁纸模式因此从首帧起就没有
+     chrome，不存在「先画整个播放器再藏起来」那一下闪烁。 */
+  const extra = extraQuery ? String(extraQuery) : '';
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (!win || win.isDestroyed()) throw new Error('Main BrowserWindow was destroyed before navigation');
-    const targetUrl = `${baseUrl}/?startupAttempt=${attempt}&startupAt=${Date.now()}${tokenQuery}`;
+    const targetUrl = `${baseUrl}/?startupAttempt=${attempt}&startupAt=${Date.now()}${tokenQuery}${extra}`;
     try {
       writeStartupState('navigation-attempt', { navigationAttempt: attempt, navigationAt: Date.now(), targetUrl });
       await withStartupTimeout(
@@ -3861,7 +4082,7 @@ function ensureMainWindowCreated() {
   return mainWindowCreationPromise;
 }
 
-async function createWindow() {
+async function createWindow(options = {}) {
   htmlFullscreenActive = false;
   windowFullscreenActive = false;
   startupCompleted = false;
@@ -3875,6 +4096,9 @@ async function createWindow() {
 
   const initialBounds = getWindowedBounds();
 
+  /* 主窗口只有这一种形态：可缩放、带阴影、透明圆角壳。
+   * 壁纸模式不再重建它 —— 效果是另一张独立窗口（desktop/desktop-stage-window.js），
+   * 所以这里不需要 wallpaper 分支，也不再有「壁纸窗口不能透明」的约束。 */
   mainWindow = new BrowserWindow({
     ...initialBounds,
     minWidth: MIN_WINDOWED_WIDTH,
@@ -3964,7 +4188,12 @@ async function createWindow() {
     if (!startupCompleted) showMainWindowSafely(win, 'ready-to-show');
   });
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    /* 只认主框架的失败。这个事件对 iframe / 子框架同样会触发，
+     * 以前任何一张封面、任何一个子框架取不到都把整页换成 startup.html ——
+     * 壁纸模式下那就是「舞台突然变成开屏动画」，且此时 startupCompleted 刚被
+     * createWindow 重置为 false，更容易误判成启动失败。 */
+    if (isMainFrame === false) return;
     if (!startupCompleted) {
       console.warn('[StartupWindow] did-fail-load:', errorCode, errorDescription, validatedURL || '');
       // 主页面导航失败会清掉当前帧（白窗），立即回填启动页保持深色
@@ -4033,15 +4262,9 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    /* 壁纸模式（完整桌面模式）的 Esc 逃生：主进程这一层比页面 keydown 更早，
-       页面拿不到键盘焦点时也能退出。软件锁只锁鼠标/图标，不锁这条。 */
-    if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape')
-      && fullDesktopModeRuntime && typeof fullDesktopModeRuntime.isEnabled === 'function'
-      && fullDesktopModeRuntime.isEnabled()) {
-      event.preventDefault();
-      disableFullDesktopMode('escape-key').catch(() => {});
-      return;
-    }
+    /* 2026-11-21 起壁纸模式不再吞 Esc：播放器窗口与任务栏条目保留、界面随时可用，
+     * 退出走界面上的开关。这里原本的「Esc 退出壁纸」分支已按用户要求删除，
+     * 只留下面的全屏 Esc 退出与 F12。 */
     if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape') && mainWindow.isFullScreen()) {
       event.preventDefault();
       exitFullscreenToWindow(mainWindow);
@@ -4069,7 +4292,10 @@ async function createWindow() {
   mainWindow.on('hide', () => sendWindowState(mainWindow));
   mainWindow.on('focus', () => sendWindowState(mainWindow));
   mainWindow.on('blur', () => sendWindowState(mainWindow));
-  mainWindow.on('move', () => scheduleWindowStateSend(mainWindow));
+  mainWindow.on('move', () => {
+    scheduleWindowStateSend(mainWindow);
+    scheduleStageWindowFollowDisplay();
+  });
   mainWindow.on('resize', () => scheduleWindowStateSend(mainWindow));
   /* 不再注册 'close' 拦截：旧逻辑在 closeBehavior==='tray' 时
      event.preventDefault() + mainWindow.hide()，窗口藏了、进程全部留着，
@@ -4081,6 +4307,7 @@ async function createWindow() {
       clearTimeout(mainWindowStateTimer);
       mainWindowStateTimer = null;
     }
+    /* 主窗口关闭 = 用户真的关掉了播放器：把桌面歌词等覆盖窗一起收掉。 */
     closeOverlayWindows();
     mainWindow = null;
   });
@@ -4109,8 +4336,10 @@ async function createWindow() {
   if (win.isDestroyed()) throw new Error('Main BrowserWindow was destroyed after navigation');
 
   startupCompleted = true;
+  appEverStarted = true;
   showMainWindowSafely(win, 'navigation-complete');
   writeStartupState('ready', { readyAt: Date.now(), port: mainServerPort });
+  return win;
 }
 
 // ========== 内存管理 IPC + 自动整理 ==========
@@ -4645,10 +4874,11 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', (event) => {
     appQuitting = true;
+    try { flushDesktopLyricsAnchor(); } catch (_) {}
     try { killAppChildProcesses(); } catch (_) {}
-    /* 壁纸模式下主窗口还挂在桌面上，必须先等 runtime 把窗口摘回顶层再退出，
-     * 否则进程一死桌面就少了图标层的共存窗口。
-     * 但强制退出（关闭按钮 / 托盘退出）不再等 dispose —— 那正是残留成因之一。 */
+    /* 旧的 WorkerW 附着运行时现在不会再被启用（壁纸模式已改成独立效果层窗口），
+     * 这段 dispose 只剩「万一旧存档/外部入口把它打开过」的兜底；
+     * 常规退出由 runAppShutdownCleanup → closeOverlayWindows 销毁效果层窗口。 */
     if (!forceQuitting && fullDesktopModeRuntime && fullDesktopModeRuntime.isEnabled() && !fullDesktopQuitDisposePending) {
       event.preventDefault();
       fullDesktopQuitDisposePending = true;
@@ -4664,6 +4894,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
+    try { flushDesktopLyricsAnchor(); } catch (_) {}
     try { killAppChildProcesses(); } catch (_) {}
     if (forceExitTimer) { clearTimeout(forceExitTimer); forceExitTimer = null; }
   });

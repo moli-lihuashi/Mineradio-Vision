@@ -1,3 +1,10 @@
+/* 壁纸模式禁止经典预设（index 11）：它是一整套 DOM 播放器界面，
+ * 桌面效果层只该有画面；效果层同步也会跳过 11（STAGE_PRESET_SKIP_INDICES）。 */
+function presetBlockedInWallpaper(id) {
+  return !!(typeof fx !== 'undefined' && fx && fx.wallpaperMode === true
+    && typeof CLASSIC_PRESET_INDEX !== 'undefined' && Number(id) === CLASSIC_PRESET_INDEX);
+}
+
 function buildPresetGrid() {
   var grid = document.getElementById('preset-grid');
   if (!grid) return;
@@ -13,7 +20,10 @@ function buildPresetGrid() {
   grid.innerHTML = order.map(function(i){
     var p = presetMeta[i];
     var desc = p.descHtml || p.desc;
-    return '<div class="preset-card" data-preset="' + i + '" onclick="setPreset(' + i + ')">' +
+    var blocked = presetBlockedInWallpaper(i);
+    return '<div class="preset-card' + (blocked ? ' is-disabled' : '') + '" data-preset="' + i + '"'
+      + (blocked ? ' aria-disabled="true" title="壁纸模式下不可用（经典是播放器界面）"' : '')
+      + ' onclick="setPreset(' + i + ')">' +
       '<div class="pc-icon">' + presetIcons[i] + '</div>' +
       '<div class="pc-name">' + p.name + '</div>' +
       '<div class="pc-desc">' + desc + '</div>' +
@@ -23,7 +33,12 @@ function buildPresetGrid() {
 }
 function refreshPresetGrid() {
   document.querySelectorAll('.preset-card').forEach(function(el){
+    var blocked = presetBlockedInWallpaper(Number(el.dataset.preset));
+    el.classList.toggle('is-disabled', blocked);
     el.classList.toggle('active', Number(el.dataset.preset) === fx.preset);
+    el.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+    if (blocked) el.title = '壁纸模式下不可用（经典是播放器界面）';
+    else el.removeAttribute('title');
   });
 }
 function triggerPresetParticleTransition(fromPreset, toPreset) {
@@ -82,6 +97,12 @@ function tickPresetTransition() {
 function setPreset(p, opts) {
   opts = opts || {};
   p = Math.max(0, Math.min(presetMeta.length - 1, Number(p) || 0));
+  /* 壁纸模式下经典预设直接拒绝：卡片已经置灰，这里再兜一层，
+   * 防止存档恢复 / 快捷键 / 脚本把经典带进桌面效果层。 */
+  if (presetBlockedInWallpaper(p)) {
+    if (typeof showToast === 'function') showToast('壁纸模式下不可用经典预设');
+    return;
+  }
   var prev = fx.preset;
   var changed = prev !== p;
   fx.preset = p;

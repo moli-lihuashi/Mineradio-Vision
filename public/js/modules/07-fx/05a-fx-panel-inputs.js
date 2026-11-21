@@ -92,9 +92,9 @@ function updateDevelopmentFxControls() {
   [
     ['desktopLyrics', 't-desktopLyrics', '全屏幕置顶歌词'],
     ['desktopLyricsClickThrough', 't-desktopLyricsClickThrough', '锁定后防误触；鼠标移到桌面歌词上按中键可锁定/解锁'],
-    ['desktopLyricsCinema', 't-desktopLyricsCinema', '桌面歌词绑定鼓点电影震动，基础漂浮始终保留'],
+    ['desktopLyricsCinema', 't-desktopLyricsCinema', '桌面歌词跟随鼓点做亮度与辉光律动（位移/旋转已关闭，避免贴边漂移）'],
     ['desktopLyricsHighlight', 't-desktopLyricsHighlight', '桌面歌词按播放进度高亮'],
-    ['wallpaperMode', 't-wallpaperMode', '把完整 Mineradio 放到 Windows 桌面当壁纸；右上角控制器可显示/隐藏桌面图标，Esc 退出']
+    ['wallpaperMode', 't-wallpaperMode', '把粒子与歌词放到桌面上（原世界：粒子+歌词 / Folia：只留歌词）；播放器窗口和任务栏保持原样，再点一次关闭']
   ].forEach(function(item){
     var locked = isDevelopmentLockedFx(item[0]);
     var el = document.getElementById(item[1]);
@@ -497,6 +497,11 @@ function updateFxInputs() {
   syncFxUniforms();
   // 批量回填后统一校准蓝色进度条（setRange 单点已同步；这里兜底漏网 + 面板刚布局完成时的 trackW）
   syncPrismalAllRangeFills();
+  /* 壁纸模式开关最终会走到这里（applyDesktopWallpaperRuntimeStatus 改完 fx.wallpaperMode 就调
+   * updateFxInputs）。顺带同步主窗口的「只控不渲染」态：class 给 CSS、渲染器缩到 4×4。 */
+  if (typeof syncWallpaperHostCastPresentation === 'function') {
+    try { syncWallpaperHostCastPresentation(); } catch (_) {}
+  }
 }
 function animateFxResetButton(btn) {
   if (!btn || !window.gsap) return;

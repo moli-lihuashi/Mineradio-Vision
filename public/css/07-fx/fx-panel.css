@@ -57,24 +57,27 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .fx-head-main{min-width:0}
 .fx-head-actions{display:flex;align-items:center;gap:7px;margin-left:12px;flex:0 0 auto}
 .fx-head-actions .fx-mini-btn{width:auto;min-width:58px;height:28px;padding:0 10px;flex:0 0 auto;border-radius:9px}
-.fx-title{font-size:14px;font-weight:500;letter-spacing:.6px;color:rgba(255,255,255,.95)}
-.fx-sub{font-size:10px;color:rgba(255,255,255,.32);margin-top:4px;letter-spacing:1px}
+.fx-title{font-size:14px;font-weight:500;letter-spacing:0;color:rgba(255,255,255,.95)}
+.fx-sub{font-size:11px;color:rgba(255,255,255,.4);margin-top:4px;letter-spacing:0}
 .fx-close{border:none;background:transparent;color:rgba(255,255,255,.42);font-size:22px;line-height:1;cursor:pointer;padding:0 2px}
 .fx-close:hover{color:#fff}
-.fx-section-label{display:flex;align-items:center;gap:8px;font-size:10px;color:rgba(0,245,212,.56);letter-spacing:1.2px;text-transform:uppercase;margin:18px 0 9px;font-weight:700}
-.fx-section-label::after{content:'';height:1px;flex:1;background:linear-gradient(90deg,rgba(0,245,212,.16),transparent)}
+.fx-section-label{display:flex;align-items:center;gap:8px;font-size:11px;color:color-mix(in srgb,var(--ui-accent,#00f5d4) 60%,transparent);letter-spacing:0;margin:20px 0 8px;font-weight:600}
+.fx-section-label::after{content:'';height:1px;flex:1;background:rgba(255,255,255,.08)}
 .fx-section-label:first-of-type{margin-top:0}
 
 /* --- 预设卡片网格 --- */
 .preset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px}
-.preset-card{position:relative;min-height:94px;border-radius:11px;border:1.5px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);cursor:pointer;overflow:hidden;transition:all .25s;display:flex;flex-direction:column;justify-content:flex-end;padding:10px}
-.preset-card:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.05)}
-.preset-card.active{border-color:rgba(0,245,212,.54);background:rgba(0,245,212,.075);box-shadow:0 0 0 1px rgba(0,245,212,.22),0 16px 46px rgba(0,245,212,.055)}
-.preset-card.switching::after{content:'';position:absolute;inset:-35%;background:radial-gradient(circle,rgba(244,210,138,.26),transparent 58%);animation:preset-card-pulse .72s cubic-bezier(.16,1,.3,1);pointer-events:none}
+.preset-card{position:relative;min-height:94px;border-radius:11px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);cursor:pointer;overflow:hidden;transition:background-color .16s ease,border-color .16s ease;display:flex;flex-direction:column;justify-content:flex-end;padding:10px}
+.preset-card:hover{border-color:rgba(255,255,255,.16);background:rgba(255,255,255,.05)}
+.preset-card.active{border-color:color-mix(in srgb,var(--ui-accent,#00f5d4) 55%,transparent);background:color-mix(in srgb,var(--ui-accent,#00f5d4) 7%,transparent);box-shadow:none}
+/* 壁纸模式下的经典预设：整张置灰、不可点；tooltip 说明原因。 */
+.preset-card.is-disabled{opacity:.42;filter:grayscale(1);cursor:not-allowed}
+.preset-card.is-disabled:hover{border-color:rgba(255,255,255,.08);background:rgba(255,255,255,.025)}
+.preset-card.is-disabled.active{border-color:rgba(255,255,255,.08);background:rgba(255,255,255,.025);box-shadow:none}
 .preset-card .pc-icon{position:absolute;top:8px;right:8px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.45)}
 .preset-card.active .pc-icon{color:var(--fc-accent)}
-.preset-card .pc-name{font-size:13px;font-weight:700;color:rgba(255,255,255,.92);letter-spacing:.3px}
-.preset-card .pc-desc{font-size:10px;color:rgba(255,255,255,.44);margin-top:4px;letter-spacing:.3px;line-height:1.35}
+.preset-card .pc-name{font-size:13px;font-weight:600;color:rgba(255,255,255,.92);letter-spacing:0}
+.preset-card .pc-desc{font-size:12px;color:rgba(255,255,255,.56);margin-top:4px;letter-spacing:0;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .preset-card.active .pc-name{color:#fff}
 .preset-card[data-preset="6"] .pc-name,
 .preset-card[data-preset="6"] .pc-desc{font-family:"黑体","SimHei","Microsoft YaHei","Noto Sans SC",Arial,sans-serif;font-weight:800;letter-spacing:.4px}
@@ -114,7 +117,6 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .heart-fx-tile .hfx-host.heart-beat-bloom svg{animation:heart-beat-bloom .42s cubic-bezier(.16,1,.3,1) both}
 .heart-fx-tile .hfx-host.heart-beat-dip svg{animation:heart-beat-dip .36s ease-out both}
 .preset-card .pc-bg{position:absolute;inset:0;opacity:.35;pointer-events:none}
-@keyframes preset-card-pulse{0%{opacity:0;transform:scale(.6) rotate(0deg)}35%{opacity:1}100%{opacity:0;transform:scale(1.25) rotate(12deg)}}
 .user-archive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:0 0 12px}
 .user-archive-toolbar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;padding:9px;border-radius:12px;border:1px dashed rgba(255,255,255,.10);background:rgba(255,255,255,.018)}
 .user-archive-note{font-size:10.5px;line-height:1.45;color:rgba(255,255,255,.42)}

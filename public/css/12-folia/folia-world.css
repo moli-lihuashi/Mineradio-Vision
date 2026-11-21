@@ -22,6 +22,12 @@ body.folia-world-active #folia-world-root {
 body.folia-world-active #canvas-container {
   display: none !important;
 }
+/* 经典预设是 z-index 5 的整块 DOM 播放器，会盖在 Folia 舞台（z 2）上面，
+ * 从经典切进 Folia 时会看到两套界面叠着。Folia 激活期间先把它藏掉，
+ * 退出世界时 class 移除即恢复，不改 fx.preset。 */
+body.folia-world-active #classic-player {
+  display: none !important;
+}
 /* Folia 世界用不透明 root 整块盖住壁纸：视频已由 foliaWorldPauseWallpaperVideos
    暂停、玻璃镜像循环已由 wallpaperEngineMediaShouldRun() 停掉，这里再把两层
    从合成链摘掉，彻底不吃 GPU。退出世界时 class 移除即自动恢复，无需手动还原。 */
@@ -927,9 +933,9 @@ body.folia-world-active #interlude-wave-canvas {
 .fx-folia-switch-label {
   font-size: 12px;
   color: rgba(255, 255, 255, .88);
-  letter-spacing: .3px;
+  letter-spacing: 0;
 }
-/* iOS 原生开关：46×27 轨道 + 白圆钮，开启为系统绿，滑钮带弹簧缓动与按压放大。 */
+/* 开关：开启态用面板主题色（不再用 iOS 绿），滑钮只做位移，不做弹簧放大。 */
 .fx-folia-switch {
   position: relative;
   width: 46px;
@@ -940,7 +946,7 @@ body.folia-world-active #interlude-wave-canvas {
   background: rgba(120, 120, 128, .32);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background .25s ease, box-shadow .25s ease;
+  transition: background-color .16s ease, box-shadow .16s ease;
 }
 .fx-folia-switch .fx-folia-switch-knob {
   position: absolute;
@@ -951,26 +957,19 @@ body.folia-world-active #interlude-wave-canvas {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 3px 8px rgba(0, 0, 0, .3), 0 1px 1px rgba(0, 0, 0, .16);
-  transition: transform .28s cubic-bezier(.3, 1.35, .4, 1);
-}
-.fx-folia-switch:active .fx-folia-switch-knob {
-  transform: scale(1.08);
+  transition: transform .16s cubic-bezier(.22, 1, .36, 1);
 }
 .fx-folia-switch.is-on,
 .fx-folia-switch[aria-pressed="true"] {
-  background: #34c759;
+  background: var(--ui-accent, #00f5d4);
 }
 .fx-folia-switch.is-on .fx-folia-switch-knob,
 .fx-folia-switch[aria-pressed="true"] .fx-folia-switch-knob {
   transform: translateX(19px);
 }
-.fx-folia-switch.is-on:active .fx-folia-switch-knob,
-.fx-folia-switch[aria-pressed="true"]:active .fx-folia-switch-knob {
-  transform: translateX(19px) scale(1.08);
-}
 .fx-folia-switch:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-hint {
   font-size: 10.5px;
@@ -988,6 +987,8 @@ body.folia-world-active #interlude-wave-canvas {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  /* 同一行等高：模组描述长短不一，自动行高会把整行拉歪（花笺 235 字 vs MiSide 57 字）。 */
+  grid-auto-rows: 1fr;
 }
 /* 背景卡片与歌词样式同规格：两列网格铺开（之前没有 grid 规则，按钮按块级流竖着堆成一列）。 */
 .fx-folia-bg-grid {
@@ -1027,67 +1028,118 @@ body.folia-world-active #interlude-wave-canvas {
   white-space: normal;
   line-height: 1.4;
 }
-/* iOS 玻璃卡片：半透明填充 + 发丝描边 + 顶部高光；悬停微浮起，按压回缩，
- * 选中为系统蓝渐变 + 柔光 —— 与 iOS 深色列表/按钮的层次感一致。 */
+/* 歌词样式卡片：面板已经是玻璃，卡片就用安静的平底 + 发丝描边，别再套一层玻璃。
+ * 选中只加一条主题色描边、7% 主题色底和右上角一个 6px 圆点，不做蓝色渐变与光晕。 */
 .fx-folia-mode-card,
 .fx-folia-bg-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
-  padding: 10px 11px;
+  gap: 4px;
+  padding: 12px;
   border-radius: 12px;
-  border: 0.5px solid rgba(255, 255, 255, .1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .03));
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, .08);
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(255, 255, 255, .035);
+  box-shadow: none;
   cursor: pointer;
   text-align: left;
   -webkit-tap-highlight-color: transparent;
-  transition: border-color .2s ease, background .2s ease, box-shadow .2s ease,
-    transform .18s cubic-bezier(.3, 1.3, .4, 1);
+  transition: background-color .16s ease, border-color .16s ease, transform .12s ease-out;
 }
 /* 背景卡片只有名字，不需要「名字 + 描述」高度，垂直居中收一档（放在组合规则后，避免被盖掉）。 */
-.fx-folia-mode-card { min-height: 54px; }
+.fx-folia-mode-card {
+  min-height: 56px;
+  padding-right: 28px; /* 给右上角的选中圆点留位，避免选中时文字位移 */
+  position: relative;
+}
 .fx-folia-bg-card {
-  min-height: 46px;
+  min-height: 48px;
   justify-content: center;
 }
 .fx-folia-mode-card:hover,
 .fx-folia-bg-card:hover {
-  border-color: rgba(255, 255, 255, .2);
-  background: linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .05));
-  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .06);
 }
+/* 按压只回缩一点点，不做悬停上浮；过渡只碰背景/描边/transform。 */
 .fx-folia-mode-card:active,
 .fx-folia-bg-card:active {
-  transform: scale(.96);
+  transform: scale(.985);
+}
+/* 壁纸模式下不可用的整屏场景样式：保留可读的名称，不再把整张卡 grayscale 到看不清。 */
+.fx-folia-mode-card.is-disabled,
+.fx-folia-mode-card:disabled {
+  opacity: 1;
+  filter: none;
+  cursor: not-allowed;
+  transform: none !important;
+  border-color: rgba(255, 255, 255, .05);
+  background: rgba(255, 255, 255, .02);
+}
+.fx-folia-mode-card.is-disabled .fx-folia-mode-name,
+.fx-folia-mode-card:disabled .fx-folia-mode-name {
+  color: rgba(255, 255, 255, .60);
+}
+.fx-folia-mode-card.is-disabled .fx-folia-mode-desc,
+.fx-folia-mode-card:disabled .fx-folia-mode-desc {
+  color: rgba(255, 255, 255, .36);
+}
+.fx-folia-mode-card.is-disabled:hover,
+.fx-folia-mode-card:disabled:hover {
+  border-color: rgba(255, 255, 255, .05);
+  background: rgba(255, 255, 255, .02);
+}
+.fx-folia-mode-note {
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, .42);
 }
 .fx-folia-mode-card.active,
 .fx-folia-bg-card.active {
-  border-color: rgba(10, 132, 255, .65);
-  background: linear-gradient(180deg, rgba(10, 132, 255, .22), rgba(10, 132, 255, .13));
-  box-shadow: 0 4px 16px rgba(10, 132, 255, .18), inset 0 0.5px 0 rgba(255, 255, 255, .14);
+  border-color: color-mix(in srgb, var(--ui-accent, #00f5d4) 55%, transparent);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 7%, transparent);
+  box-shadow: none;
+}
+.fx-folia-mode-card.active::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-accent, #00f5d4);
+  pointer-events: none;
 }
 .fx-folia-mode-card:focus-visible,
 .fx-folia-bg-card:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-mode-card.active:focus-visible,
 .fx-folia-bg-card.active:focus-visible {
-  box-shadow: 0 4px 16px rgba(10, 132, 255, .18), 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-mode-name,
 .fx-folia-bg-name {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: rgba(255, 255, 255, .92);
-  letter-spacing: .3px;
-}
-.fx-folia-mode-desc {
-  font-size: 10px;
-  color: rgba(255, 255, 255, .44);
+  letter-spacing: 0;
   line-height: 1.35;
+}
+/* 描述固定两行：模组自带的营销长文留在 title 里，卡片上只显示一句。 */
+.fx-folia-mode-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .56);
+  word-break: break-word;
 }
 .preset-grid.folia-locked {
   opacity: .32;
@@ -1207,7 +1259,7 @@ body.folia-world-active #interlude-wave-canvas {
   outline: none;
 }
 .fx-folia-tuning-range:focus-visible::-webkit-slider-runnable-track {
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .28);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 28%, transparent);
 }
 .fx-folia-tuning-range:disabled::-webkit-slider-thumb {
   cursor: not-allowed;
@@ -1275,15 +1327,16 @@ body.folia-world-active #interlude-wave-canvas {
 }
 .fx-folia-tuning-pill.active {
   color: #fff;
-  background: #0a84ff;
-  box-shadow: 0 2px 10px rgba(10, 132, 255, .35);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent, #00f5d4) 55%, transparent);
 }
 .fx-folia-tuning-pill:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-tuning-pill.active:focus-visible {
-  box-shadow: 0 2px 10px rgba(10, 132, 255, .35), 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent, #00f5d4) 55%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 /* 布尔开关对（开启/关闭、启用/关闭、显示/隐藏…）：分段容器样式 ——
  * 一整条圆角卡（发丝描边 + 灰填充），两粒各占一半；选中的一粒亮边玻璃 + 加粗。
@@ -1388,7 +1441,7 @@ body.folia-world-active #interlude-wave-canvas {
   color: rgba(255, 255, 255, .45);
   max-width: 300px;
 }
-/* 调参开关与主开关同一规格：iOS 46×27 绿开关，弹簧滑钮。 */
+/* 调参开关与主开关同一规格：开启用面板主题色，滑钮只位移，不做弹簧放大。 */
 .fx-folia-tuning-switch {
   flex-shrink: 0;
   width: 46px;
@@ -1399,10 +1452,10 @@ body.folia-world-active #interlude-wave-canvas {
   background: rgba(120, 120, 128, .32);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background .25s ease, box-shadow .25s ease;
+  transition: background-color .16s ease, box-shadow .16s ease;
 }
 .fx-folia-tuning-switch.is-on {
-  background: #34c759;
+  background: var(--ui-accent, #00f5d4);
 }
 .fx-folia-tuning-switch-knob {
   display: block;
@@ -1411,20 +1464,14 @@ body.folia-world-active #interlude-wave-canvas {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 3px 8px rgba(0, 0, 0, .3), 0 1px 1px rgba(0, 0, 0, .16);
-  transition: transform .28s cubic-bezier(.3, 1.35, .4, 1);
+  transition: transform .16s cubic-bezier(.22, 1, .36, 1);
 }
 .fx-folia-tuning-switch.is-on .fx-folia-tuning-switch-knob {
   transform: translateX(19px);
 }
-.fx-folia-tuning-switch:active .fx-folia-tuning-switch-knob {
-  transform: scale(1.08);
-}
-.fx-folia-tuning-switch.is-on:active .fx-folia-tuning-switch-knob {
-  transform: translateX(19px) scale(1.08);
-}
 .fx-folia-tuning-switch:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-tuning-switch:disabled,
 .fx-folia-switch:disabled {
@@ -1473,7 +1520,7 @@ body.folia-world-active #interlude-wave-canvas {
 }
 .fx-folia-tuning-color-input:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-tuning-color-input::-webkit-color-swatch-wrapper {
   padding: 2px;
@@ -1502,9 +1549,9 @@ body.folia-world-active #interlude-wave-canvas {
   background: rgba(120, 120, 128, .18);
 }
 .fx-folia-tuning-url-item.is-selected {
-  border-color: rgba(10, 132, 255, .55);
-  background: rgba(10, 132, 255, .14);
-  box-shadow: 0 2px 12px rgba(10, 132, 255, .14);
+  border-color: color-mix(in srgb, var(--ui-accent, #00f5d4) 55%, transparent);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 14%, transparent);
+  box-shadow: none;
 }
 .fx-folia-tuning-url-body {
   flex: 1;
@@ -1566,16 +1613,16 @@ body.folia-world-active #interlude-wave-canvas {
   color: #ff6961;
 }
 .fx-folia-tuning-url-act.is-primary {
-  background: rgba(10, 132, 255, .18);
-  color: #0a84ff;
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 18%, transparent);
+  color: var(--ui-accent, #00f5d4);
 }
 .fx-folia-tuning-url-act.is-primary:hover {
-  background: rgba(10, 132, 255, .3);
-  color: #3b9dff;
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 30%, transparent);
+  color: var(--ui-accent, #00f5d4);
 }
 .fx-folia-tuning-url-act:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-tuning-url-form {
   display: flex;
@@ -1602,7 +1649,7 @@ body.folia-world-active #interlude-wave-canvas {
 }
 .fx-folia-tuning-url-input:focus {
   background: rgba(120, 120, 128, .24);
-  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent, #00f5d4) 35%, transparent);
 }
 .fx-folia-tuning-url-form-actions {
   display: flex;
@@ -1615,8 +1662,8 @@ body.folia-world-active #interlude-wave-canvas {
   height: 32px;
   border-radius: 12px;
   border: none;
-  background: rgba(10, 132, 255, .15);
-  color: #0a84ff;
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 15%, transparent);
+  color: var(--ui-accent, #00f5d4);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -1624,7 +1671,7 @@ body.folia-world-active #interlude-wave-canvas {
   transition: background .16s ease, transform .12s ease;
 }
 .fx-folia-tuning-url-add:hover {
-  background: rgba(10, 132, 255, .25);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 25%, transparent);
 }
 .fx-folia-tuning-url-add:active {
   transform: scale(.96);
@@ -2633,12 +2680,12 @@ body.folia-world-active #interlude-wave-canvas {
 }
 /* 主动作（上传）：iOS 浅色按钮 —— 蓝字浅蓝底；与实心蓝选中态区分开，不抢「已选」的视觉重量。 */
 .fx-folia-tuning-pill.is-primary {
-  color: #0a84ff;
-  background: rgba(10, 132, 255, .16);
+  color: var(--ui-accent, #00f5d4);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 16%, transparent);
 }
 .fx-folia-tuning-pill.is-primary:hover {
-  color: #3b9dff;
-  background: rgba(10, 132, 255, .26);
+  color: var(--ui-accent, #00f5d4);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 26%, transparent);
 }
 /* 禁用态：降透明度 + 还原灰填充，悬停不再亮起（与基础 chips 同族，全面板通用）。 */
 .fx-folia-tuning-pill:disabled {

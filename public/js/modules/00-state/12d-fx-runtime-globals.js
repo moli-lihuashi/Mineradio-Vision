@@ -431,8 +431,36 @@ var runtimePerfState = {
 };
 var runtimeGpuDiagnostics = null;
 var runtimeGpuDiagnosticsError = '';
+/* 壁纸模式（完整桌面模式）下绝不允许进入「深度休眠」。
+ *
+ * 为什么必须有这一条：壁纸窗口 SetParent 进 WorkerW 之后，主进程的 win.isVisible()
+ * 返回 false —— IsWindowVisible 沿父链检查，窗口挂到桌面宿主下面就不再为真。
+ * 这个「不可见」经 updateDesktopRuntimeState 传进渲染层后，
+ * isDeepBackgroundMode() 判为 true，于是同时发生两件事：
+ *   1. body 挂上 render-deep-sleep → index.css 把 #canvas-container 设成
+ *      opacity:0 / visibility:hidden
+ *   2. applyRendererPowerMode() 把渲染器缩到 4x4
+ * 实测（2026-11-20，壁纸模式 vs 普通窗口，同一台机）：
+ *   canvas 1730x1125/visible, rAF 165fps  →  canvas 1x1/hidden, rAF 1fps
+ * 用户看到的就是「粒子几乎看不见、卡顿、桌面上没有歌词」—— 三个症状同一个根因。
+ *
+ * 壁纸模式的画面正摆在桌面上给用户看，它就是前台，判据必须以这个事实为准，
+ * 不能把「原生窗口是否被 Windows 认为可见」当成「用户是否在看」。
+ * 判据来源与 css/10-shell/wallpaper-stage.css 完全一致，避免两套事实打架。 */
+function isWallpaperStageMode() {
+  if (typeof wallpaperStageOnly === 'function') {
+    try { return wallpaperStageOnly() === true; } catch (_) {}
+  }
+  var body = typeof document !== 'undefined' ? document.body : null;
+  if (!body || !body.classList) return false;
+  return body.classList.contains('wallpaper-stage')
+    || body.classList.contains('wallpaper-stage-folia')
+    || body.classList.contains('desktop-wallpaper-mode');
+}
 function isDeepBackgroundMode() {
   if (isLiveBackgroundKeepMode()) return false;
+  // 壁纸模式在桌面上持续显示，永远不是「后台」
+  if (isWallpaperStageMode()) return false;
   // Electron may briefly leave document.hidden stale after a tray restore.
   // The native BrowserWindow state is authoritative for desktop power policy;
   // browser-only builds still use the Page Visibility API.
@@ -444,6 +472,17 @@ function isDeepBackgroundMode() {
 function currentPerformanceBackgroundMode() {
   return normalizePerformanceBackgroundMode(fx && fx.performanceBackground, fx && fx.liveBackgroundKeep === true);
 }
+
+/* 主窗口的「只控不渲染」态：壁纸模式开着时，舞台已经在桌面效果层里画了一份，
+ * 播放器窗口再画一遍是纯浪费（同一个着色器、同一套歌词 mesh、同一张玻璃回读）。
+ * 判据必须排除效果层页面本身 —— 那一页就是要画的那一份，关掉它桌面就空了。
+ * 与 isWallpaperStageMode 的区别：那个问「这一页是不是效果层」，这个问
+ * 「这一页是不是该把画面让给效果层」。 */
+function isWallpaperHostCastMode() {
+  if (typeof fx === 'undefined' || !fx || fx.wallpaperMode !== true) return false;
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return false;
+  return true;
+}
 function isLiveBackgroundKeepMode() {
   return currentPerformanceBackgroundMode() === 'keep';
 }
@@ -451,6 +490,7 @@ function isBackgroundReleaseMode() {
   return currentPerformanceBackgroundMode() === 'release';
 }
 function isHiddenForBackgroundOptimization() {
+  if (isWallpaperStageMode()) return false;
   return !!(document.hidden && !isLiveBackgroundKeepMode());
 }
 function isVisibleBackgroundMode() {
@@ -717,10 +757,15 @@ function maybeTrimRuntimeCaches(now) {
 function applyRendererPowerMode() {
   if (typeof renderer === 'undefined' || !renderer) return;
   var deep = isDeepBackgroundMode();
-  var width = deep ? 4 : Math.max(1, innerWidth);
-  var height = deep ? 4 : Math.max(1, innerHeight);
+  /* 壁纸模式：主窗口不再渲染舞台，绘制缓冲区跟着缩到 4×4（省显存与合成）。
+   * 只改尺寸，不开 Chromium 的后台节流 —— 窗口仍然可见，音频与 UI 还要照常跑。
+   * 用 RenderSuppressed 而不是 HostCastMode：视觉控制台开着时是预览态，不能缩。 */
+  var hostCast = typeof isWallpaperHostCastRenderSuppressed === 'function' && isWallpaperHostCastRenderSuppressed();
+  var shrink = deep || hostCast;
+  var width = shrink ? 4 : Math.max(1, innerWidth);
+  var height = shrink ? 4 : Math.max(1, innerHeight);
   var pixelRatio = getRenderPixelRatio();
-  var mode = deep ? 'sleep' : 'active';
+  var mode = shrink ? 'sleep' : 'active';
   syncChromiumBackgroundThrottling(deep);
   if (renderPowerState.mode === mode && renderPowerState.width === width && renderPowerState.height === height && Math.abs(renderPowerState.pixelRatio - pixelRatio) < 0.001) return;
   renderPowerState = { mode: mode, width: width, height: height, pixelRatio: pixelRatio };

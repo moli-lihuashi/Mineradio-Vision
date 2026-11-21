@@ -3,6 +3,16 @@
 // ============================================================
 //  Global State
 // ============================================================
+/* 桌面效果层页面（壁纸模式）标记。
+ *
+ * 壁纸模式 = 主窗口不动 + 另一张透明窗口加载同一份 index.html（?stage=1）。
+ * 那一页只需要「粒子 + 歌词」，绝不能再跑一遍登录刷新 / 自动续播 / 收听统计 /
+ * 会话写入 —— 否则两份页面会互相覆盖存档、双写统计、甚至轮换登录票据。
+ * 标记由 index.html head 的内联脚本在模块求值前写死，这里只做一次读取。
+ * 主窗口永远是 false。 */
+var MINERADIO_STAGE_PAGE = (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true);
+function isWallpaperStagePage() { return MINERADIO_STAGE_PAGE === true; }
+
 var audio = null, audioCtx = null, source = null, analyser = null, beatAnalyser = null, gainNode = null, audioReady = false;
 var uiSfxCtx = null, lastShelfSelectSfxAt = 0;
 var FFT_SIZE = 2048;

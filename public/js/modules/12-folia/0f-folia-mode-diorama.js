@@ -2844,7 +2844,8 @@
     }
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setClearColor(0x05070b, 1);
+    /* 壁纸效果层：清屏 alpha 0 —— 镜台的「黑底」就是这一行，场景里的卡片/尘埃照常画。 */
+    renderer.setClearColor(0x05070b, (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true) ? 0 : 1);
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
@@ -3016,7 +3017,7 @@
     inst.damped.secondary.lerp(inst.themeTargets.secondary, colorK);
     inst.damped.bg.lerp(inst.themeTargets.bg, colorK);
     if (inst.scene.fog) inst.scene.fog.color.copy(inst.damped.bg);
-    inst.renderer.setClearColor(inst.damped.bg, 1);
+    inst.renderer.setClearColor(inst.damped.bg, (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true) ? 0 : 1);
 
     /* 音频包络（几何 / 辉光 / 尘埃用；镜头永不接音频） */
     var bands = ctx.audioBands || (ctx.audio && ctx.audio.bands) || {};

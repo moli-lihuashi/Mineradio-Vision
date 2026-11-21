@@ -517,6 +517,7 @@ test('D6 真实 handler 只放行三个 action，未授权的既不转发也不�
       },
     },
     sendGlobalHotkeyAction: (a) => dispatched.push(a),
+    isTrustedDesktopLyricsIpc: () => true,
     Set, String, console,
   };
   vm.createContext(sandbox);

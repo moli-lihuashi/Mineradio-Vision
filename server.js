@@ -564,9 +564,22 @@ function staticCacheControlForPath(filePath) {
   }
   return 'public, max-age=300';
 }
+/* 响应是否已经被「占住」——写头、结束、或连接已断，三种都算。
+ * 所有在异步回调里 writeHead 的地方都必须先过这一关：writeHead 抛
+ * ERR_HTTP_HEADERS_SENT 的位置在 fs/fetch 回调里，不在请求处理的 try 里，
+ * 会直接变成进程级 uncaughtException（实测导致进入壁纸模式时整个应用退出）。 */
+function responseSettled(res) {
+  if (!res) return true;
+  return !!(res.writableEnded || res.headersSent || res.destroyed);
+}
 function serveStatic(res, filePath) {
   const ext = path.extname(filePath);
   fs.stat(filePath, (statErr, st) => {
+    /* 异步回调回来时这个 res 可能已经被别人占用：客户端断开（壁纸模式重建窗口会
+     * destroy 旧渲染进程）、上层已经写过响应、或同一 res 被第二次投递进来。
+     * writeHead 在这里抛 ERR_HTTP_HEADERS_SENT 会变成进程级 uncaughtException，
+     * 主进程随即走「启动失败 → 销毁窗口 + app.quit()」。实测崩过（12s 内必崩）。 */
+    if (responseSettled(res)) return;
     if (statErr || !st || !st.isFile()) { res.writeHead(404); res.end('Not Found'); return; }
     const etag = 'W/"' + st.size + '-' + Number(st.mtimeMs || st.mtime.getTime()) + '"';
     const inm = res.req && res.req.headers && res.req.headers['if-none-match'];
@@ -579,6 +592,7 @@ function serveStatic(res, filePath) {
       return;
     }
     fs.readFile(filePath, (err, data) => {
+      if (responseSettled(res)) return;
       if (err) { res.writeHead(404); res.end('Not Found'); return; }
       res.writeHead(200, {
         'Content-Type': MIME[ext] || 'text/plain',
@@ -591,6 +605,7 @@ function serveStatic(res, filePath) {
 }
 function serveIndexHtml(res, filePath) {
   fs.readFile(filePath, 'utf8', (err, html) => {
+    if (responseSettled(res)) return;
     if (err) { res.writeHead(404); res.end('Not Found'); return; }
     const inject = '<script>window.__MINERADIO_API_TOKEN__=' + JSON.stringify(API_TOKEN) + ';</script>';
     const out = html.includes('<head>')
@@ -604,6 +619,7 @@ function serveIndexHtml(res, filePath) {
   });
 }
 function sendJSON(res, data, status) {
+  if (responseSettled(res)) return;
   res.writeHead(status || 200, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -1166,7 +1182,13 @@ async function handleDiscoverHome(opts) {
 const KUGOU_GATEWAY_URL = 'https://gateway.kugou.com';
 const KUGOU_LOGIN_BASE_URL = 'https://login-user.kugou.com';
 const KUGOU_USER_SERVICE_URL = 'https://userservice.kugou.com';
-const KUGOU_QR_APPID = '1001';
+/* 扫码登录必须用 3116（概念版 lite）身份签发 token：
+ * cloudlist（个人歌单/收藏）校验「请求身份 == token 签发身份」，而 cloudlist 通道
+ * 固定用 lite 身份（3116/11440）。之前扫码用 1001、换 token 用 1005，三方不一致，
+ * 个人歌单恒返回 20017。2026-11-21 实测：3116 扫码 + 3116 取歌单 → status=1 正常返回。
+ * 详见 issue #1 问题 1。 */
+const KUGOU_QR_APPID = '3116';
+const KUGOU_QR_CLIENTVER = '11440';
 const KUGOU_QR_SRC_APPID = '2919';
 const KUGOU_PLAY_KEY_SALT = 'kgcloudv2';
 const KUGOU_DEFAULT_MID = crypto.createHash('md5').update((process.env.COMPUTERNAME || 'mineradio') + ':kugou').digest('hex');
@@ -1387,6 +1409,7 @@ const kugouService = require("./server/lib/kugou-service")({
   KUGOU_LOGIN_BASE_URL,
   KUGOU_PLAY_KEY_SALT,
   KUGOU_QR_APPID,
+  KUGOU_QR_CLIENTVER,
   KUGOU_QR_SRC_APPID,
   QRCode,
   UA,

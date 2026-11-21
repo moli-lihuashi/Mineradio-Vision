@@ -1,0 +1,219 @@
+/* 壁纸模式的「桌面效果层」呈现 —— 2026-11-21 重写
+ *
+ * 现在的结构（用户定案）：
+ *   播放器窗口      → 完全不动：任务栏、标题栏、控制条、交互全部保留
+ *   桌面效果层窗口  → 另一张透明全屏窗（desktop/desktop-stage-window.js），只画两样东西：
+ *       原世界：粒子 + 歌词（three 画布 + #stage-lyrics）
+ *       Folia ：只有 Folia 的歌词（Folia 自己的背景壳层摘掉）
+ *   背景            → 一律透明：用户自己装的 Wallpaper Engine 壁纸从空隙透出来
+ *                     （内置壁纸层 #wallpaper-engine-layer 不显示）
+ *
+ * 判据（都在效果层页面里成立，主窗口永远不成立）：
+ *   html.wp-stage          index.html head 内联脚本读 ?stage=1 在首帧前打上
+ *   body.wallpaper-stage   10-shell/08-wallpaper-stage.js 运行时维持
+ *   html.wp-stage-folia    主进程按当前世界写进导航 URL；运行时可切
+ *
+ * 全部 !important：这些层的显示与否散落在十几处 JS 里
+ * （内联 style、class 切换、健康巡检），普通优先级压不住。
+ */
+
+/* ---------- 零、整页透明 ---------- */
+:is(html.wp-stage, body.wallpaper-stage),
+:is(html.wp-stage, body.wallpaper-stage) body {
+  background: transparent !important;
+}
+
+/* ---------- 一、播放器本体：效果层里一个都不留 ---------- */
+:is(body.wallpaper-stage, html.wp-stage) #desktop-titlebar,
+:is(body.wallpaper-stage, html.wp-stage) #fullscreen-diy-zone,
+:is(body.wallpaper-stage, html.wp-stage) #search-area,
+:is(body.wallpaper-stage, html.wp-stage) #upload-actions,
+:is(body.wallpaper-stage, html.wp-stage) #empty-home,
+:is(body.wallpaper-stage, html.wp-stage) #home-platform-recommend,
+:is(body.wallpaper-stage, html.wp-stage) #top-right,
+:is(body.wallpaper-stage, html.wp-stage) #player-quick-menu-popover,
+:is(body.wallpaper-stage, html.wp-stage) #skin-popover,
+:is(body.wallpaper-stage, html.wp-stage) #mini-queue-popover,
+:is(body.wallpaper-stage, html.wp-stage) #fx-fab,
+:is(body.wallpaper-stage, html.wp-stage) #fx-fab-hide-btn,
+:is(body.wallpaper-stage, html.wp-stage) #fx-panel,
+:is(body.wallpaper-stage, html.wp-stage) #playlist-panel,
+:is(body.wallpaper-stage, html.wp-stage) #trial-banner,
+:is(body.wallpaper-stage, html.wp-stage) #ai-depth-chip,
+:is(body.wallpaper-stage, html.wp-stage) #beat-chip,
+:is(body.wallpaper-stage, html.wp-stage) #cover-color-pop,
+:is(body.wallpaper-stage, html.wp-stage) #color-lab-pop,
+:is(body.wallpaper-stage, html.wp-stage) #control-source-switcher,
+:is(body.wallpaper-stage, html.wp-stage) #lyric-timing-popover,
+:is(body.wallpaper-stage, html.wp-stage) #cookie-export-prompt,
+:is(body.wallpaper-stage, html.wp-stage) #classic-player,
+:is(body.wallpaper-stage, html.wp-stage) #gesture-hud,
+:is(body.wallpaper-stage, html.wp-stage) #hand-canvas,
+:is(body.wallpaper-stage, html.wp-stage) #thumb-wrap,
+:is(body.wallpaper-stage, html.wp-stage) #bottom-handle,
+:is(body.wallpaper-stage, html.wp-stage) #bottom-bar,
+:is(body.wallpaper-stage, html.wp-stage) #free-camera-hint,
+:is(body.wallpaper-stage, html.wp-stage) #hint,
+:is(body.wallpaper-stage, html.wp-stage) #loading-overlay,
+:is(body.wallpaper-stage, html.wp-stage) #login-guide-canvas,
+:is(body.wallpaper-stage, html.wp-stage) #cuefield-feedback,
+:is(body.wallpaper-stage, html.wp-stage) #source-fallback-notice,
+:is(body.wallpaper-stage, html.wp-stage) #visual-guide,
+:is(body.wallpaper-stage, html.wp-stage) #break-reminder,
+:is(body.wallpaper-stage, html.wp-stage) #desktop-mode-control-dock,
+:is(body.wallpaper-stage, html.wp-stage) #drop-overlay,
+:is(body.wallpaper-stage, html.wp-stage) #splash,
+:is(body.wallpaper-stage, html.wp-stage) .modal-mask,
+:is(body.wallpaper-stage, html.wp-stage) .quality-popover,
+:is(body.wallpaper-stage, html.wp-stage) .volume-popover,
+/* 托盘/快捷菜单一类的临时浮层：桌面效果层里没有可交互表面，留着只会是残影 */
+:is(body.wallpaper-stage, html.wp-stage) .player-quick-menu,
+:is(body.wallpaper-stage, html.wp-stage) .skin-popover-panel {
+  display: none !important;
+}
+
+/* ---------- 二、背景层：原世界也不显示 ----------
+ * 2026-11-21 定案：效果层是**透明**窗口（只有粒子/歌词有像素），桌面背景交给
+ * 用户自己的 Wallpaper Engine。内置壁纸层与封面模糊底一律摘掉。
+ * 封面模糊底、节拍光晕、预设闪光、间奏波形也是播放器界面的一部分。
+ * 玻璃镜像画布必须关：它是把界面回读进 canvas 的快照，DOM 里看不到文字，
+ * 合成结果里却是一块半透明卡片（实测就是「右边那张黑卡片」）。 */
+:is(body.wallpaper-stage, html.wp-stage) #custom-bg,
+:is(body.wallpaper-stage, html.wp-stage) #album-bg,
+:is(body.wallpaper-stage, html.wp-stage) #album-bg-next,
+:is(body.wallpaper-stage, html.wp-stage) #beat-glow-overlay,
+:is(body.wallpaper-stage, html.wp-stage) #preset-transition-overlay,
+:is(body.wallpaper-stage, html.wp-stage) #interlude-wave-canvas,
+:is(body.wallpaper-stage, html.wp-stage) #idle-guide-canvas,
+:is(body.wallpaper-stage, html.wp-stage) #sonic-topography-frame,
+:is(body.wallpaper-stage, html.wp-stage) #wallpaper-engine-layer,
+:is(body.wallpaper-stage, html.wp-stage) #wallpaper-engine-glass-mirror {
+  display: none !important;
+}
+
+/* ---------- 三、舞台画布必须满不透明 ---------- */
+/* index.css:208 有一条开屏规则
+ *   body.splash-active:not(.splash-revealing) #canvas-container{opacity:.16}
+ * 效果层不显示开屏，body 理论上不会挂 splash-active；但「点击进入」那种逻辑
+ * 一旦哪条路径把 class 留住了，桌面上的表现就是「粒子几乎看不见」。
+ * 这里给一个不依赖 JS 的兜底：效果层里画布一律满不透明。 */
+:is(body.wallpaper-stage, html.wp-stage) #canvas-container {
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+/* ---------- 四、Folia 世界：只留歌词 ---------- */
+/* Folia 自己会画歌词；原生画布/背景/行层再留着就是两套画面叠在一起。
+ * 内置壁纸这一步只做了原世界；Folia 的背板另开一轮，先继续隐藏。 */
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #canvas-container,
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #stage-lyrics,
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #idle-guide-canvas,
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #sonic-topography-frame {
+  display: none !important;
+}
+
+/* Folia 的 root 原本铺 #05070b 当整块底（见 12-folia/folia-world.css），
+ * 壁纸模式要「悬浮在桌面上」，底必须透出去。模式画布本身 backgroundAlpha=0，
+ * 所以这里只摘底色与背景壳层，不动歌词的画法。 */
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #folia-world-root {
+  background: transparent !important;
+}
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) #folia-world-root .folia-bg-host {
+  display: none !important;
+}
+/* 静帧（still）自带一层 65% 的径向黑角，壁纸里就是「四周一圈黑」 */
+:is(body.wallpaper-stage-folia, html.wp-stage-folia) .folia-still-vignette {
+  display: none !important;
+}
+
+/* ---------- 五、主窗口：效果已投到桌面（只控不渲染） ----------
+ * 判据：body.wallpaper-host-cast，由 04-desktop-overlay-fullscreen 按
+ * 「fx.wallpaperMode && 当前不是效果层页面」维护；效果层自己永远不带这个 class。
+ * 这里只摘「会动的东西」：three 画布、3D/行层歌词、Folia 舞台、节拍光晕、
+ * 预设闪光、间奏波形、闲置引导、音域回响，以及所有背景层（内置壁纸/自定义背景/
+ * 封面模糊底）—— 播放器窗口不再靠任何一层壁纸撑底，改用外壳上的纯色。
+ * 玻璃镜面（#wallpaper-engine-glass-mirror）不摘：底部控制条与面板还在用它采样。 */
+body.wallpaper-host-cast #canvas-container,
+body.wallpaper-host-cast #stage-lyrics,
+body.wallpaper-host-cast #folia-world-root,
+body.wallpaper-host-cast #beat-glow-overlay,
+body.wallpaper-host-cast #preset-transition-overlay,
+body.wallpaper-host-cast #interlude-wave-canvas,
+body.wallpaper-host-cast #idle-guide-canvas,
+body.wallpaper-host-cast #sonic-topography-frame,
+body.wallpaper-host-cast #custom-bg,
+body.wallpaper-host-cast #album-bg,
+body.wallpaper-host-cast #album-bg-next,
+body.wallpaper-host-cast #wallpaper-engine-layer {
+  display: none !important;
+}
+
+/* 窗口底：播放器窗口本身是透明的（圆角由外壳的 border-radius + clip-path 负责），
+ * 以前是靠 #custom-bg 的黑底撑住；上面把背景层全摘掉之后必须补一层纯色，
+ * 否则整张窗口会透出桌面/用户的 WE 壁纸（2026-11-21 用户截图实证）。
+ * **只画 #desktop-window-shell，不画 body**：body 是矩形，会把 34px 圆角之外的
+ * 四个角也涂满，窗口看起来就变成方角了（2026-11-21 用户反馈）。
+ * 颜色沿用用户设置的背景色，没设置就是 #05070b。 */
+body.wallpaper-host-cast #desktop-window-shell {
+  background: var(--custom-bg-color, #05070b) !important;
+}
+
+/* 提示卡：只在「舞台是唯一画面」时出现。
+ * 首页在用（empty-home-active）时让位 —— 那里是曲库界面，不是空舞台；
+ * 经典播放器（#classic-player.active）本身就是播放器界面，也一样让位。 */
+#wallpaper-cast-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  display: none;
+  place-items: center;
+  pointer-events: none;
+}
+body.wallpaper-host-cast #wallpaper-cast-hint { display: grid; }
+body.wallpaper-host-cast.empty-home-active #wallpaper-cast-hint,
+body.wallpaper-host-cast #classic-player.active ~ #wallpaper-cast-hint,
+body.wallpaper-stage #wallpaper-cast-hint,
+body.wallpaper-stage-folia #wallpaper-cast-hint {
+  display: none !important;
+}
+
+#wallpaper-cast-hint .wp-cast-card {
+  width: min(540px, calc(100vw - 120px));
+  padding: 34px 38px 30px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  /* 深色底而不是玻璃白：播放器底色跟随用户的背景色，可能是浅色，
+   * 白字压在浅背景上会读不出来，这里固定用深色卡片。 */
+  background: linear-gradient(155deg, rgba(8, 12, 16, 0.88), rgba(8, 12, 16, 0.74));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  text-align: center;
+  color: #fff;
+}
+#wallpaper-cast-hint .wp-cast-glyph {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 16px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-accent, #00f5d4);
+  background: color-mix(in srgb, var(--ui-accent, #00f5d4) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-accent, #00f5d4) 34%, transparent);
+}
+#wallpaper-cast-hint .wp-cast-title {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+#wallpaper-cast-hint .wp-cast-sub {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.56);
+}
+@media (max-width: 720px) {
+  #wallpaper-cast-hint .wp-cast-card { padding: 26px 24px 22px; }
+  #wallpaper-cast-hint .wp-cast-title { font-size: 17px; }
+}

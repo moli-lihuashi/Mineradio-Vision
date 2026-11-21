@@ -96,6 +96,33 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     ipcRenderer.on('mineradio-wallpaper-runtime-state', listener);
     return () => ipcRenderer.removeListener('mineradio-wallpaper-runtime-state', listener);
   },
+  /* 壁纸模式（桌面效果层窗口）专用通道。
+   * 主窗口 → 效果层窗口：pushStageSession 每秒把「同一首歌同一秒」送过去；
+   * 效果层窗口 → 主进程：stageReady 表示这一页已经能接状态了（页面可能错过首帧那条）。 */
+  pushStageSession: (session) => ipcRenderer.invoke('mineradio-stage-session', session || null),
+  stageReady: () => ipcRenderer.invoke('mineradio-stage-ready'),
+  /* 效果层页面加载完成：主窗口收到后立刻补一条 full（别等 15s 定时刷新）。 */
+  onStageWindowReady: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = () => callback();
+    ipcRenderer.on('mineradio-stage-window-ready', listener);
+    return () => ipcRenderer.removeListener('mineradio-stage-window-ready', listener);
+  },
+  onStageState: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('mineradio-stage-state', listener);
+    return () => ipcRenderer.removeListener('mineradio-stage-state', listener);
+  },
+  /* 壁纸模式切换会销毁重建窗口，页面必重载一次。销毁前主进程喊一声，渲染端立刻
+   * savePlaybackSession(true) —— 平时那套是 4.5 秒节流 + 开头 0.2 秒不存，
+   * 直接重建会把最近的进度丢掉，接回来会倒退好几秒。 */
+  onPlaybackSnapshotFlushRequest: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = () => callback();
+    ipcRenderer.on('mineradio-playback-snapshot-flush', listener);
+    return () => ipcRenderer.removeListener('mineradio-playback-snapshot-flush', listener);
+  },
   // 内存管理
   getMemorySnapshot: () => ipcRenderer.invoke('mineradio-memory-get-snapshot'),
   trimAppMemory: (pids) => ipcRenderer.invoke('mineradio-memory-trim-app', pids),

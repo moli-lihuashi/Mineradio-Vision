@@ -1070,7 +1070,7 @@ function testDragSurvivesStatePush() {
     setBounds: function (next) { pending = Object.assign({}, next); }, // 模拟异步生效
     setOpacity: function () {},
     setIgnoreMouseEvents: function () {},
-    webContents: { send: function () {} },
+    webContents: { isDestroyed: function () { return false; }, send: function () {} },
   };
   const flush = function () { if (pending) { committed = pending; pending = null; } };
   mainContext.desktopLyricsWindow = win;

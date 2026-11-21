@@ -5,7 +5,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
 ![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
-![version](https://img.shields.io/badge/version-3.3.2-success?style=flat-square)
+![version](https://img.shields.io/badge/version-3.3.3-success?style=flat-square)
 
 ![Mineradio Vision 应用界面](./docs/media/app-ui-2026-11-14.png)
 
@@ -24,6 +24,7 @@
 | **视觉系统** | LiquidGlass 液态玻璃、Sonic Topography 音域地形、红心粒子、雪窗与鸟群收藏演出、天气雨滴 |
 | **播放质感** | 原生 C++ BPM 分析、WASAPI 旁路输出、cuefield 自动混音、Gapless 无缝交接、四组曲线过渡 |
 | **本地优先** | 本地音乐库（内嵌标签 / 封面 / 歌词自动读取）、内置歌单库、歌词与封面磁盘缓存 |
+| **桌面共生** | 壁纸模式把歌词与粒子投到桌面层，与 Wallpaper Engine 等动态壁纸共存，不替换、不接管壁纸 |
 | **工程与安全** | 200+ 前端模块、三层懒加载、DPAPI 凭据加密、Host 白名单 + token 门禁、崩溃诊断与风暴退避 |
 
 ## 音乐源与账号
@@ -54,6 +55,17 @@
 - **桌面歌词**：独立窗口，保持软件内一致的质感，支持锁定穿透与白底可读性优化。
 - **加密歌词解密**：酷狗 KRC（XOR + zlib）在本地解密后送入同一条歌词管道。
 
+## 壁纸模式
+
+壁纸模式把歌词和粒子投到**桌面层**，而不是替换你的壁纸——它与 Wallpaper Engine 等动态壁纸、以及普通静态壁纸**同时存在**，各画各的，互不接管。
+
+- **不接管、不替换**：不修改系统壁纸、不写注册表、不注入 WorkerW 壁纸宿主；关掉开关桌面立即恢复原样。
+- **与动态壁纸共生**：Wallpaper Engine 照常播放，歌词叠加在它之上；桌面图标、任务栏、时钟与挂件都不受影响。
+- **独立桌面效果层**：单独一个透明窗口承载画面，鼠标穿透、不抢焦点、不进任务栏、常驻桌面底部；主窗口只留控制，不重复渲染同一份画面，避免两份渲染互相压帧。
+- **打开即生效**：在视觉控制台打开壁纸开关，主窗口会提示「歌词写真已投到桌面」，之后改歌词样式、配色、帧率都直接作用到桌面层。
+
+![壁纸模式：歌词投在桌面壁纸上，与动态壁纸共存](./docs/media/wallpaper-mode-2026-11-21.jpg)
+
 ## 视觉与氛围
 
 - **LiquidGlass 液态玻璃**：卡片级折射质感，实时采样壁纸与页面内容，带 P95 帧时间自适应降级；开放插件 SDK，插件默认 pending，需显式启用才求值。
@@ -62,7 +74,7 @@
 - **收藏演出**：雪窗（落雪贴玻璃化开）与鸟群（170 只椋鸟收拢成形再惊散）两种整屏场景。
 - **轨道过渡引擎**：混音 / 渐进 / 无缝 / 立体声转场四组配方，配合 Gapless 交接 —— 提前解析下一首并用隐藏音源静音预热，全程只有一个音源发声。
 - **开屏加载**：玻璃墨珠 + 彗尾 + 涟漪的真实进度，按「真实就绪 + 时间门禁」推进，缓存命中也不会瞬间满格。
-- **氛围与桌面整合**：天气雨滴粒子、3D 歌单架、电影镜头、粒子舞台、Wallpaper Engine 集成、完整桌面模式。
+- **氛围与桌面整合**：天气雨滴粒子、3D 歌单架、电影镜头、粒子舞台、像素伙伴；桌面呈现方式见上方「壁纸模式」。
 - **像素伙伴**：Home 桌宠卡片，可上传照片像素化成自己的伙伴；MediaPipe 手势缩放。
 
 ## 播放与音质
@@ -99,9 +111,9 @@
 
 ## 下载安装
 
-- **Windows 安装包（推荐）**：[Mineradio-3.3.2-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-3.3.2-Setup.exe)
-- **免安装便携版**：[Mineradio-Vision-v3.3.2-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.2/Mineradio-Vision-v3.3.2-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
-- **国内网盘镜像（夸克网盘，永久有效、无需提取码）**：[Mineradio Vision v3.3.2 安装包与免安装包](https://pan.quark.cn/s/659755e8dc52) —— GitHub 直连较慢时用这个，含上面两个文件，打开后可单独下载或转存到自己的网盘
+- **Windows 安装包（推荐）**：[Mineradio-3.3.3-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.3/Mineradio-3.3.3-Setup.exe)
+- **免安装便携版**：[Mineradio-Vision-v3.3.3-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.3/Mineradio-Vision-v3.3.3-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
+- **国内网盘镜像（夸克网盘，永久有效、无需提取码）**：[Mineradio Vision v3.3.3 安装包与免安装包](https://pan.quark.cn/s/659755e8dc52) —— GitHub 直连较慢时用这个，含上面两个文件，打开后可单独下载或转存到自己的网盘
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可安装。

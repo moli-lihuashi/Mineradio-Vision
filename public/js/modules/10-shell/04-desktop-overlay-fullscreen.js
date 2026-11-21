@@ -17,9 +17,22 @@ var desktopWallpaperRuntimeState = {
 var desktopWallpaperStatusGeneration = -1;
 var desktopWallpaperStatusUnsubscribe = null;
 var desktopWallpaperEscapeBound = false;
+var desktopPlaybackSnapshotFlushBound = false;
+var wallpaperStageBootToastShown = false;
 var desktopWallpaperRendererOperation = 0;
 var desktopWallpaperUiActivationState = false;
 var desktopWallpaperHudPrimeTimer = 0;
+/* 效果层没能压到 z 序最底时只提示一次：那意味着它会浮在其他窗口上面（仍然鼠标穿透），
+ * 用户看到的是「粒子盖住整个屏幕」。状态里 zOrder='none' 是失败的唯一显式信号。 */
+var desktopWallpaperZOrderWarned = false;
+/* 主窗口「只控不渲染」态的当前值：只在翻转时做重活（渲染器尺寸/主循环）。 */
+var wallpaperHostCastLast = false;
+/* 视觉控制台的控件交互（滑块/开关/预设卡）给 1.2s 预览：
+ * 面板只是打开、不动控件时不恢复渲染；拖动滑块会连续续期，松手 1.2s 后回到只控态。
+ * 这样「点 FX」不会把整块舞台又拉起来，但调参数时仍有画面反馈。 */
+var wallpaperHostCastPreviewUntil = 0;
+var wallpaperHostCastPreviewTimer = 0;
+var wallpaperHostCastPanelBound = false;
 var desktopIconVisibilityOperation = 0;
 var desktopIconVisibilityPending = false;
 var desktopSoftwareLockOperation = 0;
@@ -988,6 +1001,7 @@ function currentDesktopLyricSnapshot() {
       }
       return withWindow({
         text: normalizeDesktopLyricText(curLine.text || currentLyricFallbackText()),
+        nextText: normalizeDesktopLyricText(nextLine && nextLine.text ? nextLine.text : ''),
         progress: getLyricLineProgress(curLine, nextLine, t),
         progressSpan: span
       }, entries, idx);
@@ -999,6 +1013,7 @@ function currentDesktopLyricSnapshot() {
       var introProgress = getLyricLineProgress({ t: 0, text: introText, duration: Math.max(0.8, introEnd), charCount: Math.max(1, introText.length), fallback: true }, null, t);
       return withWindow({
         text: introText,
+        nextText: normalizeDesktopLyricText(firstLine && firstLine.text ? firstLine.text : ''),
         progress: introProgress,
         progressSpan: Math.max(0.8, introEnd)
       }, [{ text: introText, progress: introProgress }], 0);
@@ -1009,6 +1024,7 @@ function currentDesktopLyricSnapshot() {
     var stageProgress = stageLyrics.current && stageLyrics.current.userData ? clampRange(Number(stageLyrics.current.userData.lastLyricProgress) || 0, 0, 1) : 0;
     return withWindow({
       text: stageText,
+      nextText: '',
       progress: stageProgress,
       progressSpan: 4.8
     }, [{ text: stageText, progress: stageProgress }], 0);
@@ -1019,7 +1035,7 @@ function currentDesktopLyricSnapshot() {
   var hasSong = !!(playQueue && currentIdx >= 0 && playQueue[currentIdx])
     || !!(typeof currentLyricSong === 'function' && currentLyricSong());
   var fallbackText = normalizeDesktopLyricText(hasSong ? (fallbackMeta.title || '') : '');
-  return withWindow({ text: fallbackText, progress: 0, progressSpan: 4.8 }, [{ text: fallbackText, progress: 0 }], 0);
+  return withWindow({ text: fallbackText, nextText: '', progress: 0, progressSpan: 4.8 }, [{ text: fallbackText, progress: 0 }], 0);
 }
 function desktopOverlayColorValue(value, fallback) {
   var raw = String(value || '').trim();
@@ -1108,16 +1124,15 @@ function desktopLyricsCustomFontPayload(includeDataUrl) {
   return payload;
 }
 function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
-  var meta = currentDesktopSongMeta();
   var lyric = currentDesktopLyricSnapshot();
   var beatPayload = desktopLyricsBeatMapPayload(!!forceBeatMap);
   var payload = {
     enabled: !!fx.desktopLyrics && !isDevelopmentLockedFx('desktopLyrics'),
     text: lyric.text,
+    // 下一句：单行模式在主题下面用 .line-next 显示（多行栈自己有完整窗口，不用它）
+    nextText: lyric.nextText || '',
     progress: lyric.progress,
     progressSpan: lyric.progressSpan,
-    title: meta.title,
-    artist: meta.artist,
     playing: !!playing,
     size: clampRange(Number(fx.desktopLyricsSize) || fxDefaults.desktopLyricsSize, DESKTOP_LYRICS_SIZE_MIN, DESKTOP_LYRICS_SIZE_MAX),
     opacity: clampRange(fx.desktopLyricsOpacity == null ? fxDefaults.desktopLyricsOpacity : Number(fx.desktopLyricsOpacity), 0.28, 1),
@@ -1127,7 +1142,6 @@ function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
     align: normalizeDesktopLyricsAlign(fx.desktopLyricsAlign || fxDefaults.desktopLyricsAlign),
     lines: lyric.lines || null,
     clickThrough: isDevelopmentLockedFx('desktopLyricsClickThrough') ? true : fx.desktopLyricsClickThrough !== false,
-    lyricGlowParticles: !!fx.lyricGlowParticles,
     cinema: fx.desktopLyricsCinema !== false,
     highlightFollow: fx.desktopLyricsHighlight === true,
     frameRate: normalizeDesktopLyricsFps(fx.desktopLyricsFps),
@@ -1136,7 +1150,6 @@ function desktopLyricsPayload(forceBeatMap, includeCustomFontData) {
     fontWeight: lyricFontWeightValue(),
     letterSpacing: clampRange(Number(fx.lyricLetterSpacing) || 0, -0.04, 0.18),
     lineHeight: lyricLineHeightFactor(),
-    lyricScale: clampRange(Number(fx.lyricScale) || 1, 0.35, 1.65),
     feather: lyricsHasNativeKaraoke ? 0.030 : 0.055,
     motion: desktopLyricsMotionPayload(),
     playback: desktopLyricsPlaybackPayload(),
@@ -1163,7 +1176,12 @@ function wallpaperPayload() {
     preset: fx.preset,
     opacity: clampRange(fx.wallpaperOpacity == null ? fxDefaults.wallpaperOpacity : Number(fx.wallpaperOpacity), 0.35, 1),
     frameRate: normalizeWallpaperFps(fx.wallpaperFps),
-    colors: desktopOverlayColors()
+    colors: desktopOverlayColors(),
+    /* 进壁纸模式会销毁重建窗口、页面整页重载。重建出来的那一页要在**第一次绘制之前**
+     * 就知道自己该走哪套最小画面（原世界：粒子+歌词 / Folia：只留歌词），所以这个值
+     * 由主进程写进导航 URL（?stageWorld=…），index.html 的 head 内联脚本读它。
+     * 只有发起切换的这一侧知道当前世界，所以必须在这里带出去。 */
+    stageWorld: typeof wallpaperStageWorld === 'function' ? wallpaperStageWorld() : 'native'
   };
 }
 function desktopWallpaperStatusPayload(payload) {
@@ -1183,8 +1201,10 @@ function updateDesktopWallpaperRuntimeControls(status) {
     if (!supported) toggle.setAttribute('aria-disabled', 'true');
     else toggle.removeAttribute('aria-disabled');
     toggle.title = !supported
-      ? '当前系统不支持完整桌面模式'
-      : (attaching ? '正在切换完整桌面模式' : '把完整 Mineradio 放到 Windows 桌面；右上角控制器可显示或隐藏桌面图标，Esc 退出');
+      ? '当前系统不支持桌面效果层'
+      : (attaching
+        ? '正在显示桌面效果层'
+        : '把粒子与歌词放到桌面上（原世界：粒子+歌词 / Folia：只留歌词）；播放器窗口和任务栏保持原样，再点一次关闭');
   }
   var opacity = document.getElementById('fx-wallpaperopacity');
   if (opacity) opacity.disabled = !supported;
@@ -1217,19 +1237,97 @@ function applyDesktopWallpaperSafeArea(status, enabled) {
   }
 }
 
+function wallpaperHostCastPreviewRequested() {
+  return performance.now() < wallpaperHostCastPreviewUntil;
+}
+
+/* 在视觉控制台里真正动了一个控件：给 1.2s 的播放器预览窗口。
+ * 只挂 input/change/click 且只在控件上生效 —— 打开面板、点空白处都不算。 */
+function noteWallpaperHostCastPreview() {
+  if (typeof isWallpaperHostCastMode !== 'function' || !isWallpaperHostCastMode()) return;
+  wallpaperHostCastPreviewUntil = performance.now() + 1200;
+  syncWallpaperHostCastPresentation();
+  if (wallpaperHostCastPreviewTimer) clearTimeout(wallpaperHostCastPreviewTimer);
+  wallpaperHostCastPreviewTimer = setTimeout(function () {
+    wallpaperHostCastPreviewTimer = 0;
+    wallpaperHostCastPreviewUntil = 0;
+    syncWallpaperHostCastPresentation();
+  }, 1320);
+}
+
+function bindWallpaperHostCastPanel() {
+  if (wallpaperHostCastPanelBound) return;
+  var panel = document.getElementById('fx-panel');
+  if (!panel || typeof panel.addEventListener !== 'function') return;
+  wallpaperHostCastPanelBound = true;
+  var onInteraction = function (event) {
+    var target = event && event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    /* 只认「不随壁纸状态下发」的参数：滑块（input）与开关（t-*）。
+     * 预设卡不在此列 —— 预设本来就会经 stage 同步到桌面，预览它只会把
+     * 只控态的 #wallpaper-cast-hint 一起摘掉 1.2s，用户看到的就是
+     * 「切换预设时提示卡消失一会儿再回来」。 */
+    if (event.type === 'input') {
+      if (target.closest('input')) noteWallpaperHostCastPreview();
+      return;
+    }
+    if (target.closest('[id^="t-"]')) {
+      noteWallpaperHostCastPreview();
+    }
+  };
+  ['input', 'change', 'click'].forEach(function (name) {
+    panel.addEventListener(name, onInteraction, true);
+  });
+}
+
+/* 真正的「不渲染」判据：壁纸模式 + 主窗口 + 没在预览。
+ * 主循环与渲染器尺寸都读这一条，避免两处判据打架（面板开着预览时不能缩成 4×4）。 */
+function isWallpaperHostCastRenderSuppressed() {
+  if (typeof isWallpaperHostCastMode !== 'function' || !isWallpaperHostCastMode()) return false;
+  return !wallpaperHostCastPreviewRequested();
+}
+
+/* 主窗口「只控不渲染」态的呈现开关。
+ * class 给 CSS（wallpaper-stage.css 摘掉画布/歌词/背景特效，露出提示卡）；
+ * 翻转时把渲染器缩到 4×4 —— 画面已经在桌面效果层里，播放器这张 canvas 不再需要像素。
+ * 只在状态变化时做重活，每帧/每次面板回填调用都安全。 */
+function syncWallpaperHostCastPresentation() {
+  var applied = typeof isWallpaperHostCastRenderSuppressed === 'function' && isWallpaperHostCastRenderSuppressed();
+  if (document.body) document.body.classList.toggle('wallpaper-host-cast', applied);
+  if (applied === wallpaperHostCastLast) return applied;
+  wallpaperHostCastLast = applied;
+  if (typeof applyRendererPowerMode === 'function') {
+    try { applyRendererPowerMode(); } catch (_) {}
+  }
+  /* 切到只控不渲染时补拍一次玻璃镜面：渲染器已经缩到 4×4，这一拍得到的是
+   * 一张近似纯色的底，底部控制条的玻璃不会永远冻在最后一帧粒子上。
+   * 之后每帧的镜面更新被主循环跳过（省掉一次全屏 GPU 回读）。 */
+  if (applied) {
+    /* 背景层被 CSS 摘掉，但自定义背景视频仍会继续解码 —— 顺手停掉。 */
+    var castBgVideo = document.getElementById('custom-bg-video');
+    if (castBgVideo) { try { castBgVideo.pause(); } catch (_) {} }
+  } else if (typeof applyCustomBackground === 'function') {
+    /* 退出只控态：把背景视频/图片重新按用户设置应用一次（幂等）。 */
+    try { applyCustomBackground(); } catch (_) {}
+  }
+  if (applied && typeof updateLiquidGlassBackdropMirror === 'function') {
+    try { updateLiquidGlassBackdropMirror(); } catch (_) {}
+  }
+  return applied;
+}
+
 function syncDesktopWallpaperBodyClasses(status, enabled, interactive) {
   status = status || desktopWallpaperRuntimeState || {};
-  enabled = enabled === true;
-  interactive = enabled && interactive === true;
-  var explorerLayeredColorkey = enabled && desktopUsesLayeredExplorerColorkey(status);
-  var iconsHidden = enabled && !desktopIconsAreVisible(status);
-  document.documentElement.classList.toggle('desktop-explorer-layered-colorkey-root', explorerLayeredColorkey);
-  document.body.classList.toggle('desktop-wallpaper-mode', enabled);
-  document.body.classList.toggle('desktop-wallpaper-interactive', interactive);
-  document.body.classList.toggle('desktop-explorer-layered-colorkey', explorerLayeredColorkey);
-  document.body.classList.toggle('desktop-software-locked', interactive && status.softwareInteractionLocked === true);
-  document.body.classList.toggle('desktop-icons-hidden', iconsHidden);
-  if (!interactive) {
+  /* 壁纸模式不再改主窗口的任何呈现：效果是另一张透明窗口（桌面效果层）。
+   * 这里只负责把旧版本可能留在 body 上的 class 清干净 —— 升级后第一帧如果还带着
+   * desktop-wallpaper-mode，玻璃圆角与控制条显隐会被按「挂在桌面上」的规则改掉。 */
+  document.documentElement.classList.remove('desktop-explorer-layered-colorkey-root');
+  document.body.classList.remove('desktop-wallpaper-mode');
+  document.body.classList.remove('desktop-wallpaper-interactive');
+  document.body.classList.remove('desktop-explorer-layered-colorkey');
+  document.body.classList.remove('desktop-software-locked');
+  document.body.classList.remove('desktop-icons-hidden');
+  if (interactive !== true) {
     setDesktopModeControlsOpen(false);
     setDesktopModeControlPeek(false);
   }
@@ -1255,6 +1353,10 @@ function ensureDesktopWallpaperFunctionalUi(reason) {
     || !body.classList.contains('desktop-wallpaper-interactive')) return false;
 
   releaseDesktopWallpaperStartupVisibilityGate();
+  /* 壁纸模式现在只留舞台（粒子 + 歌词 / 仅 Folia 歌词），播放器面板与底部控制条
+   * 按设计全部隐藏（css/10-shell/wallpaper-stage.css）。这里不能再把它们「拉起来」，
+   * 否则每 320ms 的健康巡检会跟 CSS 对着改内联样式。开屏门闩上面已经放开，不欠什么。 */
+  if (typeof wallpaperStageOnly === 'function' && wallpaperStageOnly()) return true;
   if (typeof immersiveMode !== 'undefined' && immersiveMode
     && typeof setImmersiveMode === 'function') {
     setImmersiveMode(false);
@@ -1314,6 +1416,19 @@ function revealDesktopWallpaperUiOnActivation(enabled, interactive) {
   // throttled first paint. Reassert the actual functional surface on every
   // active status, not only on the first false -> true edge.
   ensureDesktopWallpaperFunctionalUi('runtime-status');
+  /* 只留舞台的壁纸模式没有可操作的表面：不再弹控制器、不再 hold 底部控制条、
+   * 不再打断沉浸模式。这里把「HUD 预热」相关的残留清干净就返回。 */
+  if (typeof wallpaperStageOnly === 'function' && wallpaperStageOnly()) {
+    if (desktopWallpaperHudPrimeTimer) {
+      clearTimeout(desktopWallpaperHudPrimeTimer);
+      desktopWallpaperHudPrimeTimer = 0;
+    }
+    if (document.body) document.body.classList.remove('desktop-wallpaper-hud-prime');
+    if (typeof controlsRevealHoldUntil !== 'undefined') controlsRevealHoldUntil = 0;
+    setDesktopModeControlsOpen(false);
+    setDesktopModeControlPeek(false);
+    return false;
+  }
   if (wasActive) return false;
 
   setDesktopModeControlPeek(true);
@@ -1388,6 +1503,23 @@ function applyDesktopWallpaperRuntimeStatus(payload) {
     fx.wallpaperMode = nextEnabled;
     updateFxInputs();
   }
+  /* 从主进程那侧来的状态（托盘退出 / 效果层渲染崩溃 / 重开）也要把只控不渲染态同步掉：
+   * 上面那条只在值变化时走，值没变时（例如重建窗口）这里兜底。 */
+  if (typeof syncWallpaperHostCastPresentation === 'function') {
+    try { syncWallpaperHostCastPresentation(); } catch (_) {}
+  }
+  /* 回落必须可见：原生脚本没把效果层压到最底时，它是「浮在所有窗口之上但鼠标穿透」，
+   * 画面会盖住整个屏幕。状态里 zOrder='none' 只在真实失败后写入，这里提示一次。 */
+  if (nextEnabled && status.zOrder === 'none' && !desktopWallpaperZOrderWarned) {
+    desktopWallpaperZOrderWarned = true;
+    if (typeof showToast === 'function') showToast('桌面效果层未能置于最底层，可能盖住其他窗口');
+  }
+  if (!nextEnabled) desktopWallpaperZOrderWarned = false;
+  /* 主窗口从不进入舞台态，这段只剩「把旧版本可能留在 DOM 上的痕迹清掉」。
+   * 从主进程那侧退出的（托盘 / 效果层渲染崩溃）也会走到这里。 */
+  if (!nextEnabled && typeof syncWallpaperStagePresentation === 'function') {
+    try { syncWallpaperStagePresentation(); } catch (_) {}
+  }
   if (desktopWindowState && typeof desktopWindowState === 'object') {
     desktopWindowState.isDesktopEmbedded = nextEnabled;
     desktopWindowState.isDesktopInteractive = nextEnabled && status.interactive === true;
@@ -1421,6 +1553,11 @@ function desktopWallpaperErrorLabel(error) {
   if (code.indexOf('DESKTOP_MODE_DETACH') >= 0 || code.indexOf('FULL_DESKTOP_DETACH') >= 0) return '主窗口恢复失败';
   return '无法进入完整桌面模式';
 }
+/* 效果层页面不需要任何「怎么出去」的提示：它没有可交互表面，
+ * 退出开关在播放器窗口里。这里保留一个空实现，避免旧的启动分支引用出错。 */
+function maybeShowWallpaperStageBootToast() {
+  return false;
+}
 function initDesktopWallpaperRuntimeBridge(api) {
   if (!api) return;
   if (typeof api.onWallpaperModeState === 'function' && !desktopWallpaperStatusUnsubscribe) {
@@ -1430,26 +1567,32 @@ function initDesktopWallpaperRuntimeBridge(api) {
       desktopWallpaperStatusUnsubscribe = null;
     }
   }
+  /* 壁纸模式切换会销毁重建窗口 → 这一页是被重建出来的，进来时已经不弹「已开启」了
+   * （发起切换的那一页已经被销毁，它的 then 永远等不到）。所以提示要在这一页补上。 */
+  if (typeof api.onPlaybackSnapshotFlushRequest === 'function' && !desktopPlaybackSnapshotFlushBound) {
+    desktopPlaybackSnapshotFlushBound = true;
+    try {
+      api.onPlaybackSnapshotFlushRequest(function () {
+        // 重建前主进程喊一声：立刻把当前进度写进 localStorage，否则接回来会倒退几秒
+        if (typeof savePlaybackSession === 'function') savePlaybackSession(true);
+      });
+    } catch (_) {}
+  }
   if (typeof api.getWallpaperModeStatus === 'function') {
     Promise.resolve().then(function () {
       return api.getWallpaperModeStatus();
-    }).then(applyDesktopWallpaperRuntimeStatus).catch(function () { });
+    }).then(function (result) {
+      applyDesktopWallpaperRuntimeStatus(result);
+      maybeShowWallpaperStageBootToast(result);
+    }).catch(function () { });
   }
-  // 完整桌面模式没有实体窗口边框可点，Esc 是约定的退出方式（软件锁打开时除外）
-  if (!desktopWallpaperEscapeBound) {
-    desktopWallpaperEscapeBound = true;
-    window.addEventListener('keydown', function (event) {
-      if (event.key !== 'Escape') return;
-      var status = desktopWallpaperRuntimeState || {};
-      if (status.enabled !== true && status.active !== true) return;
-      if (status.softwareInteractionLocked === true) return;
-      if (fx.wallpaperMode) {
-        fx.wallpaperMode = false;
-        if (typeof saveLyricLayout === 'function') saveLyricLayout();
-      }
-      applyWallpaperModeState(true);
-    }, true);
-  }
+  /* 视觉控制台的控件交互会临时恢复 1.2s 预览（见 noteWallpaperHostCastPreview）。
+   * 只绑一次；面板是静态 DOM，不存在重建。 */
+  bindWallpaperHostCastPanel();
+  syncWallpaperHostCastPresentation();
+  /* 2026-11-21 用户定案：取消「双击 Esc 退出壁纸模式」。
+   * 壁纸模式现在是另一张桌面效果层窗口，主窗口一直可用，退出就是再点一次开关；
+   * 这里不再拦截 Esc，Esc 回到它本来的语义（关弹层 / 退出全屏 / 取消输入）。 */
 }
 function pushDesktopLyricsState(force) {
   var api = getDesktopWindowApi();
@@ -1510,6 +1653,40 @@ function pushWallpaperState(force) {
 }
 function applyWallpaperModeState(force) {
   if (typeof updateWallpaperPanelVisibility === 'function') updateWallpaperPanelVisibility();
+  /* toggleFx 已经先把 fx.wallpaperMode 翻过来了；这里第一时间把主窗口的只控不渲染态
+   * 跟上（class + 渲染器尺寸），不依赖后面那条异步 setWallpaperMode 的返回。 */
+  if (typeof syncWallpaperHostCastPresentation === 'function') {
+    try { syncWallpaperHostCastPresentation(); } catch (_) {}
+  }
+  /* 壁纸模式要开了，而当前 Folia 样式是整屏场景（花火/町景/雾笺/凝彩）：
+   * 先切回流光，避免桌面立刻被一整块不透明场景盖住。 */
+  if (fx.wallpaperMode === true && typeof foliaWorld !== 'undefined' && foliaWorld
+      && typeof FOLIA_WALLPAPER_BLOCKED_MODES !== 'undefined'
+      && FOLIA_WALLPAPER_BLOCKED_MODES.indexOf(String(foliaWorld.mode || '')) >= 0) {
+    try { foliaWorldSetMode('classic'); } catch (_) {}
+    if (typeof showToast === 'function') showToast('壁纸模式下已切回流光');
+  }
+  /* 壁纸模式要开了，而当前是经典预设（index 11）：经典是一整套 DOM 播放器界面，
+   * 桌面效果层同步也会跳过它（STAGE_PRESET_SKIP_INDICES）。先切回默认预设，
+   * 再把预设卡置灰；否则桌面会停在「上一个可显示预设」，主窗口还留着经典界面。 */
+  if (fx.wallpaperMode === true
+      && typeof CLASSIC_PRESET_INDEX !== 'undefined'
+      && Number(fx.preset) === CLASSIC_PRESET_INDEX) {
+    try { setPreset(0, { silent: true, preserveCamera: true }); } catch (_) {}
+    if (typeof showToast === 'function') showToast('壁纸模式下不可用经典预设，已切回默认');
+  }
+  /* 预设卡要立刻反映「壁纸模式下经典禁用」的新状态。 */
+  if (typeof refreshPresetGrid === 'function') {
+    try { refreshPresetGrid(); } catch (_) {}
+  }
+  /* 面板里的样式卡片要立刻反映「壁纸模式下禁用」的新状态。
+   * refreshFoliaWorldUi 只在 Folia 激活时重建网格，未激活时直接建一次，否则卡片停在旧状态。 */
+  if (typeof foliaWorldBuildModeGrid === 'function') {
+    try { foliaWorldBuildModeGrid(); } catch (_) {}
+  }
+  if (typeof refreshFoliaWorldUi === 'function') {
+    try { refreshFoliaWorldUi(); } catch (_) {}
+  }
   var api = getDesktopWindowApi();
   if (!api) {
     fx.wallpaperMode = false;
@@ -1520,6 +1697,8 @@ function applyWallpaperModeState(force) {
   var payload = wallpaperPayload();
   if (typeof api.setWallpaperMode !== 'function') return Promise.resolve({ ok: false, enabled: false, error: 'WALLPAPER_DESKTOP_API_UNAVAILABLE' });
   var operation = ++desktopWallpaperRendererOperation;
+  /* 主窗口不再切「只留舞台」：壁纸模式的画面在另一张透明窗口里，
+   * 这里只是通知主进程开/关那张窗口。主窗口从头到尾保持可用。 */
   if (payload.enabled) {
     desktopWallpaperRuntimeState = Object.assign({}, desktopWallpaperRuntimeState, { attaching: true, enabled: true, lastError: '' });
     updateDesktopWallpaperRuntimeControls(desktopWallpaperRuntimeState);
@@ -1534,13 +1713,10 @@ function applyWallpaperModeState(force) {
       fx.wallpaperMode = result.ok === true && result.enabled === true;
       updateFxInputs();
     }
-    /* 挂上桌面后给一句明确的「怎么出来」：纯壁纸模式下窗口被压在桌面图标层下面，
-     * 点不到、任务栏没有条目、也拿不到键盘焦点（setFocusable(false)），所以不能写「按 Esc」。 */
+    /* 开启后给一句明确的说明。效果层在桌面上、播放器窗口与任务栏都还在，
+     * 退出就是再点一次这个开关（托盘菜单里也有同一个入口）。 */
     if (result.ok === true && payload.enabled && typeof showToast === 'function') {
-      var appliedStatus = result.status && typeof result.status === 'object' ? result.status : {};
-      showToast(appliedStatus.interactive === true
-        ? '壁纸模式已开启，右上角控制器可调整'
-        : 'Mineradio 已作为桌面壁纸运行 · 点托盘图标即可切回窗口');
+      showToast('壁纸模式已开启 · 再点一次开关即可关闭');
     }
     if (result.ok !== true) {
       var failedStatus = result.status && typeof result.status === 'object' ? result.status : {};
@@ -1566,6 +1742,9 @@ function applyWallpaperModeState(force) {
   });
 }
 function syncDesktopOverlayState() {
+  /* 效果层只接收状态，不往主进程推：它的 IPC 来源不是主窗口，推过去也只会被拒；
+   * 更糟的是会每 320ms 白跑一轮序列化。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
   if (fx.desktopLyrics) pushDesktopLyricsState(false);
   if (fx.wallpaperMode && typeof pushWallpaperState === 'function') pushWallpaperState(false);
   if (typeof isSonicTopographyPresetActive === 'function' && isSonicTopographyPresetActive() && typeof pushSonicTopographyMediaState === 'function') {

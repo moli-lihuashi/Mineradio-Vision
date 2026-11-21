@@ -1,0 +1,10 @@
+{
+  "folium": 1,
+  "id": "miside-drop",
+  "name": "MiSide 立体掉落歌词",
+  "version": "2.5.3",
+  "author": "baiyangmuzz",
+  "description": "MiSide 风格歌词动画：打字机逐字浮现，整句说完后整行坠落到地面，停留后淡出。带灰阶立体挤出、重力与触地反弹。",
+  "client": "client.mjs",
+  "preview": "preview.jpg"
+}

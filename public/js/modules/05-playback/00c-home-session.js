@@ -581,6 +581,9 @@ function playbackSessionQueueJson() {
   return playbackSessionQueuePayload().json;
 }
 function savePlaybackSession(force) {
+  /* 效果层不写会话：它的进度是主窗口镜像过来的，写回去只会和主窗口抢同一个 key
+   * （两边各自纠偏时会出现「刷新一下倒退几秒」）。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
   if (!force) {
     var now = Date.now();
     if (now - playbackSessionSaveTimer < 4500) return;
@@ -647,10 +650,16 @@ async function applyPlaybackSession(session, opts) {
   if (!opts.force && currentIdx >= 0 && playing) return false;
   // 本地曲目：换回持久化曲库里的 mineradio-local:// 实时地址再恢复
   if (typeof isLocalSessionSong === 'function' && isLocalSessionSong(session.song)) {
-    session = (typeof rehydrateLocalSession === 'function' ? rehydrateLocalSession(session) : null) || session;
-    if (!session || !session.song || !session.song.localUrl) {
-      if (typeof showToast === 'function') showToast('本地文件已不在曲库中，请重新导入');
-      return false;
+    /* 会话里已经带着实时地址（壁纸效果层由主窗口直接下发本地曲）就不要再查曲库索引：
+     * 那一页的曲库可能还没读完，而地址本身已经可用，强行回填只会把它判成「文件已不在曲库」。 */
+    var liveLocalUrl = String(session.song.localUrl || '');
+    var hasLiveLocalUrl = /^(https?:|mineradio-local:|blob:|file:)/i.test(liveLocalUrl);
+    if (!hasLiveLocalUrl) {
+      session = (typeof rehydrateLocalSession === 'function' ? rehydrateLocalSession(session) : null) || session;
+      if (!session || !session.song || !session.song.localUrl) {
+        if (typeof showToast === 'function') showToast('本地文件已不在曲库中，请重新导入');
+        return false;
+      }
     }
   }
   var restored = restoreQueueFromSession(session);
@@ -668,7 +677,9 @@ async function applyPlaybackSession(session, opts) {
       holdPaused: opts.holdPaused != null ? opts.holdPaused : true
     });
     if (typeof session.visualPreset === 'number' && typeof setPreset === 'function') {
-      try { setPreset(session.visualPreset, { skipTransition: true, preserveCamera: true }); } catch (_) {}
+      /* silent 跟随调用方：桌面效果层用 applyPlaybackSession 恢复会话时，
+       * setPreset 默认的「视觉预设: xxx」提示会浮在桌面上。 */
+      try { setPreset(session.visualPreset, { skipTransition: true, preserveCamera: true, silent: opts.silent === true }); } catch (_) {}
     }
     if (opts.toast !== false) showToast(continueResumeToastText(session));
     syncContinueCard();
@@ -693,8 +704,12 @@ function maybeRestorePlaybackSessionAfterLogin() {
 }
 function maybeRestorePlaybackSessionOnStartup() {
   if (readPlaybackSession()) syncContinueCardFromSession();
-  // 启动自动播放偏好开启时，恢复上次播放的队列 / 当前曲 / 进度，并按需触发自动播放重试
-  if (startupAutoplayPreference && typeof restoreLastPlaybackSnapshot === 'function') {
+  /* startupAutoplayActive() = 用户开了「启动自动播放」**或**本次是壁纸模式重建窗口的续播
+   * （?wallpaper=1&resume=1）。后者必须恢复，否则重建出来的壁纸页面是空舞台，一首歌都没有。 */
+  var wantRestore = typeof startupAutoplayActive === 'function'
+    ? startupAutoplayActive()
+    : !!startupAutoplayPreference;
+  if (wantRestore && typeof restoreLastPlaybackSnapshot === 'function') {
     restoreLastPlaybackSnapshot();
   }
 }

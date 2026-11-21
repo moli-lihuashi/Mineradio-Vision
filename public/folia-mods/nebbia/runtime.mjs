@@ -74,7 +74,14 @@ export class NebbiaRuntime {
 
     host.appendChild(this.canvas);
     try {
-      this.gl = new NebbiaGl(this.canvas, false, 'night', 'rain');
+      /* 壁纸效果层（?stage=1）走 seeThrough：画布 alpha:true，着色器跳过夜景/楼群/雾，
+       * 只留玻璃上的水珠与笔迹 —— 桌面壁纸从玻璃后面透出来。
+       * 播放器里保持 false：那是「雨夜车窗」这一整套场景，不能少。 */
+      var stageSeeThrough = (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true);
+      this.gl = new NebbiaGl(this.canvas, stageSeeThrough, 'night', 'rain');
+      /* 桌面上的雾要是白雾：seeThrough 分支直接用 uMistTint 当雾色，
+       * 默认是夜里的近黑色（[0.07,0.08,0.1]），铺在桌面上就是一整块黑纱。 */
+      if (stageSeeThrough) this.gl.mistTint = [0.94, 0.96, 0.98];
       this.gl.onSpriteReady = () => this.requestFrame();
       this.onLost = (e) => { e.preventDefault(); cancelAnimationFrame(this.raf); this.dead = true; this.onFailed(); };
       this.canvas.addEventListener('webglcontextlost', this.onLost);

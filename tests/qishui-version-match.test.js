@@ -330,16 +330,13 @@ test('点歌入口传 userPick，失败路径都让路', () => {
   const listMgr = fs.readFileSync(path.join(appRoot, 'public/js/modules/04-shelf/03-content-list-manager.js'), 'utf8');
   const shelfMgr = fs.readFileSync(path.join(appRoot, 'public/js/modules/04-shelf/00c-shelf-manager.js'), 'utf8');
   const startAudio = fs.readFileSync(path.join(appRoot, 'public/js/modules/05-playback/13-playback-start-audio.js'), 'utf8');
-  const core = fs.readFileSync(path.join(appRoot, 'public/js/modules/05-playback/09b-playback-core.js'), 'utf8');
 
   assert.match(listMgr, /playQueueAt\(playIndex, \{[^}]*userPick: true/, '歌单列表点行必须带 userPick');
   assert.match(shelfMgr, /playQueueAt\(action\.index, \{ userPick: true \}\)/, '歌单架队列卡片必须带 userPick');
   assert.ok(!/playQueueAt\(action\.index\);/.test(shelfMgr), '仍有入口漏传 userPick');
-  [startAudio, core].forEach((src, i) => {
-    const name = i === 0 ? '13-playback-start-audio' : '09b-playback-core';
-    assert.match(src, /!opts\.manual && !opts\.userPick && playQueue\.length > 1/, name + ' 的自动跳歌必须让路用户点选');
-    assert.ok(!/!opts\.manual && playQueue\.length > 1/.test(src), name + ' 仍有未加 userPick 守卫的跳歌');
-  });
+  // 09b-playback-core.js 是与 13 重复的未加载旧副本（已删除）；只断言运行时生效的实现
+  assert.match(startAudio, /!opts\.manual && !opts\.userPick && playQueue\.length > 1/, '13-playback-start-audio 的自动跳歌必须让路用户点选');
+  assert.ok(!/!opts\.manual && playQueue\.length > 1/.test(startAudio), '13-playback-start-audio 仍有未加 userPick 守卫的跳歌');
   assert.match(source, /if \(opts\.userPick\) \{/, '换源无果时要按 userPick 分支停住');
   assert.match(source, /userPick: !!!?\(opts && opts\.userPick\)|userPick: !!(opts && opts\.userPick)/, 'skipOpts 必须透传 userPick');
 });

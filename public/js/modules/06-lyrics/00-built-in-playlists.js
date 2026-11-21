@@ -57,6 +57,8 @@ function builtInPlaylistErrorMessage(result, fallback) {
 }
 
 function refreshBuiltInPlaylists(force) {
+  /* 效果层只画粒子/歌词，不需要歌单；而且它的 IPC 来源不是主窗口，调了只会被拒。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return Promise.resolve(false);
   if (!builtInPlaylistApiAvailable()) return Promise.resolve(false);
   if (builtInPlaylistLoadPromise && !force) return builtInPlaylistLoadPromise;
   var request = window.desktopWindow.listBuiltInPlaylists().then(function (result) {

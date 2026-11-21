@@ -196,9 +196,18 @@ module.exports = function createHttpServer(deps) {
       return;
     }
 
+    /* 判据必须是「响应是否已经被这个 matcher 占住」，不是「是否已 end」。
+     *
+     * 只看 writableEnded 会漏掉一类**已经开始写出、但客户端中途断开**的响应：
+     * 流式代理（/api/audio、/api/cover）在 pipeline 里把 ERR_STREAM_PREMATURE_CLOSE
+     * 当成「客户端走了」正常 resolve，那条路径不会再调 end()，于是
+     * headersSent=true / writableEnded=false —— 分发器以为没人处理，继续往下掉到
+     * 静态资源处理器，对同一个 res 再 writeHead(404)，抛 ERR_HTTP_HEADERS_SENT。
+     * 实测触发方式：壁纸模式重建窗口 → 旧渲染进程 destroy → 在途音频流中断 → 崩主进程。
+     * headersSent 一旦为真，这个 res 就归该 matcher 了，后续谁都不要再碰。 */
     for (const matcher of routeMatchers) {
       await matcher(req, res, url, pn);
-      if (res.writableEnded) return;
+      if (res.writableEnded || res.headersSent || res.destroyed) return;
     }
 
     // ---------- 歌词着色器市场 ----------
@@ -243,6 +252,17 @@ module.exports = function createHttpServer(deps) {
     // ---------- 汉字笔顺（同源，给雾笺 / 雾窗取 hanzi-writer medians）----------
     if (pn.startsWith(HANZI_PREFIX)) {
       await serveHanziStrokes(res, pn.slice(HANZI_PREFIX.length));
+      return;
+    }
+
+    /* ---------- /api/* 必须在这里收口，绝不允许掉到静态资源处理器 ----------
+     * 静态资源处理器对不存在文件的处理是「writeHead(404)」，而走到这里时 res 可能
+     * 已经发过头（见上面 matcher 循环的注释）—— 那就是一次 ERR_HTTP_HEADERS_SENT，
+     * 且抛在 fs 回调里、绕过本轮 try/catch，直接变进程级 uncaughtException。
+     * /api/ 下没有对应的物理文件，往下掉一百次错一百次，所以在这里终止。 */
+    if (pn.startsWith('/api/') || pn === '/api') {
+      if (res.headersSent || res.writableEnded || res.destroyed) return;
+      sendJSON(res, { error: 'NOT_FOUND', path: pn }, 404);
       return;
     }
 

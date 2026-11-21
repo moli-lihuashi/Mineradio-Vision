@@ -129,6 +129,9 @@ async function restorePersistedLocalLibrary() {
     return copy;
   }).filter(function (song) { return song && song.localUrl && song.localKey; });
   persistentLocalLibraryTracks = tracks.map(cloneSong);
+  /* 效果层只需要曲库索引（本地曲的实时 mineradio-local:// 地址由它回填），
+   * 绝不能在这里抢播放：起播由主窗口下发的会话决定。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return false;
   var session = typeof readPlaybackSession === 'function' ? readPlaybackSession() : null;
   if (!session || !session.song || !isLocalSessionSong(session.song)) return false;
   if (typeof restoredLastPlaybackSnapshot !== 'undefined' && restoredLastPlaybackSnapshot) return false;

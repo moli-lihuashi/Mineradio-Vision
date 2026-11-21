@@ -78,6 +78,8 @@ public static class MineradioFullDesktopNative {
   [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern IntPtr SetWindowLong32(IntPtr hWnd, int index, IntPtr value);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
   [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
+  [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
+  [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool RedrawWindow(IntPtr hWnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
   public static IntPtr GetWindowLongPtr(IntPtr hWnd, int index) { return IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, index) : GetWindowLong32(hWnd, index); }
   public static IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value) { return IntPtr.Size == 8 ? SetWindowLongPtr64(hWnd, index, value) : SetWindowLong32(hWnd, index, value); }
 }
@@ -88,6 +90,8 @@ try {
   try { $previousDpiContext = [MineradioFullDesktopNative]::SetThreadDpiAwarenessContext([IntPtr]::new([Int64]-4)) } catch { }
   $target = [IntPtr]::new([Int64]${hwnd})
   if (-not [MineradioFullDesktopNative]::IsWindow($target)) { throw "FULL_DESKTOP_TARGET_NOT_FOUND" }
+  # 摘之前先把宿主记下来：SetParent(NULL) 之后就拿不到它了，而它正是要重绘的那块桌面。
+  $oldParent = [MineradioFullDesktopNative]::GetParent($target)
   [MineradioFullDesktopNative]::SetParent($target, [IntPtr]::Zero) | Out-Null
   $GWL_STYLE = -16
   $WS_POPUP = [Int64]0x80000000
@@ -119,6 +123,18 @@ try {
     [MineradioFullDesktopNative]::SetWindowLongPtr($target, $GWL_EXSTYLE, [IntPtr]::new([Int64]$restoreExStyle)) | Out-Null
   }
   if (-not [MineradioFullDesktopNative]::SetWindowPos($target, [IntPtr]::Zero, ${x}, ${y}, ${width}, ${height}, 0x0030)) { throw "FULL_DESKTOP_POSITION_FAILED" }
+  # 宿主 WorkerW 在子窗口离开后不会自己重绘：那块区域会停在最后一帧，或者退回灰色空表面。
+  # 上游 Folia 的 detach 同样做这一步（InvalidateRect(WorkerW) 兜底），否则退出壁纸模式后
+  # 桌面是脏的 —— 而我们现在退出时还会直接销毁窗口，脏东西就永久留在那儿了。
+  if ($oldParent -ne [IntPtr]::Zero) {
+    try {
+      if ([MineradioFullDesktopNative]::IsWindow($oldParent)) {
+        [MineradioFullDesktopNative]::InvalidateRect($oldParent, [IntPtr]::Zero, $true) | Out-Null
+        # RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW
+        [MineradioFullDesktopNative]::RedrawWindow($oldParent, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
+      }
+    } catch { }
+  }
   $rect = New-Object MineradioFullDesktopNative+RECT
   if (-not [MineradioFullDesktopNative]::GetWindowRect($target, [ref]$rect)) { throw "FULL_DESKTOP_BOUNDS_ACK_FAILED" }
   $actualWidth = $rect.Right - $rect.Left

@@ -198,6 +198,10 @@
     // shell：overlay 须在 splash-and-boot 之前（boot 会同步调用 applyDesktopLyricsState 等）
     'js/modules/10-shell/00-gesture-resize-ui.js',
     'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
+    // 壁纸模式只留舞台：盯 body 的 class 推 wallpaper-stage[-folia]，04 会调它的判定函数
+    'js/modules/10-shell/08-wallpaper-stage.js',
+    // 壁纸模式的播放镜像：主窗口每秒下发「同一首歌同一秒」，效果层按 full/pulse 跟随
+    'js/modules/10-shell/09-wallpaper-stage-sync.js',
     'js/modules/10-shell/01-splash-and-boot.js',
     'js/modules/10-shell/05-startup-bindings.js',
     'js/modules/10-shell/05-diagnostics.js',

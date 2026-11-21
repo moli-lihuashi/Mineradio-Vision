@@ -235,6 +235,9 @@ function applyClassicPresetState(active) {
       setParticleLyricsSilently(true);
     }
     classicPlayer.restoreParticleLyrics = false;
+    /* 退出经典预设：黑胶已经不可见，别让它的唱片动画继续空转。 */
+    el.classList.remove('cp-playing');
+    classicPlayer._vinylPlaying = false;
     updatePlayerQuickMenuUi();
   }
 }
@@ -257,6 +260,18 @@ function updateClassicPlayerSong() {
     var song = playQueue && currentIdx >= 0 ? playQueue[currentIdx] : null;
     albumEl.textContent = (song && song.album) || '';
   }
+  updateClassicPlayerVinylState();
+}
+
+/* 黑胶播放态：只切一个 class，转动/停转与唱臂落下/抬起全交给 CSS。
+ * 每帧调用也只是一次布尔比较，状态没变不写 DOM。 */
+function updateClassicPlayerVinylState() {
+  if (!_cpPlayerEl) _cpPlayerEl = document.getElementById('classic-player');
+  if (!_cpPlayerEl) return;
+  var spinning = !!playing && !!(audio && !audio.paused);
+  if (classicPlayer._vinylPlaying === spinning) return;
+  classicPlayer._vinylPlaying = spinning;
+  _cpPlayerEl.classList.toggle('cp-playing', spinning);
 }
 function renderClassicPlayerLyrics() {
   var container = document.getElementById('cp-lyrics');
@@ -343,6 +358,7 @@ function updateClassicKaraokeProgress(lineEl, line, nextLine, now) {
 }
 function updateClassicPlayerLyrics() {
   if (!classicPlayer.active) return;
+  updateClassicPlayerVinylState();
   // 缓存容器元素，避免每帧 getElementById
   if (!_cpLyricsContainer) _cpLyricsContainer = document.getElementById('cp-lyrics');
   var container = _cpLyricsContainer;

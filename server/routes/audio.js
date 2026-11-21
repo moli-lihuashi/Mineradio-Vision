@@ -40,7 +40,17 @@ function pipeWebBodyToRes(res, webBody) {
         || err.code === 'ERR_STREAM_DESTROYED'
         || err.code === 'EPIPE'
         || err.code === 'ECONNRESET';
-      if (clientGone) { resolve(); return; }
+      /* 客户端走了这条路径**必须**把 res 收尾成 destroyed。
+       * 只 resolve 而不动 res，会留下 headersSent=true / writableEnded=false 的响应：
+       * 分发器靠 writableEnded 判断「matcher 处理完了」，于是继续往下掉到静态资源
+       * 处理器，对同一个 res 再 writeHead(404) → ERR_HTTP_HEADERS_SENT，抛在 fs 回调里
+       * 变进程级未捕获异常。实测触发：壁纸模式重建窗口 → 旧渲染进程 destroy →
+       * 在途音频流中断 → 主进程崩溃退出（窗口留下 ERR_CONNECTION_REFUSED）。 */
+      if (clientGone) {
+        try { res.destroy(); } catch (_) {}
+        resolve();
+        return;
+      }
       reject(err);
     });
   });

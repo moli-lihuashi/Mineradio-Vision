@@ -186,6 +186,9 @@ function readSavedLyricLayout() {
   }
 }
 function saveLyricLayout() {
+  /* 效果层不写用户设置：它只是为了跟随主窗口才改了运行时的 fx.wallpaperMode /
+   * preset 等值，落盘会反过来覆盖主窗口的真实设置（尤其是退出瞬间的开关状态）。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
   try {
     var presetForSave = startupVisualPreviewActive && !playing && currentIdx < 0
       ? playbackVisualPreset

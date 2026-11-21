@@ -148,7 +148,12 @@
   } catch (e) { try { console.warn('[EnterStall] install failed:', e); } catch (_) {} }
 })();
 
-document.body.classList.add('splash-active');
+/* 桌面效果层（壁纸模式）不铺开屏：那一页出来就该是舞台，开屏的 logo/笔迹动画
+ * 与「点击进入」都不是它该做的事。不给 body 挂 splash-active，CSS 里那条
+ * `body.splash-active #canvas-container{opacity:.16}` 也就没有机会生效。 */
+if (typeof isWallpaperStagePage !== 'function' || !isWallpaperStagePage()) {
+  document.body.classList.add('splash-active');
+}
 var splashAnimating = true;
 var splashCanvas = null, splashCtx = null;
 var splashW = 0, splashH = 0;
@@ -1299,6 +1304,17 @@ function markSplashReadyToEnter(degradedReason) {
     splashPendingEnter = false;
     requestSplashEnterNow();
   }
+  /* 壁纸「只留舞台」模式没有可点的表面：窗口被 SetParent 进 WorkerW、挂在桌面图标层
+   * 下面且不可聚焦，「点击进入」这个门闩在这里永远等不到那一下点击。
+   * 后果不是「开屏多停一会儿」：body 会一直挂着 splash-active，而
+   *   index.css:208  body.splash-active:not(.splash-revealing) #canvas-container{opacity:.16}
+   * 把整个粒子+歌词画布压到 16% 不透明度 —— 桌面上就是「粒子几乎看不见、完全没有歌词」。
+   * 所以这条路径必须自己松闩，不能等人点。dismissSplash 自己带 exiting/hide 重入保护。 */
+  if (typeof isWallpaperStageMode === 'function' && isWallpaperStageMode()) {
+    setTimeout(function () {
+      try { dismissSplash(); } catch (e) { console.warn('[splash] stage auto-dismiss failed:', e); }
+    }, reduceSplashMotion ? 60 : 360);
+  }
 }
 
 function requestSplashEnterNow() {
@@ -1376,6 +1392,12 @@ document.addEventListener('keydown', function (e) {
 
 function initSplashDomBindings() {
   var s = document.getElementById('splash');
+  /* 效果层没有开屏：不排计时器、不播开屏音效、不预热门页快照。
+   * 这段里每一样都会碰 DOM/音频，在桌面背景页上既没意义又会拖慢首帧。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) {
+    if (s) s.classList.add('splash-skipped');
+    return;
+  }
   // 顺序很关键：先定「开屏计时起点」并把最短时长的计时器排上，再去碰任何可能抛错的初始化。
   // 反过来（原来是 paintHomeLocalSnapshot() 在最前）时，前面任何一次抛错都会让后面所有语句
   // 都不执行 —— 计时器排不上，开屏就永远停在 100%。
@@ -1524,8 +1546,12 @@ scheduleStartupSceneCompile();
 applyUserCapsuleAutoHideState();
 applyFxFabAutoHideState();
 applyControlsAutoHidePreference();
-applyDesktopLyricsState(false);
-applyWallpaperModeState(false);
+/* 效果层不碰这两个开关：它们都会经 IPC 去改主进程里的窗口/状态，
+ * 而这一页只是「跟着主窗口放的歌画粒子/歌词」。 */
+if (typeof isWallpaperStagePage !== 'function' || !isWallpaperStagePage()) {
+  applyDesktopLyricsState(false);
+  applyWallpaperModeState(false);
+}
 setShelfMode(fx.shelf);
 applyStartupStarfieldPreset();
 applyPlaylistPanelPinState(false);
@@ -1546,6 +1572,12 @@ initIdleGuideCanvas();
 // 主波 boot 主路径跑完：若已过最短 splash 时长则立刻可点进（不再干等 4s）
 try { tryMarkSplashReadyFromBoot(); } catch (_) {}
 function bootstrapStartupLoginStatus() {
+  /* 效果层只负责画：登录状态刷新会打平台接口、还可能轮换票据；
+   * 内置歌单/本地曲库/会话恢复同理，一律不做（主窗口已经在做，这一页只跟随它）。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) {
+    startupLoginStatusPromise = Promise.resolve(null);
+    return startupLoginStatusPromise;
+  }
   startupLoginStatusPromise = Promise.all([
     typeof refreshLoginStatus === 'function' ? refreshLoginStatus() : Promise.resolve(null),
     typeof refreshQQLoginStatus === 'function' ? refreshQQLoginStatus({ forceVip: true, reason: 'startup' }) : Promise.resolve(null),
@@ -1593,13 +1625,20 @@ function handleStartupLoginReady() {
   else if (homeShown) renderHomeDiscover();
 }
 bootstrapStartupLoginStatus();
-startQQLoginStatusAutoRefresh();
-if (typeof startKugouLoginStatusAutoRefresh === 'function') startKugouLoginStatusAutoRefresh();
-if (typeof startQishuiLoginStatusAutoRefresh === 'function') startQishuiLoginStatusAutoRefresh();
-if (typeof startSpotifyLoginStatusAutoRefresh === 'function') startSpotifyLoginStatusAutoRefresh();
+if (typeof isWallpaperStagePage !== 'function' || !isWallpaperStagePage()) {
+  startQQLoginStatusAutoRefresh();
+  if (typeof startKugouLoginStatusAutoRefresh === 'function') startKugouLoginStatusAutoRefresh();
+  if (typeof startQishuiLoginStatusAutoRefresh === 'function') startQishuiLoginStatusAutoRefresh();
+  if (typeof startSpotifyLoginStatusAutoRefresh === 'function') startSpotifyLoginStatusAutoRefresh();
+}
 if (startupLoginStatusPromise && startupLoginStatusPromise.then) {
-  startupLoginStatusPromise.then(handleStartupLoginReady).catch(function(e){
+  startupLoginStatusPromise.then(function () {
+    /* 效果层的启动不跑 home 恢复/自动续播：它自己按主窗口下发的会话起播。 */
+    if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
+    return handleStartupLoginReady();
+  }).catch(function(e){
     console.warn('[StartupLogin]', e);
+    if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
     handleStartupLoginReady();
   });
 }

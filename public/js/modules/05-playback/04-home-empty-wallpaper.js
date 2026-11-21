@@ -5,6 +5,9 @@
 function shouldShowEmptyHomeCore(ignoreSplash) {
   if (!ignoreSplash && document.body.classList.contains('splash-active')) return false;
   if (immersiveMode) return false;
+  /* 壁纸「只留舞台」模式桌面上只该有粒子+歌词：空场态会把 empty-home-active 挂到 body 上，
+   * 进而拉起首页壁纸预览/控制条（CSS 虽然藏着，但每次健康巡检、每次 showHome 都要跟它对抗）。 */
+  if (typeof isWallpaperStageMode === 'function' && isWallpaperStageMode()) return false;
   // 经典预设（Preset 11）是纯 DOM 播放器界面，没有 3D 粒子层可被 HOME 叠加。
   // 它激活时若队列为空，HOME 空场态的 `body.empty-home-active` 会经 CSS 把
   // #classic-player 强制 visibility:hidden —— 用户选了经典却看不到封面/歌词。
@@ -27,6 +30,7 @@ function shouldShowEmptyHomeAfterSplash() {
 }
 function shouldForceEmptyHomeAfterSplash() {
   if (immersiveMode) return false;
+  if (typeof isWallpaperStageMode === 'function' && isWallpaperStageMode()) return false;
   if (shelfPinnedOpen) return false;
   if (shelfManager && shelfManager.hasOpenContent && shelfManager.hasOpenContent()) return false;
   if (playQueue && playQueue.length) return false;
@@ -42,6 +46,8 @@ function shouldUseIdleWallpaperPreview(ignoreSplash) {
   // Wallpaper Engine 壁纸激活时背景归它所有：空闲主页预览若接管，
   // 粒子画布（z=2）会盖住壁纸层（z=0）→ 控制台一隐藏就发黑（2026-11-13 实测）
   if (document.body.classList.contains('wallpaper-engine-active')) return false;
+  // 壁纸「只留舞台」模式同理：桌面上只该有粒子+歌词，不能被首页预览接管
+  if (typeof isWallpaperStageMode === 'function' && isWallpaperStageMode()) return false;
   return true;
 }
 function setHomeControlsLocked(locked) {

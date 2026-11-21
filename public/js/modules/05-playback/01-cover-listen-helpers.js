@@ -142,6 +142,9 @@ function listenSongSnapshot(song) {
 }
 function beginListenSession(song, context) {
   if (!song) return;
+  /* 效果层只是「把同一首歌再放一遍（静音）」来驱动粒子/歌词，不是真的在听。
+   * 不挡住的话今日聆听会被双写：两页各自累计一遍时长。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
   var snap = listenSongSnapshot(song);
   if (!snap.key) return;
   if (listenSession && listenSession.key !== snap.key) finalizeListenSession(false);

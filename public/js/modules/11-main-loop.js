@@ -152,6 +152,14 @@ var mainFrameGates = {
   desktopOverlay: createFrameGate('main.desktopOverlay', 12)
 };
 window.__mineradioMainFrameGates = mainFrameGates;
+/* 壁纸模式的整帧节流（判据在 animate 里，间隔在这里算）。0 = 不限速。 */
+var mainLoopWallpaperGateAt = 0;
+function wallpaperStageFrameGapMs() {
+  var fps = Math.round(Number(fx && fx.wallpaperFps) || 60);
+  if (!isFinite(fps) || fps <= 0) fps = 60;
+  if (fps >= 60) return 0;
+  return 1000 / Math.max(1, Math.min(60, fps));
+}
 var mainLoopBackgroundTimer = 0;
 var mainLoopAnimationRequested = false;
 function mainLoopDeepBackgroundSleeping() {
@@ -170,7 +178,35 @@ function requestMainLoopAnimationFrame() {
   mainLoopAnimationRequested = true;
   requestAnimationFrame(animate);
 }
+/* 壁纸模式下主循环改用定时器驱动。
+ *
+ * 为什么：窗口被 SetParent 进 WorkerW 之后，Chromium 不再给它产生正常的 BeginFrame，
+ * requestAnimationFrame 直接掉到 1Hz。同一台机、同一份代码的实测对照：
+ *   普通窗口  rAF 165Hz  setInterval 100Hz   frames 正常
+ *   壁纸模式  rAF 1Hz    setInterval 100Hz   frames 0
+ * 也就是只有「绘制帧」被掐，定时器完全不受影响。主循环原本完全靠 rAF 续帧，
+ * 于是画面每秒只更新一次 —— 用户看到的就是卡顿、粒子几乎不动、歌词出不来。
+ *
+ * 为什么安全：只在壁纸模式下走这条路；animate() 每帧开头都会重新排程，
+ * 退出壁纸模式后判据变 false，自然回到 rAF 路径，不需要任何复位动作。
+ * 与 deep-sleep 那条互斥：deep 已在 isDeepBackgroundMode() 里对壁纸模式豁免。 */
+function mainLoopWallpaperTimerDriven() {
+  return typeof isWallpaperStageMode === 'function' && isWallpaperStageMode() === true;
+}
 function scheduleNextMainLoopFrame() {
+  if (mainLoopWallpaperTimerDriven()) {
+    if (mainLoopAnimationRequested) return;
+    mainLoopAnimationRequested = true;
+    // 按 wallpaperFps 的目标间隔排；60fps 时 wallpaperStageFrameGapMs() 返回 0（表示不限速），
+    // 这里要把它翻译成「60fps 的间隔」，0 不能直接丢给 setTimeout。
+    var gap = wallpaperStageFrameGapMs();
+    if (!(gap > 0)) gap = 1000 / 60;
+    mainLoopBackgroundTimer = setTimeout(function () {
+      mainLoopBackgroundTimer = 0;
+      animate();
+    }, Math.max(8, Math.round(gap)));
+    return;
+  }
   var delay = mainLoopBackgroundDelayMs();
   if (delay > 0) {
     if (mainLoopBackgroundTimer) return;
@@ -358,8 +394,7 @@ function sonicDecayBands(dt) {
 }
 function animate() {
   mainLoopAnimationRequested = false;
-  scheduleNextMainLoopFrame();
-  var now = performance.now();
+  scheduleNextMainLoopFrame();  var now = performance.now();
   if (mainLoopDeepBackgroundSleeping()) {
     var deepDt = Math.min((now - prevTime) / 1000, 0.25);
     prevTime = now;
@@ -371,6 +406,23 @@ function animate() {
       window.__mineradioPerf.count('frame.skipped');
     }
     return;
+  }
+  /* 壁纸模式的帧率必须真的管住画面：这个模式下播放器本体就是桌面上的壁纸，
+   * 而 fx.wallpaperFps 以前只被塞进 wallpaperPayload 给壁纸窗口用，主窗口根本不看，
+   * 视觉控制台里的 24/30/60 等于死开关。这里整帧跳过（与上面自适应跳帧同一条安全路径）：
+   * prevTime 不推进，dt 自然累积成 1/fps，动画速度不失真。60 时 gap 为 0，默认零影响。 */
+  if (fx && fx.wallpaperMode && typeof wallpaperStageOnly === 'function' && wallpaperStageOnly()) {
+    var wallpaperStageGapMs = wallpaperStageFrameGapMs();
+    if (wallpaperStageGapMs > 0 && mainLoopWallpaperGateAt
+      && now - mainLoopWallpaperGateAt < wallpaperStageGapMs - 2) {
+      if (window.__mineradioPerf && typeof window.__mineradioPerf.count === 'function') {
+        window.__mineradioPerf.count('frame.wallpaperSkipped');
+      }
+      return;
+    }
+    mainLoopWallpaperGateAt = now;
+  } else {
+    mainLoopWallpaperGateAt = 0;
   }
   var framePerfStart = performance.now();
   var dt = Math.min((now - prevTime) / 1000, 0.05);
@@ -653,6 +705,15 @@ function animate() {
   if (window.__mineradioPerf && typeof window.__mineradioPerf.markSince === 'function') {
     window.__mineradioPerf.markSince('audio.analysis', audioPerfStart);
   }
+  /* 壁纸模式：画面已经在桌面效果层里画过一遍，主窗口从这里开始只做「音频 + 桌面推送」。
+   * 这一段之后是粒子 uniform、歌词 mesh、Folia 帧、renderer.render 与玻璃回读 ——
+   * 全部跳过（那是同一个场景的第二份开销）。桌面歌词/壁纸状态的推送仍走自己的门控，
+   * 不会因为这里提前返回而停：它们在 04 的 320ms 巡检里还有一条独立的调用链。 */
+  if (typeof isWallpaperHostCastRenderSuppressed === 'function' && isWallpaperHostCastRenderSuppressed()) {
+    var castOverlayDt = consumeFrameGate(mainFrameGates.desktopOverlay, now, dt, targetMainDesktopOverlayFps(now), false, 'desktop-overlay');
+    if (castOverlayDt > 0) syncDesktopOverlayState();
+    return;
+  }
   audioEnergy = Math.max(smoothEnergy, beatPulse * 0.30);
   bass = Math.min(0.90, smoothBass * 1.05 + beatPulse * 0.18) * fx.intensity;
   mid  = Math.min(0.72, smoothMid * 1.12) * fx.intensity;
@@ -881,7 +942,10 @@ function animate() {
     }
     var rendererPerfStart = performance.now();
     renderer.render(scene, camera);
-    updateLiquidGlassBackdropMirror();
+    /* 壁纸模式下整个播放器界面都收起来了，没有一张玻璃卡片要折射 ——
+     * 这一步是「把刚渲染的帧再拷进 __lgBackdropCanvas 给 backdrop-filter 采样」，
+     * 纯 GPU 回读，在已经只剩 25fps 的壁纸路径上是白花的钱。 */
+    if (!mainLoopWallpaperTimerDriven()) updateLiquidGlassBackdropMirror();
     if (window.__mineradioPerf && typeof window.__mineradioPerf.markSince === 'function') {
       window.__mineradioPerf.markSince('renderer.render', rendererPerfStart);
       window.__mineradioPerf.markSince('frame.total', framePerfStart);

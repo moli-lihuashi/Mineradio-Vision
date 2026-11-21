@@ -28,6 +28,16 @@ var foliaWorld = {
 
 var FOLIA_WORLD_INTENSITIES = ['calm', 'normal', 'chaotic'];
 
+/* 壁纸模式下**禁止使用**的样式：花火 / 町景 / 雾笺 / 凝彩。
+ * 它们自己画整屏场景（不透明），桌面效果层会和壁纸、桌面图标互相盖住；
+ * 在「不透明承载」打通之前，壁纸模式开着时这几个入口直接置灰。 */
+var FOLIA_WALLPAPER_BLOCKED_MODES = ['hanabi', 'machi', 'nebbia', 'tempera'];
+
+function foliaModeBlockedInWallpaper(id) {
+  if (typeof fx === 'undefined' || !fx || !fx.wallpaperMode) return false;
+  return FOLIA_WALLPAPER_BLOCKED_MODES.indexOf(String(id || '')) >= 0;
+}
+
 function readFoliaWorldPrefs() {
   try {
     var raw = JSON.parse(localStorage.getItem(FOLIA_WORLD_STORE_KEY) || '{}') || {};
@@ -48,6 +58,9 @@ function readFoliaWorldPrefs() {
 }
 
 function saveFoliaWorldPrefs() {
+  /* 效果层只为跟随主窗口才切世界/样式/背景，从不拥有这份设置：
+   * 落盘会反过来覆盖主窗口（尤其是退出瞬间的 active 状态）。 */
+  if (typeof isWallpaperStagePage === 'function' && isWallpaperStagePage()) return;
   try {
     localStorage.setItem(FOLIA_WORLD_STORE_KEY, JSON.stringify({
       active: !!foliaWorld.active,

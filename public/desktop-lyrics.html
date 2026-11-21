@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <!-- CSP：内联 style + script，唯一外部资源是同源的 vendor/morphicons（锁图标形变），无网络请求、无图片 -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'">
+  <!-- font-src 必须放行 data:：自定义歌词字体是主窗口用 FontFace + dataUrl 注册的，
+       桌面歌词是独立文档，要在本页重新注册同一份 dataUrl（见 applyCustomFont）。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'">
   <title>Mineradio Desktop Lyrics</title>
   <style>
     :root{
@@ -24,14 +26,10 @@
       --lyric-control-push:0px;
       --lyric-edge-width:92px;
       --lyric-mask-edge-width:92px;
-      --lyric-vertical-feather:46px;
       --lyric-css-beat-glow:0px;
       --lyric-shadow-soft:rgba(156,255,223,.34);
       --lyric-shadow-glow:rgba(156,255,223,.26);
       --lyric-shadow-hot:rgba(255,240,184,.22);
-      --lyric-edge:rgba(4,6,12,.42);
-      --lyric-drop:rgba(156,255,223,.38);
-      --lyric-drop-paused:rgba(156,255,223,.22);
     }
     html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;user-select:none}
     body{opacity:0;transition:opacity .22s ease;-webkit-app-region:no-drag}
@@ -159,7 +157,10 @@
     body.motion-float:not(.paused) .line{opacity:1;animation:lyr-motion-breathe 4.6s ease-in-out infinite}
     body.motion-float:not(.paused) .line.in{animation:lyr-float-in .55s cubic-bezier(.2,.8,.24,1) both,lyr-motion-breathe 4.6s .55s ease-in-out infinite}
     body.motion-none .line.in{animation:none;opacity:1}
-    body.paused .line{filter:none;opacity:.84}
+    /* 暂停降透明度必须带 !important：`.line.in` 的 lyr-* 动画 fill 末帧是 opacity:1，
+       动画来源的优先级高于普通作者声明，不加权重会被顶掉（实测暂停后仍是 1.0）。
+       排除 .line-next（下一句本来就该更暗，别被抬到 .84）。 */
+    body.paused .line:not(.line-next){filter:none;opacity:.84 !important}
     .line-next{
       display:block;
       margin-top:.18em;
@@ -453,7 +454,6 @@
     var lockText = document.getElementById('lockText');
     var closeLyricsBtn = document.getElementById('closeLyricsBtn');
     var lyricsControls = document.getElementById('lyricsControls');
-    var dpr = 1;
     var lastText = '';
     var lastAlign = '';
     var lastNextText = '';
@@ -462,6 +462,9 @@
     var baseFontSize = 58;
     var renderedFontSize = 58;
     var fitScaleX = 1;
+    // 多行栈的真实内容宽度：fitLyricText 每次算出的 clearWidth 存在这里。
+    // 多行 .line-row 的容器就是 .lyric-viewport 的内容盒，宽度必须与它一致。
+    var stackContentWidth = 0;
     var hoverCapture = false;
     var dragging = false;
     var dragPointerId = null;
@@ -474,20 +477,21 @@
     var hoverInside = false;
     var hintVisible = false;
     var hintTimer = 0;
+    /* 胶囊显隐会改变热区，过渡结束（0.16s）后再补报一次精确矩形 */
+    var hintBoundsTimer = 0;
     var hintTopPx = null;
     var controlPushPx = 0;
     var lastPointerEvent = null;
     var scrollState = { needed:false, overflow:0, limit:0, offset:0, dir:-1, holdUntil:0, lastAt:0 };
-    var particles = [];
     var live = { solar:0, beat:0, bass:0, scale:1, glow:0, spark:0, lift:0 };
     var state = {
       enabled:false,text:'Mineradio',nextText:'',progress:0,progressSpan:4.8,progressReceivedAt:0,playing:false,
       playbackTime:0,playbackDuration:0,playbackRate:1,playbackReceivedAt:0,beatMapKey:'',
-      size:1,opacity:.92,clickThrough:true,lyricGlowParticles:false,cinema:true,highlightFollow:false,frameRate:60,
+      size:1,opacity:.92,clickThrough:true,cinema:true,highlightFollow:false,frameRate:60,
       lyricGlow:true,lyricGlowBeat:true,lyricGlowStrength:.35,highBloom:0,beatGlow:0,beatPulse:0,bass:0,feather:.055,
       lineCount:1,lines:null,tilt:0,lyricMotion:'slide',align:'center',
       fontFamily:'Inter,"Noto Sans SC","PingFang SC","Microsoft YaHei",Arial,sans-serif',
-      fontWeight:900,letterSpacing:0,lineHeight:1,lyricScale:1,
+      fontWeight:900,letterSpacing:0,lineHeight:1,
       colors:{primary:'#f6fdff',secondary:'#a8f6ff',highlight:'#fff0b8',glow:'#9cffdf'},
       displayColors:{primary:'#f6fdff',secondary:'#a8f6ff',highlight:'#fff0b8',glow:'#9cffdf'}
     };
@@ -514,7 +518,15 @@
     }
     function rand(seed){ return Math.abs(Math.sin(seed * 9283.173) * 43758.5453) % 1; }
     function isLocked(){ return state.clickThrough !== false; }
-    function setRootVar(name, value){ document.documentElement.style.setProperty(name, value); }
+    /* 状态推送是 8~42 次/秒，每次 applyState 都会重设十几个变量。值没变就不要写：
+       自定义属性的写入会让依赖它的样式整棵失效，桌面歌词窗口又是常驻的。 */
+    var rootVarCache = {};
+    function setRootVar(name, value){
+      value = String(value);
+      if (rootVarCache[name] === value) return;
+      rootVarCache[name] = value;
+      document.documentElement.style.setProperty(name, value);
+    }
     var colorCtx = document.createElement('canvas').getContext('2d');
     function parseCssColor(color, fallback) {
       fallback = fallback || '#ffffff';
@@ -669,6 +681,10 @@
       var key = next.beatMapKey == null ? desktopBeat.key : String(next.beatMapKey || '');
       var hasMapPayload = Object.prototype.hasOwnProperty.call(next, 'beatMap');
       if (!hasMapPayload && key === desktopBeat.key) return;
+      /* 同一张节拍图被重复下发时不能重建：重建会跑一遍 unpack/排序，并把
+         pulseDrive/glowDrive/bassDrive 清零，表现为鼓点脉冲每隔几十毫秒被打断
+         （主进程的状态是累积合并的，一旦发过 beatMap，之后每条状态都会带上它）。 */
+      if (hasMapPayload && key === desktopBeat.key && desktopBeat.camera.length) return;
       if (!hasMapPayload) {
         clearDesktopBeatMap(key);
         return;
@@ -810,20 +826,8 @@
         bass:clamp(bass, 0, 1.2, 0)
       };
     }
-    function ensureParticles(){
-      var count = 220;
-      while (particles.length < count) {
-        var i = particles.length + 1;
-        particles.push({ seed:i * 17.17, lane:rand(i), phase:rand(i * 3.1), depth:rand(i * 7.7), size:.65 + rand(i * 2.3) * 1.55 });
-      }
-    }
     function resize(){
-      dpr = Math.min(1.5, Math.max(1, window.devicePixelRatio || 1));
-      canvas.width = Math.max(1, Math.floor(innerWidth * dpr));
-      canvas.height = Math.max(1, Math.floor(innerHeight * dpr));
-      canvas.style.width = innerWidth + 'px';
-      canvas.style.height = innerHeight + 'px';
-      ctx.setTransform(dpr,0,0,dpr,0,0);
+      /* 画布只用于 measureText（display:none，不参与绘制），不需要按窗口尺寸分配。 */
       fitLyricText(true);
       renderLyricStack(true);
     }
@@ -853,6 +857,10 @@
         ? Math.max(280, safeWidth - 48)
         : Math.round(Math.max(280, Math.min(safeWidth - 12, innerWidth - Math.min(240, Math.max(88, innerWidth * .13)))));
       var clearWidth = Math.max(160, viewportWidth - edgeWidth * 2);
+      // 多行 .line-row 的可用宽度就是这块内容盒的宽度（stage 侧 padding 和 viewport
+      // 两侧渐隐区都已经扣掉）。以前 fitRowText 用的是 innerWidth-96，比真实容器宽
+      // 250px 左右 —— 长句被判「放得下」，实际会被 .line-row{overflow:hidden} 切掉两端。
+      stackContentWidth = clearWidth;
       var readableWidth = clearWidth;
       var maxHeight = Math.max(64, innerHeight - 188);
       var nextLayoutKey = [
@@ -934,7 +942,6 @@
       }
       renderedFontSize = Math.round(size);
       setRootVar('--lyric-size', renderedFontSize + 'px');
-      setRootVar('--lyric-vertical-feather', Math.round(clamp(renderedFontSize * .92, 38, 72, 46)) + 'px');
       setRootVar('--lyric-letter-spacing', (renderedFontSize * state.letterSpacing).toFixed(2) + 'px');
       setRootVar('--lyric-fit-x', fitScaleX.toFixed(4));
       setRootVar('--lyric-mask-edge-width', maskEdgeWidth + 'px');
@@ -1052,8 +1059,12 @@
     /* 贴边档的倾斜由 CSS 处理：body.align-* 把 .lyric-stack 的 transform-origin
      * 移到贴边端（该点 Z=0，投影后固定不动，无需位置补偿），并用
      * --lyric-tilt-perspective 加大透视距离削弱字形形变。 */
-    /* 每行的可用宽度上限（和 fitRowText 里同一条公式，供倾斜预留量复用） */
+    /* 每行的可用宽度上限（和 fitRowText 里同一条公式，供倾斜预留量复用）。
+       优先用 fitLyricText 量出来的真实内容宽；首次渲染前退回旧估算值。 */
     function stackRowMaxWidth() {
+      if (typeof stackContentWidth === 'number' && stackContentWidth > 0) {
+        return Math.max(220, Math.min(stackContentWidth, 1180));
+      }
       return Math.max(220, Math.min(innerWidth - 96, 1180));
     }
     function stackTiltOverhang() {
@@ -1064,7 +1075,10 @@
     function fitRowText(row, fontSize, overhang) {
       var text = row.textContent || '';
       if (!text) return fontSize;
-      var maxWidth = Math.max(220, Math.min(innerWidth - 96 - (overhang || 0) * 2, 1180));
+      // 留 1.5% 余量：canvas measureText 与 DOM 实际排版有亚像素差异，
+      // 按容器宽刚好缩完仍会溢出十几像素（实测 30 字行 825 容器溢 15px），
+      // 溢出会被 .line-row{overflow:hidden} 静默切掉最后一两个字。
+      var maxWidth = Math.max(220, stackRowMaxWidth() * .985 - (overhang || 0) * 2);
       ctx.save();
       ctx.font = state.fontWeight + ' ' + fontSize + 'px ' + state.fontFamily;
       var width = ctx.measureText(text).width + Math.max(0, Array.from(text).length - 1) * fontSize * state.letterSpacing;
@@ -1235,9 +1249,10 @@
     function sendHotBounds() {
       if (!window.desktopOverlay || !window.desktopOverlay.setLyricsHotBounds) return;
       var rect = lyricViewport.getBoundingClientRect();
-      // 播放控制条挂在 lockHint 胶囊里，热区必须把它并进来，
-      // 否则窗口鼠标穿透时主进程不会放行，按钮永远点不到。
-      var hintRect = lockHint ? lockHint.getBoundingClientRect() : null;
+      // 播放控制条挂在 lockHint 胶囊里：只有在它真正可见时才并进热区。
+      // 一直并进来（胶囊 opacity:0 时也有布局尺寸）会让解锁后的窗口在歌词上方
+      // 那块看不见的区域也吃掉鼠标，挡住桌面点击。
+      var hintRect = hintVisible && lockHint ? lockHint.getBoundingClientRect() : null;
       var left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
       if (hintRect && hintRect.width > 0) {
         left = Math.min(left, hintRect.left);
@@ -1268,10 +1283,35 @@
         Promise.resolve(window.desktopOverlay.sendPlaybackAction(action)).catch(function(){});
       } catch (e) {}
     }
+    /* 自定义歌词字体：主窗口是用 FontFace + dataUrl 注册在它自己的文档里的，
+     * 桌面歌词是另一个文档，拿不到那份注册。payload 在字体 id 变化时带一份
+     * dataUrl（见 04-desktop-overlay-fullscreen.js 的 includeCustomFontData），
+     * 这里补注册；否则 --lyric-font 里的 family 不存在，会静默回退到系统字体。 */
+    var loadedCustomFontIds = {};
+    function applyCustomFont(font) {
+      if (!font || !font.id || !font.family || !font.dataUrl) return;
+      var id = String(font.id);
+      if (loadedCustomFontIds[id]) return;
+      if (typeof FontFace !== 'function' || !document.fonts) return;
+      loadedCustomFontIds[id] = true;
+      try {
+        var face = new FontFace(String(font.family), 'url("' + String(font.dataUrl) + '")');
+        face.load().then(function (loaded) {
+          document.fonts.add(loaded);
+          // 到位前的字号是按回退字体量的，必须重排一次
+          layoutKey = '';
+          fitLyricText(true);
+          renderLyricStack(true);
+        }).catch(function () { delete loadedCustomFontIds[id]; });
+      } catch (e) {
+        delete loadedCustomFontIds[id];
+      }
+    }
     function applyState(next){
       next = next || {};
       state = Object.assign({}, state, next);
       state.colors = Object.assign({}, state.colors, next.colors || {});
+      applyCustomFont(next.customFont);
       applyDesktopPlayback(next.playback);
       applyDesktopBeatMapPayload(next);
       var motion = Object.assign({}, next.motion || {});
@@ -1317,9 +1357,6 @@
       setRootVar('--lyric-shadow-soft', colorWithAlpha(state.displayColors.primary, .36));
       setRootVar('--lyric-shadow-glow', colorWithAlpha(state.displayColors.primary, .28));
       setRootVar('--lyric-shadow-hot', colorWithAlpha(state.displayColors.highlight, .28));
-      setRootVar('--lyric-edge', 'rgba(4,6,12,.42)');
-      setRootVar('--lyric-drop', colorWithAlpha(state.displayColors.primary, .26));
-      setRootVar('--lyric-drop-paused', colorWithAlpha(state.displayColors.primary, .18));
       setRootVar('--lyric-font', state.fontFamily || 'Inter,"Noto Sans SC","PingFang SC","Microsoft YaHei",Arial,sans-serif');
       setRootVar('--lyric-weight', String(state.fontWeight));
       setRootVar('--lyric-line-height', String(state.lineHeight));
@@ -1449,151 +1486,18 @@
       live.bass += (bassDrive - live.bass) * .22;
       return { glowStrength:glowStrength, glowDrive:glowDrive };
     }
-    function applyStageMotion(now) {
+    function applyStageMotion() {
       var cinemaBinding = state.cinema !== false;
       var motionBeat = cinemaBinding ? live.beat : 0;
       var motionSolar = cinemaBinding ? live.solar : 0;
-      var motionBass = cinemaBinding ? live.bass : 0;
-      var targetLift = cinemaBinding ? Math.min(22, motionBeat * 18 + motionSolar * 5.2 + motionBass * 4.4) : 0;
-      live.lift += (targetLift - live.lift) * (targetLift > live.lift ? .46 : .16);
-      var floatY = Math.sin(now * 1.08) * -9.8 + Math.sin(now * 2.10 + .7) * 3.1;
-      var floatX = Math.sin(now * .70 + .4) * 6.2 + Math.sin(now * 1.18 + 1.1) * 2.6;
-      var bobY = floatY - live.lift;
-      var bobX = floatX + Math.sin(now * 1.55) * motionBeat * 3.4;
-      var rotX = Math.sin(now * .86 + .2) * 3.25 - motionBeat * .92;
-      var rotY = Math.sin(now * .74 + 1.3) * -2.75 + motionBeat * .34;
-      var scale = 1 + motionBeat * .115 + motionSolar * .034 + motionBass * .026;
-      live.scale += (scale - live.scale) * (scale > live.scale ? .46 : .16);
-      // 三档统一关掉几何律动（漂浮/旋转/缩放）：这些律动围绕窗口中心，
-      // 贴边文字会被旋转半径放大成 ±25px，居中档切回来也会持续漂移
-      // （实测切回居中后 480ms 内 20~68px，用户两次反馈「到处动 / 位置漂移」）。
-      // cinema 的亮度/发光律动保留（filter 与 --lyric-css-beat-glow 不受影响）。
-      bobX = 0; bobY = 0; rotX = 0; rotY = 0;
-      // 缩放输出也归一：live.scale 是平滑变量（被律动目标持续拉动），归零目标值
-      // 不会让它停，直接输出 1 才能即切即稳。
-      var outScale = 1;
-      stage.style.transform = 'translate3d(' + bobX.toFixed(2) + 'px,' + bobY.toFixed(2) + 'px,0) rotateX(' + rotX.toFixed(3) + 'deg) rotateY(' + rotY.toFixed(3) + 'deg) scale(' + outScale.toFixed(4) + ')';
+      /* 三档统一关掉几何律动（漂浮/旋转/缩放）：这些律动围绕窗口中心，
+       * 贴边文字会被旋转半径放大成 ±25px，居中档切回来也会持续漂移
+       * （实测切回居中后 480ms 内 20~68px，用户两次反馈「到处动 / 位置漂移」）。
+       * 这里只保留 cinema 的亮度/发光律动（filter 与 --lyric-css-beat-glow）。
+       * 不要再往 transform 里加位移或缩放，除非重做宽度/滚动行程的换算。 */
+      stage.style.transform = 'translate3d(0px,0px,0)';
       stage.style.filter = 'brightness(' + (1.04 + motionBeat * .12 + motionSolar * .05).toFixed(3) + ') saturate(' + (1.08 + motionBeat * .10).toFixed(3) + ')';
       setRootVar('--lyric-css-beat-glow', (state.lyricGlow ? clamp(motionBeat * 8 + motionSolar * 3, 0, 12, 0) : 0).toFixed(2) + 'px');
-    }
-    function drawAura(rect, motion) {
-      if (!state.lyricGlow || motion.glowStrength <= 0) return;
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height * .52;
-      var rx = Math.max(rect.width * .58, innerWidth * .16, 260) * (1 + live.solar * .10 + live.beat * .08);
-      var ry = Math.max(rect.height * 1.02, 66) * (1 + live.solar * .10 + live.beat * .08);
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = clamp(state.opacity, .28, 1, .92);
-      ctx.translate(cx, cy);
-      ctx.scale(rx, ry);
-      var g = ctx.createRadialGradient(0,0,0,0,0,1);
-      g.addColorStop(0.00, colorWithAlpha(state.displayColors.highlight, .24));
-      g.addColorStop(0.28, colorWithAlpha(state.displayColors.glow, .15));
-      g.addColorStop(0.64, colorWithAlpha(state.displayColors.secondary, .040));
-      g.addColorStop(0.90, colorWithAlpha(state.displayColors.glow, .006));
-      g.addColorStop(1.00, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(0,0,1,0,Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-    function drawHighlightBloom(rect, progress) {
-      if (!state.lyricGlow || state.highlightFollow !== true) return;
-      var p = clamp(progress, 0, 1, 0);
-      var x = rect.left + rect.width * p;
-      var y = rect.top + rect.height * .50 - live.lift * .10;
-      var rx = Math.max(42, Math.min(150, renderedFontSize * (1.05 + live.beat * .32)));
-      var ry = Math.max(24, Math.min(82, renderedFontSize * (.42 + live.beat * .18)));
-      var alpha = clamp(.18 + live.solar * .12 + live.beat * .18, .12, .48) * clamp(state.opacity, .28, 1, .92);
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = alpha;
-      ctx.translate(x, y);
-      ctx.scale(rx, ry);
-      var g = ctx.createRadialGradient(0,0,0,0,0,1);
-      g.addColorStop(0, colorWithAlpha(state.displayColors.highlight, .88));
-      g.addColorStop(.36, colorWithAlpha(state.displayColors.glow, .34));
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(0,0,1,0,Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-    function drawGlowText(rect, motion) {
-      if (!state.lyricGlow || motion.glowStrength <= 0) return;
-      var target = Math.min(1.08, (0.09 + live.solar * .38 + live.beat * .22) * Math.min(3, motion.glowDrive));
-      live.glow += (target - live.glow) * (target > live.glow ? .11 : .06);
-      if (live.glow <= .004) return;
-      var text = line.textContent || 'Mineradio';
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height / 2;
-      var spacing = renderedFontSize * state.letterSpacing;
-      var hotMix = Math.max(0, Math.min(1, live.solar * 1.05 + live.beat * .18));
-      var color = hotMix > .42 ? state.displayColors.highlight : state.displayColors.glow;
-      var layers = [
-        { blur:10, alpha:.54, stroke:Math.max(9, renderedFontSize * .09) },
-        { blur:24, alpha:.38, stroke:Math.max(15, renderedFontSize * .15) },
-        { blur:48, alpha:.20, stroke:Math.max(22, renderedFontSize * .22) },
-        { blur:78, alpha:.09, stroke:Math.max(30, renderedFontSize * .30) }
-      ];
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.font = state.fontWeight + ' ' + renderedFontSize + 'px ' + state.fontFamily;
-      ctx.translate(cx, cy);
-      ctx.scale(fitScaleX * live.scale, live.scale);
-      for (var i = 0; i < layers.length; i++) {
-        ctx.save();
-        ctx.filter = 'blur(' + layers[i].blur + 'px)';
-        ctx.globalAlpha = live.glow * layers[i].alpha * clamp(state.opacity, .28, 1, .92);
-        ctx.fillStyle = color;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = layers[i].stroke;
-        ctx.lineJoin = 'round';
-        drawCanvasText(text, 0, 0, renderedFontSize, spacing, true);
-        drawCanvasText(text, 0, 0, renderedFontSize, spacing, false);
-        ctx.restore();
-      }
-      ctx.restore();
-    }
-    function drawParticles(rect, motion, now) {
-      var target = state.lyricGlow && state.lyricGlowParticles ? Math.min(.50, (.12 + live.solar * .18 + live.beat * .16) * Math.min(1.7, motion.glowDrive)) : 0;
-      live.spark += (target - live.spark) * (target > live.spark ? .14 : .08);
-      if (live.spark <= .006) return;
-      ensureParticles();
-      var width = Math.max(300, Math.min(innerWidth - 48, rect.width * 1.16 + 140));
-      var height = Math.max(74, rect.height * 1.34);
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height / 2 + Math.sin(now * .55) * 3.5;
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      for (var i=0;i<particles.length;i++) {
-        var p = particles[i];
-        var lane = Math.floor(p.lane * 5);
-        var local = (p.lane * 5) % 1;
-        var speed = .018 + rand(p.seed) * .030 + lane * .002;
-        var flow = (p.phase + now * speed) % 1;
-        var edge = Math.sin(Math.PI * flow);
-        var x = cx + (flow - .5) * width * (1.02 + rand(p.seed * 4.1) * .18);
-        var curve = Math.sin(flow * Math.PI * 2 * (.9 + rand(p.seed * 1.3) * .5) + p.seed + now * .32);
-        var y = cy + (lane - 2) * height * .13 + curve * height * (.16 + rand(p.seed * 2.2) * .18) + (local - .5) * height * .13 + Math.sin(now * (.42 + rand(p.seed) * .32) + p.seed) * (4 + live.beat * 6);
-        var tw = Math.pow(.5 + .5 * Math.sin(now * (.7 + rand(p.seed) * .4) + p.seed), 4);
-        var r = Math.max(.7, p.size * (.75 + edge * 1.45 + tw * .85 + live.beat * .55));
-        var grad = ctx.createRadialGradient(x,y,0,x,y,r*4.5);
-        grad.addColorStop(0, colorWithAlpha(state.displayColors.highlight, .96));
-        grad.addColorStop(.34, colorWithAlpha(state.displayColors.glow, .68));
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.globalAlpha = live.spark * (0.16 + edge * .44 + tw * .24) * clamp(state.opacity, .28, 1, .92);
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(x,y,r*4.5,0,Math.PI*2);
-        ctx.fill();
-      }
-      ctx.restore();
     }
     function draw(nowMs){
       if (state.enabled) {
@@ -1611,8 +1515,8 @@
         setRootVar('--lyric-progress', (progress * 100).toFixed(2) + '%');
         updateStackProgress(progress);
         var offlineMotion = tickDesktopBeatMap(currentDesktopPlaybackTime(nowMs), dt);
-        var motion = updateMotion(now, offlineMotion);
-        applyStageMotion(now);
+        updateMotion(now, offlineMotion);
+        applyStageMotion();
         updateLyricScroll(nowMs, progress);
       }
       scheduleNextDraw();
@@ -1657,10 +1561,20 @@
       return !!(hintRect && pointInRect(evt, hintRect, 10, 10));
     }
     function setHintVisible(visible) {
-      hintVisible = !!visible;
+      var nextVisible = !!visible;
+      var changed = nextVisible !== hintVisible;
+      hintVisible = nextVisible;
       if (hintVisible) positionLyricControlBar();
       stage.classList.toggle('hint-visible', hintVisible);
       setPointerCapture(!isLocked() && (hintVisible || dragging) && hoverInside);
+      /* 热区跟着胶囊一起变：显示时并进热区（否则按钮点不到），隐藏时摘掉
+         （否则鼠标在不可见区域也会被窗口捕获）。胶囊有 0.16s 位移/缩放过渡，
+         过渡结束再补报一次，避免上报到过渡中间的偏小矩形。 */
+      if (changed) {
+        sendHotBounds();
+        if (hintBoundsTimer) clearTimeout(hintBoundsTimer);
+        hintBoundsTimer = setTimeout(function () { hintBoundsTimer = 0; sendHotBounds(); }, 190);
+      }
     }
     function hideInteractionHint() {
       hoverInside = false;
@@ -1831,12 +1745,6 @@
     });
     window.addEventListener('resize', resize);
     resize();
-    (function applyQueryState(){
-      try {
-        var raw = new URLSearchParams(window.location.search).get('state');
-        if (raw) applyState(JSON.parse(raw));
-      } catch (e) {}
-    })();
     if (window.desktopOverlay && window.desktopOverlay.onLyricsState) {
       window.desktopOverlay.onLyricsState(applyState);
     }

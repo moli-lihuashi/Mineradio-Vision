@@ -518,7 +518,7 @@ function toggleFx(key) {
   if (key === 'lyricPauseHold') showToast(fx.lyricPauseHold ? '暂停时保留歌词' : '暂停时隐藏歌词');
   if (key === 'desktopLyrics') showToast(fx.desktopLyrics ? '桌面歌词已开启' : '桌面歌词已关闭');
   if (key === 'desktopLyricsClickThrough') showToast(fx.desktopLyricsClickThrough !== false ? '桌面歌词已锁定' : '桌面歌词可移动');
-  if (key === 'desktopLyricsCinema') showToast(fx.desktopLyricsCinema !== false ? '桌面歌词电影震动已开启' : '桌面歌词电影震动已关闭，基础漂浮保留');
+  if (key === 'desktopLyricsCinema') showToast(fx.desktopLyricsCinema !== false ? '桌面歌词电影律动已开启' : '桌面歌词电影律动已关闭，静态辉光保留');
   if (key === 'desktopLyricsHighlight') showToast(fx.desktopLyricsHighlight === true ? '桌面歌词高亮跟随已开启' : '桌面歌词高亮跟随已关闭');
   // 开启是异步附着到桌面（可能要 1s），成功不加提示；失败由 applyWallpaperModeState 弹具体原因
   if (key === 'wallpaperMode') showToast(fx.wallpaperMode ? '正在把 Mineradio 放到桌面…' : '壁纸模式已关闭');

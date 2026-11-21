@@ -6,6 +6,19 @@ var startupAutoplayPreference = (function() {
 var startupFastSkipPreference = (function() {
   try { var v = localStorage.getItem(STARTUP_FAST_SKIP_STORE_KEY); return v === 'true'; } catch (_) { return false; }
 })();
+/* 壁纸模式是「销毁重建窗口」实现的，页面必然重载一次，音频也跟着断一次。
+ * 重建出来的页面 URL 上带 ?wallpaper=1&resume=1，含义是「接着刚才那首、那一秒继续播」。
+ * 这是一次性的显式续播请求，不是用户的「启动自动播放」偏好 —— 所以用独立开关，
+ * 绝不去改 startupAutoplayPreference（那是用户设置，不能因为切个壁纸被悄悄打开）。 */
+var wallpaperResumeWanted = (function () {
+  try {
+    var q = String((typeof location !== 'undefined' && location.search) || '');
+    return /[?&]wallpaper=1(?:&|$)/.test(q) && /[?&]resume=1(?:&|$)/.test(q);
+  } catch (_) { return false; }
+})();
+function startupAutoplayActive() {
+  return !!(startupAutoplayPreference || wallpaperResumeWanted);
+}
 function toggleStartupAutoplay() {
   startupAutoplayPreference = !startupAutoplayPreference;
   try { localStorage.setItem(STARTUP_AUTOPLAY_STORE_KEY, String(startupAutoplayPreference)); } catch (_) {}
@@ -271,7 +284,7 @@ function startupAutoplayRetryDelay(attempt) {
 }
 function scheduleStartupAutoplayRetry(jobId, reason, delay) {
   clearStartupAutoplayRetryTimer();
-  if (!startupAutoplayPreference || jobId !== startupAutoplayJobId) return false;
+  if (!startupAutoplayActive() || jobId !== startupAutoplayJobId) return false;
   if (isStartupAutoplayPlaying()) return true;
   startupAutoplayRetryTimer = setTimeout(function () {
     startupAutoplayRetryTimer = null;
@@ -291,7 +304,7 @@ function finishStartupAutoplayJob(success) {
   if (typeof forcePlaybackControlsInteractive === 'function') forcePlaybackControlsInteractive();
 }
 function runStartupAutoplayAttempt(jobId, reason) {
-  if (!startupAutoplayPreference || jobId !== startupAutoplayJobId) return false;
+  if (!startupAutoplayActive() || jobId !== startupAutoplayJobId) return false;
   if (!restoredLastPlaybackSnapshot) return false;
   if (isStartupAutoplayPlaying()) { finishStartupAutoplayJob(true); return true; }
   startupAutoplayAttemptCount += 1;
@@ -299,9 +312,9 @@ function runStartupAutoplayAttempt(jobId, reason) {
   Promise.resolve(typeof playAudio === 'function' ? playAudio({ silent: true }) : null)
     .catch(function (e) { console.warn('[StartupAutoplay]', reason || 'startup', e); })
     .then(function () {
-      if (jobId !== startupAutoplayJobId || !startupAutoplayPreference) return;
+      if (jobId !== startupAutoplayJobId || !startupAutoplayActive()) return;
       setTimeout(function () {
-        if (jobId !== startupAutoplayJobId || !startupAutoplayPreference) return;
+        if (jobId !== startupAutoplayJobId || !startupAutoplayActive()) return;
         if (isStartupAutoplayPlaying()) { finishStartupAutoplayJob(true); return; }
         if (startupAutoplayAttemptCount >= 12) { finishStartupAutoplayJob(false); return; }
         scheduleStartupAutoplayRetry(jobId, 'retry-after-' + reason);
@@ -321,16 +334,19 @@ function restoreLastPlaybackSnapshot() {
   restoredLastPlaybackSnapshot = snapshot;
   // 防止后续登录动作触发重复恢复
   try { if (typeof playbackSessionRestoreAttempted !== 'undefined') playbackSessionRestoreAttempted = true; } catch (e) { }
-  var resumeAt = startupResumeModePreference === 'beginning' ? 0 : (Number(snapshot.currentTime) || 0);
+  /* 「从头开始」是给冷启动的用户偏好；壁纸模式重建窗口是同一首歌的续播，
+   * 必须接回原来那一秒 —— 切一次壁纸把歌拉回 0:00 是不可接受的。 */
+  var resumeFromBeginning = startupResumeModePreference === 'beginning' && !wallpaperResumeWanted;
+  var resumeAt = resumeFromBeginning ? 0 : (Number(snapshot.currentTime) || 0);
   pendingPlaybackResumeAt = resumeAt;
   // "从头开始"模式：传给 applyPlaybackSession 的快照 currentTime 置 0（applyPlaybackSession 内部用 session.currentTime）
-  var sessionForApply = (startupResumeModePreference === 'beginning') ? Object.assign({}, snapshot, { currentTime: 0 }) : snapshot;
+  var sessionForApply = resumeFromBeginning ? Object.assign({}, snapshot, { currentTime: 0 }) : snapshot;
   var applyPromise = (typeof applyPlaybackSession === 'function')
     ? applyPlaybackSession(sessionForApply, { holdPaused: true, toast: false, manual: false, preserveHomeState: true })
     : Promise.resolve(false);
   Promise.resolve(applyPromise).then(function () {
     applyRestoredPlaybackProgressUi({ currentTime: resumeAt, duration: Number(snapshot.duration) || 0, current: snapshot.song });
-    if (startupAutoplayPreference) {
+    if (startupAutoplayActive()) {
       startupAutoplayJobId += 1;
       startupAutoplayAttemptCount = 0;
       startupAutoplayAttempted = true;

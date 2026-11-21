@@ -334,21 +334,27 @@ function extractMainFunction(name) {
 function testMainProcessWiring() {
   const createSrc = extractMainFunction('createWallpaperWindow');
   assert.ok(/enableFullDesktopMode\(mainWindow/.test(createSrc),
-    'createWallpaperWindow 要走完整桌面模式 runtime.enable（附着到 WorkerW）');
+    'createWallpaperWindow 只负责开效果层窗口（主窗口不动）');
   const enableSrc = extractMainFunction('enableFullDesktopMode');
-  assert.ok(/runtime\.enable\(win/.test(enableSrc), 'enableFullDesktopMode 要调 runtime.enable');
-  assert.ok(/applyWallpaperModeOpacity/.test(enableSrc), '启用后要应用用户透明度');
+  assert.ok(/ensureDesktopStageWindowRuntime\(\)/.test(enableSrc),
+    'enableFullDesktopMode 要走桌面效果层 runtime');
+  assert.ok(/runtime\.open\(/.test(enableSrc), 'enableFullDesktopMode 要调 runtime.open');
+  assert.ok(/broadcastDesktopWallpaperStatus\(/.test(enableSrc), '启用后要广播状态');
 
   const closeSrc = extractMainFunction('closeWallpaperWindow');
   assert.ok(/disableFullDesktopMode/.test(closeSrc), '关闭壁纸模式要走 disableFullDesktopMode');
   const disableSrc = extractMainFunction('disableFullDesktopMode');
-  assert.ok(/runtime\.disable\(|fullDesktopModeRuntime\.disable\(/.test(disableSrc),
-    'disableFullDesktopMode 要调 runtime.disable');
-  assert.ok(/restoreWallpaperModeOpacity/.test(disableSrc), '退出时要恢复窗口透明度');
+  assert.ok(/desktopStageWindowRuntime\.disable\(/.test(disableSrc),
+    'disableFullDesktopMode 要销毁效果层窗口');
 
   assert.ok(!/wallpaper\.html/.test(mainSource), 'main.js 不得再引用旧 Canvas 链路 wallpaper.html');
   assert.ok(!/DesktopWallpaperRuntime/.test(mainSource), 'main.js 不得再引用旧 DesktopWallpaperRuntime');
   assert.ok(!/\.enableDesktopMode\(/.test(mainSource), 'main.js 不得再调用不存在的 enableDesktopMode 方法');
+  /* 旧路径：重建主窗口 / 挂 WorkerW 都会让窗口和任务栏一起消失，已删除。 */
+  assert.ok(!/rebuildMainWindowForWallpaper/.test(mainSource),
+    '旧「销毁重建主窗口」路径必须删除（用户要求窗口与任务栏不能消失）');
+  assert.ok(!/fullDesktopModeRuntime\.enable\(/.test(mainSource),
+    '主窗口不得再附着到 WorkerW');
 }
 
 function testWallpaperIpcTrusted() {
@@ -372,40 +378,45 @@ function testBeforeQuitDisposes() {
     'dispose 完成前要 preventDefault 挡住首次 quit');
 }
 
-/* 壁纸模式把整个窗口推到桌面图标层后面：一旦焦点被别的程序抢走，页面里的 keydown
- * 根本收不到。必须有主进程级 Esc + 托盘菜单两个逃生口，否则用户会被困在壁纸模式里。 */
+/* 2026-11-21 用户明确要求取消「双击 Esc 退出壁纸模式」。
+ * 壁纸模式不再动主窗口（效果是独立的桌面层窗口），播放器窗口与任务栏条目全程保留，
+ * 退出走界面上的开关或托盘菜单。这里的守卫是反向的：
+ * 谁再把 Esc 逃生口加回壁纸模式，就红。 */
 function testWallpaperEscapeHatches() {
-  // 1. 主进程 before-input-event：enabled 时 Esc 直接退出（优先于全屏退出）
-  const inputStart = mainSource.indexOf("mainWindow.webContents.on('before-input-event'");
-  assert.ok(inputStart >= 0, 'main.js 要有 before-input-event 处理');
-  const inputChunk = mainSource.slice(inputStart, inputStart + 1400);
-  assert.ok(/Escape/.test(inputChunk), 'before-input-event 要处理 Escape');
-  assert.ok(/fullDesktopModeRuntime\.isEnabled\(\)/.test(inputChunk),
-    'Esc 分支要判断完整桌面模式是否已启用');
-  assert.ok(/disableFullDesktopMode\('escape-key'\)/.test(inputChunk),
-    'Esc 要真的退出壁纸模式');
-  assert.ok(/event\.preventDefault\(\)/.test(inputChunk), 'Esc 要 preventDefault，别让页面重复处理');
+  assert.ok(!/createEscapeTapGuard/.test(mainSource),
+    'main.js 不该再引入 Escape 双击判定');
+  assert.ok(!/globalShortcut\.register\('Escape'/.test(mainSource),
+    '不该再注册全局 Esc —— 它会吞掉所有软件的 Esc');
+  assert.ok(!/wallpaperEscapeGuard/.test(mainSource),
+    '双击 Esc 的守卫对象必须删除');
+  assert.ok(!/restoreWindowAfterWallpaper\(/.test(mainSource),
+    '主窗口从未被改写，不需要「恢复窗口」动作');
 
-  // 2. 托盘菜单：enabled 时出现「退出壁纸模式」
+  const overlay = readSource(overlayPath);
+  assert.ok(!/wallpaperStageEscapeTap|wallpaperStageEscapeHint/.test(overlay),
+    '渲染层不得再有 Esc 双击退出判定');
+  /* 控制面板自己也监听 Esc（只用来收起面板），这是合法的；不允许的是
+   * 在 Esc 分支里退出壁纸模式。 */
+  const controlsSrc = extractFunction(overlay, 'initDesktopModeControls');
+  const escBlocks = controlsSrc.split("event.key !== 'Escape'").slice(1);
+  for (const block of escBlocks) {
+    const head = block.slice(0, 320);
+    assert.ok(!/applyWallpaperModeState|fx\.wallpaperMode\s*=\s*false/.test(head),
+      'Esc 分支里不得再退出壁纸模式（只允许收起控制面板）');
+  }
+
+  // 托盘菜单：开着的状态下仍然提供「退出壁纸模式」
   const trayStart = mainSource.indexOf('function createOrUpdateTray');
   assert.ok(trayStart >= 0, 'main.js 要有托盘菜单');
   const trayChunk = mainSource.slice(trayStart, trayStart + 3000);
   assert.ok(/退出壁纸模式/.test(trayChunk), '托盘菜单要有「退出壁纸模式」项');
   assert.ok(/disableFullDesktopMode\('tray-exit-wallpaper'\)/.test(trayChunk),
     '托盘项要调 disableFullDesktopMode');
-  assert.ok(/fullDesktopModeRuntime\.isEnabled\(\)/.test(trayChunk),
+  assert.ok(/wallpaperAttachedForState\(\)/.test(trayChunk),
     '托盘项只在壁纸模式启用时出现');
-  /* 托盘左键 / 菜单「显示」必须走同一条路：壁纸模式下窗口是桌面的子窗口，
-     不先退出壁纸模式 focus() 唤不出来。 */
-  assert.ok(/const trayPrimaryAction = \(\) =>/.test(trayChunk), '托盘左键要有统一入口 trayPrimaryAction');
-  assert.ok(/tray\.on\('click', trayPrimaryAction\)/.test(trayChunk), '左键要接到 trayPrimaryAction');
-  assert.ok(/click: \(\) => trayPrimaryAction\(\)/.test(trayChunk),
-    '菜单「显示」也要走 trayPrimaryAction（否则壁纸模式下点了没反应）');
-
-  // 3. 渲染层：Esc 监听存在，且锁屏状态下不误退
-  const bridgeSrc = extractFunction(overlaySource, 'initDesktopWallpaperRuntimeBridge');
-  assert.ok(/keydown/.test(bridgeSrc) && /Escape/.test(bridgeSrc), '渲染层也要有 Esc 监听（双保险）');
-  assert.ok(/softwareInteractionLocked/.test(bridgeSrc), '软件锁状态下 Esc 不误退');
+  // 托盘左键就是普通「显示窗口」：主窗口不再被挂到桌面，不需要先退出壁纸模式
+  assert.ok(/const trayPrimaryAction = \(\) => \{ focusMainWindow\(\); \}/.test(trayChunk),
+    '托盘左键只负责唤起窗口');
 }
 
 /* ---- preload：状态桥接 ------------------------------------------------------ */
@@ -497,11 +508,12 @@ function testIndexHtmlUnlock() {
       id + ' 不应再各自带 hidden（统一由 #wallpaper-settings-group 控制）');
   }
 
-  /* 开关的 title 是用户唯一的「怎么退出」提示：默认走标准 WorkerW 时窗口拿不到键盘焦点，
-   * 写「Esc 退出」就是骗人，必须指向托盘。 */
+  /* 开关的 title 是用户唯一的操作提示。新形态下主窗口一直可用，
+   * 退出就是「再点一次」—— 不能再写「Esc 退出 / 点托盘切回」那套旧说法。 */
   const toggleTag = indexHtml.slice(start, indexHtml.indexOf('</div>', start));
-  assert.ok(/title="[^"]*托盘/.test(toggleTag), '壁纸模式开关的提示要指向托盘退出');
-  assert.ok(!/title="[^"]*Esc/.test(toggleTag), '默认模式窗口收不到键盘事件，提示里不能写 Esc');
+  assert.ok(/title="[^"]*再点一次/.test(toggleTag), '壁纸模式开关的提示要说明「再点一次关闭」');
+  assert.ok(!/title="[^"]*Esc/.test(toggleTag), 'Esc 退出已取消，提示里不能再写 Esc');
+  assert.ok(!/title="[^"]*托盘/.test(toggleTag), '主窗口一直可用，不需要再让用户去点托盘');
 }
 
 function testFpsSegBinding() {

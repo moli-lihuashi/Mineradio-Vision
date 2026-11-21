@@ -1,0 +1,15 @@
+{
+  "folium": 1,
+  "id": "huajian",
+  "name": "花笺",
+  "version": "1.0.2",
+  "author": "wittyfunn",
+  "description": "会听歌、会读歌的歌词动画导演：实时从频谱里听出 BPM 与调性，按快慢自动切换整套镜头语言（慢歌流光、云阶，快歌心象，说唱浮名）；AI 导演读懂整首歌词后为每段编排版式、动作、氛围与烟花，伤感歌淡入淡出、线香花火，欢快歌烟花踩点炸开，同一首歌几乎不重样。强烈建议接入任意兼容 OpenAI 的 AI 接口（含本机 Ollama / LM Studio）：每首歌只问一次并记住，只发送歌名、歌手、专辑、歌词、主题名和听出的 BPM / 调性；不配 AI 时由本地规则导演。",
+  "client": "client.mjs",
+  "permissions": [
+    "filesystem.data",
+    "net.fetch"
+  ],
+  "folia": ">=0.7.22 <0.8.0",
+  "preview": "preview.png"
+}

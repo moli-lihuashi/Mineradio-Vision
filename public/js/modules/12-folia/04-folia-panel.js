@@ -27,6 +27,25 @@ function toggleFoliaTuningFold() {
   }
 }
 
+/* 卡片副标题：模组 mod.json 的描述是给详情页的营销长文（花笺 235 字），
+ * 卡片上只留一句；这张表给已知模组一句更准的短说明，其它样式取描述的第一个分句。
+ * 完整描述仍写进卡片的 title，鼠标停一下就能看到。 */
+var FOLIA_MODE_SHORT_DESC = {
+  'stage': 'AI 导演 · 随歌换镜头',
+  'rings': '逐字点亮 · 节拍年轮',
+  'miside-drop': '逐字打字 · 整行坠落'
+};
+
+function foliaModeShortDesc(mode) {
+  if (!mode) return '';
+  var mapped = FOLIA_MODE_SHORT_DESC[mode.id];
+  if (mapped) return mapped;
+  var desc = String(mode.desc || '').trim();
+  var cut = desc.search(/[：:。；;]/);
+  if (cut > 0) desc = desc.slice(0, cut);
+  return desc;
+}
+
 function foliaWorldBuildModeGrid() {
   var grid = document.getElementById('fx-folia-mode-grid');
   if (!grid) return;
@@ -36,18 +55,38 @@ function foliaWorldBuildModeGrid() {
     var mode = modes[i];
     var card = document.createElement('button');
     card.type = 'button';
-    card.className = 'fx-folia-mode-card' + (mode.id === foliaWorld.mode ? ' active' : '');
+    var blocked = typeof foliaModeBlockedInWallpaper === 'function' && foliaModeBlockedInWallpaper(mode.id);
+    var active = mode.id === foliaWorld.mode;
+    card.className = 'fx-folia-mode-card' + (active ? ' active' : '') + (blocked ? ' is-disabled' : '');
     card.setAttribute('data-folia-mode-id', mode.id);
+    card.setAttribute('aria-pressed', active ? 'true' : 'false');
     var name = document.createElement('span');
     name.className = 'fx-folia-mode-name';
     name.textContent = mode.name;
     var desc = document.createElement('span');
     desc.className = 'fx-folia-mode-desc';
-    desc.textContent = mode.desc;
+    desc.textContent = foliaModeShortDesc(mode);
     card.appendChild(name);
     card.appendChild(desc);
+    if (blocked) {
+      card.disabled = true;
+      card.setAttribute('aria-disabled', 'true');
+      card.title = '壁纸模式下不可用（该样式为整屏场景）';
+      var note = document.createElement('span');
+      note.className = 'fx-folia-mode-note';
+      note.textContent = '壁纸模式下不可用';
+      card.appendChild(note);
+    } else if (mode.desc && String(mode.desc) !== desc.textContent) {
+      card.title = String(mode.desc);
+    }
     (function (id) {
-      card.addEventListener('click', function () { foliaWorldSetMode(id); });
+      card.addEventListener('click', function () {
+        if (typeof foliaModeBlockedInWallpaper === 'function' && foliaModeBlockedInWallpaper(id)) {
+          if (typeof showToast === 'function') showToast('壁纸模式下不可用该样式');
+          return;
+        }
+        foliaWorldSetMode(id);
+      });
     })(mode.id);
     grid.appendChild(card);
   }
@@ -64,6 +103,7 @@ function foliaWorldBuildBackgroundGrid() {
     card.type = 'button';
     card.className = 'fx-folia-bg-card' + (bg.id === foliaWorld.background ? ' active' : '');
     card.setAttribute('data-folia-bg-id', bg.id);
+    card.setAttribute('aria-pressed', bg.id === foliaWorld.background ? 'true' : 'false');
     var name = document.createElement('span');
     name.className = 'fx-folia-bg-name';
     name.textContent = bg.name;

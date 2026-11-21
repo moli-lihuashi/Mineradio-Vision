@@ -2851,8 +2851,14 @@ function checkDesktopLyricsMotionGuard() {
       !/body\.align-right \.stage\.hint-visible \.lock-hint\{transform:translateX\(0\)/.test(html)) {
     fail('aligned control bar must drop the translateX(-50%) centering transform');
   }
-  if (!/bobX = 0; bobY = 0; rotX = 0; rotY = 0;/.test(html) || !/var outScale = 1;/.test(html)) {
-    fail('all three align modes must disable geometric cinema motion, otherwise switching align drifts');
+  /* 2026-11-21：几何律动已从 applyStageMotion 整体移除（比 11-15 的「三档置零」更彻底），
+   * stage 的 transform 固定为零位移，只保留亮度/发光律动。判据随之改为「正向锁定固定值
+   * + 反向禁止任何几何项写进 transform」，比只找置零变量更能防回退。 */
+  if (!/stage\.style\.transform\s*=\s*'translate3d\(0px,0px,0\)'/.test(html)) {
+    fail('stage transform must stay pinned to zero displacement (geometric cinema motion removed)');
+  }
+  if (/stage\.style\.transform\s*=[^\n]*(?:rotateX|rotateY|rotate3d|scale|scaleX|scaleY)\(/.test(html)) {
+    fail('geometric motion must not be written back into stage transform (drifts when switching align)');
   }
   if (/state\.align === 'left' \|\| state\.align === 'right'\) \? 1 : live\.scale/.test(html)) {
     fail('per-alignment geometry motion must not come back');

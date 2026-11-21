@@ -11,6 +11,7 @@ module.exports = function createKugouService(deps) {
     KUGOU_LOGIN_BASE_URL,
     KUGOU_PLAY_KEY_SALT,
     KUGOU_QR_APPID,
+    KUGOU_QR_CLIENTVER,
     KUGOU_QR_SRC_APPID,
     QRCode,
     UA,
@@ -100,12 +101,14 @@ module.exports = function createKugouService(deps) {
 
   async function handleKugouLoginQrKey() {
     const device = saveKugouAuth(kugouCookieObject());
-    const qrcodeText = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=' + KUGOU_ID.APPID + '&';
+    // qrcode_txt 里的 appid 必须与 params.appid 一致，否则二维码归属与换 token 身份不符。
+    const qrcodeText = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=' + KUGOU_QR_APPID + '&';
     const data = await kugouGatewayRequest('/v2/qrcode', {
       baseURL: KUGOU_LOGIN_BASE_URL,
       encryptType: 'web',
       params: {
         appid: KUGOU_QR_APPID,
+        clientver: KUGOU_QR_CLIENTVER,
         type: 1,
         plat: 4,
         qrcode_txt: qrcodeText,
@@ -144,12 +147,16 @@ module.exports = function createKugouService(deps) {
   async function handleKugouLoginQrCheck(key) {
     const qr = String(key || '').trim();
     if (!qr) return { provider: 'kugou', code: 800, status: 0, message: 'Missing Kugou QR key' };
-    const data = await kugouGatewayRequest('/v2/get_userinfo_qrcode', {
+    /* 换 token 必须与二维码同一身份（3116 概念版 lite）：cloudlist 只接受与 token
+     * 签发身份一致的请求，之前这里用 1005 换 token、cloudlist 用 3116，个人歌单恒 20017。
+     * 3116 失败时回退旧身份，保证「登录本身」不会因此不可用。 */
+    const checkQr = (appid, clientver) => kugouGatewayRequest('/v2/get_userinfo_qrcode', {
       baseURL: KUGOU_LOGIN_BASE_URL,
       encryptType: 'web',
       params: {
         plat: 4,
-        appid: KUGOU_ID.APPID,
+        appid,
+        clientver,
         srcappid: KUGOU_QR_SRC_APPID,
         qrcode: qr,
       },
@@ -158,6 +165,19 @@ module.exports = function createKugouService(deps) {
         'x-router': 'login-user.kugou.com',
       },
     });
+    const tokenOf = (payload) => String(
+      kugouSafeGet(payload, ['data', 'token'], '') ||
+      kugouDeepFind(payload, ['token', 'user_token', 'access_token', 'key']) ||
+      (payload && payload.token) || ''
+    ).trim();
+    let data = null;
+    try { data = await checkQr(KUGOU_QR_APPID, KUGOU_QR_CLIENTVER); } catch (_) { data = null; }
+    if (!tokenOf(data)) {
+      try {
+        const legacy = await checkQr(KUGOU_ID.APPID, KUGOU_ID.CLIENTVER);
+        if (legacy) data = legacy;
+      } catch (_) { /* 保留 lite 那次的结果用于错误提示 */ }
+    }
     const status = Number(kugouSafeGet(data, ['data', 'status'], data.status || kugouDeepFind(data, ['status']) || 0)) || 0;
     const token = String(kugouSafeGet(data, ['data', 'token'], '') ||
       kugouDeepFind(data, ['token', 'user_token', 'access_token', 'key']) ||
@@ -580,7 +600,13 @@ module.exports = function createKugouService(deps) {
   async function handleKugouSongUrl(hash, albumAudioId, albumId, qualityPreference, qualityHashes) {
     const h = String(hash || '').trim();
     if (!h) return { provider: 'kugou', url: '', playable: false, error: 'Missing Kugou hash' };
-    const loginInfo = getKugouLoginInfo();
+    let loginInfo = getKugouLoginInfo();
+    /* cookie 里不一定带 vip 字段（网页扫码会话常见），同步解析会得到 vipType=0，
+       trackercdn 于是按「非会员」取址，付费曲目直接被 20017 拒掉。已登录但会员等级
+       尚未确认时补一次 fresh 探测（内部 60s 缓存），拿到真实等级再取址。issue #1。 */
+    if (loginInfo.loggedIn && !loginInfo.isSvip && !(Number(loginInfo.vipType) > 0)) {
+      try { loginInfo = await getKugouLoginInfoFresh(); } catch (_) { }
+    }
     const selected = kugouHashForQuality(h, qualityPreference, qualityHashes);
     const json = await kugouTrackercdnPlayUrl(selected.hash || h, { albumAudioId, albumId, vipType: loginInfo.vipType });
     const data = json && (json.data || json);
