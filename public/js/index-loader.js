@@ -198,6 +198,8 @@
     // shell：overlay 须在 splash-and-boot 之前（boot 会同步调用 applyDesktopLyricsState 等）
     'js/modules/10-shell/00-gesture-resize-ui.js',
     'js/modules/10-shell/04-desktop-overlay-fullscreen.js',
+    // 悬浮小组件桥接：读播放状态/歌词推给主进程（宿主见 desktop/floating-widget.js）
+    'js/modules/10-shell/30-floating-widget-bridge.js',
     // 壁纸模式只留舞台：盯 body 的 class 推 wallpaper-stage[-folia]，04 会调它的判定函数
     'js/modules/10-shell/08-wallpaper-stage.js',
     // 壁纸模式的播放镜像：主窗口每秒下发「同一首歌同一秒」，效果层按 full/pulse 跟随
@@ -207,6 +209,10 @@
     'js/modules/10-shell/05-diagnostics.js',
     'js/modules/10-shell/06-break-reminder.js',
     'js/modules/10-shell/07-about-panel.js',
+    // 设置页：三条杠与视觉控制台搬过来的低频参数（tab / 搜索 / 菜单摘要同步）
+    'js/modules/10-shell/31-settings-page.js',
+    // 皮肤面板里的挂件设置：控件在主窗，改动经 IPC 下发给小组件窗口
+    'js/modules/10-shell/32-widget-settings-inline.js',
     // folia 世界（与预设互斥的独立歌词世界；主循环会调 foliaWorldActive/foliaWorldTick）
     // 2026-11-12 启动拆分：主波只留 00-folia-state（11KB 状态锚）。foliaWorldActive
     // 在 Folia 运行时未落地前恒 false（active 初始 false），主循环的 folia 分支自然
@@ -337,6 +343,33 @@
     return fetch(moduleUrl(path), { credentials: 'same-origin', cache: forceRefresh ? 'no-cache' : 'default' }).then(function (res) {
       if (!res.ok) throw new Error('Failed to load Mineradio module: ' + path + ' (' + res.status + ')');
       return res.text();
+    });
+  }
+
+  /* 批量取模块：一次 POST 拿回本组全部文本，顺序与 paths 一致。
+   * 冷缓存（系统重启后首次）下 213 个独立 fetch 受 HTTP/1.1 同源六连接上限约束，
+   * 要串 30+ 批，实测把「脚本开始求值」推到 1.6s；批量接口压成 1 个请求
+   * （服务端白名单 / ETag / 缓存见 server/lib/boot-modules.js）。
+   * 任何失败都抛错，由调用方回退到逐文件 fetch，再失败才走同步 XHR。 */
+  function fetchModuleTexts(paths) {
+    var token = '';
+    try { token = String(window.__MINERADIO_API_TOKEN__ || ''); } catch (_) {}
+    var url = '/boot-modules?v=' + encodeURIComponent(moduleCacheBust) +
+      (token ? '&token=' + encodeURIComponent(token) : '');
+    return fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: forceRefresh ? 'no-cache' : 'default',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: paths })
+    }).then(function (res) {
+      if (!res.ok) throw new Error('Failed to load Mineradio module batch (' + res.status + ')');
+      return res.json();
+    }).then(function (texts) {
+      if (!Array.isArray(texts) || texts.length !== paths.length) {
+        throw new Error('Bad Mineradio module batch payload');
+      }
+      return texts;
     });
   }
 
@@ -506,15 +539,20 @@
   function loadDeferredModules() {
     if (!deferredModulePaths || !deferredModulePaths.length) return;
     if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
-      Promise.all(deferredModulePaths.map(function (path) {
-        return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
-      })).then(injectDeferredCombined).catch(function (err) {
-        console.warn('[MineradioLoader] deferred fetch failed, trying sync XHR', err);
-        try {
-          injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
-        } catch (fallbackErr) {
-          console.error('[MineradioLoader] deferred modules failed', fallbackErr || err);
-        }
+      fetchModuleTexts(deferredModulePaths).then(function (texts) {
+        injectDeferredCombined(texts.map(function (text, i) { return wrapModuleText(deferredModulePaths[i], text); }));
+      }).catch(function (batchErr) {
+        console.warn('[MineradioLoader] deferred batch failed, trying per-module', batchErr);
+        Promise.all(deferredModulePaths.map(function (path) {
+          return fetchModuleText(path).then(function (text) { return wrapModuleText(path, text); });
+        })).then(injectDeferredCombined).catch(function (err) {
+          console.warn('[MineradioLoader] deferred fetch failed, trying sync XHR', err);
+          try {
+            injectDeferredCombined(deferredModulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+          } catch (fallbackErr) {
+            console.error('[MineradioLoader] deferred modules failed', fallbackErr || err);
+          }
+        });
       });
     } else {
       try {
@@ -536,35 +574,41 @@
     } catch (_) {}
   }
 
-  // 优先并行 fetch；失败时回退同步 XHR。无论哪种路径都合并为单个 script，避免分块打断 function 提升。
+  /* 三层回退：批量接口 → 逐文件 fetch（旧路径）→ 同步 XHR。
+   * 批量是默认路径；后两层只在前者失败时启用，行为与改动前完全一致。
+   * 无论哪层，模块仍合并成单个 script 求值，保留跨文件 function 提升。 */
   if (typeof fetch === 'function' && typeof Promise !== 'undefined') {
     splashLoadState.startedAt = performance.now();
     setSplashLoadProgress(1, '加载模块…');
-    var coreDone = 0;
-    var coreTotal = modulePaths.length || 1;
-    Promise.all(modulePaths.map(function (path) {
-      return fetchModuleText(path).then(function (text) {
-        coreDone += 1;
-        setSplashLoadProgress(6 + (coreDone / coreTotal) * 70, '加载模块 ' + coreDone + '/' + coreTotal);
-        return wrapModuleText(path, text);
-      });
-    })).then(function (texts) {
+    var injectCoreTexts = function (texts) {
       setSplashLoadProgress(78, '初始化…');
       injectCombined(texts);
       setSplashLoadProgress(88, '启动中…');
       markCoreModulesReady();
       loadDeferredModules();
-    }).catch(function (err) {
-      try {
-        setSplashLoadProgress(40, '回退加载…');
-        injectCombined(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
-        setSplashLoadProgress(88, '启动中…');
-        markCoreModulesReady();
-        loadDeferredModules();
-      } catch (fallbackErr) {
-        showLoaderFailure(fallbackErr || err);
-      }
-    });
+    };
+    var loadCorePerModule = function (batchError) {
+      console.warn('[MineradioLoader] batch fetch failed, trying per-module', batchError);
+      var coreDone = 0;
+      var coreTotal = modulePaths.length || 1;
+      Promise.all(modulePaths.map(function (path) {
+        return fetchModuleText(path).then(function (text) {
+          coreDone += 1;
+          setSplashLoadProgress(6 + (coreDone / coreTotal) * 70, '加载模块 ' + coreDone + '/' + coreTotal);
+          return wrapModuleText(path, text);
+        });
+      })).then(injectCoreTexts).catch(function (err) {
+        try {
+          setSplashLoadProgress(40, '回退加载…');
+          injectCoreTexts(modulePaths.map(function (path) { return wrapModuleText(path, readModuleSync(path)); }));
+        } catch (fallbackErr) {
+          showLoaderFailure(fallbackErr || err);
+        }
+      });
+    };
+    fetchModuleTexts(modulePaths).then(function (texts) {
+      injectCoreTexts(texts.map(function (text, i) { return wrapModuleText(modulePaths[i], text); }));
+    }).catch(loadCorePerModule);
   } else {
     try {
       splashLoadState.startedAt = performance.now();

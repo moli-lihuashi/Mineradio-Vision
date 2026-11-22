@@ -4,7 +4,11 @@
    Safe: no style MutationObserver. Excludes particle-count fire track. */
 (function () {
   var hosts = [];
-  var RANGE_SEL = '#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range], #volume-slider';
+  /* 2026-11-23：设置页里的滑块和视觉控制台是同一批 .fx-slider，
+   * 填充条靠这里写 --prism-fill；不带上就会被拖了不动（只有轨道没有进度）。 */
+  var RANGE_SEL = '#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range], ' +
+    '#settings-modal .fx-slider:not(.fx-fire-slider-row) input[type=range], ' +
+    '#skin-popover .fx-slider:not(.fx-fire-slider-row) input[type=range], #volume-slider';
 
   function isFireRange(input) {
     if (!input) return true;

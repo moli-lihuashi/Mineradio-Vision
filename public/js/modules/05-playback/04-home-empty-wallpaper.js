@@ -230,6 +230,7 @@ function closePanelsForHomeEntry() {
 }
 function showHome(opts) {
   opts = opts || {};
+  if (typeof markAppPerf === 'function') markAppPerf('home-show-start');
   var alreadyVisible = emptyHomeActive && document.body.classList.contains('empty-home-active');
   if (opts.forced) {
     homeForcedOpen = true;
@@ -243,6 +244,7 @@ function showHome(opts) {
       renderHomeDiscover();
       refreshContinueCardLive();
     }
+    if (typeof markAppPerf === 'function') markAppPerf('home-show-fast-done');
     return true;
   }
   ensurePresetLayersHiddenForHome();
@@ -262,6 +264,7 @@ function showHome(opts) {
   bootstrapScenePresets(false);
   scheduleHomeDeferredRefresh(!!opts.forceLoad, !!opts.closePanels);
   if (!opts.forced) maybeOfferSceneResume();
+  if (typeof markAppPerf === 'function') markAppPerf('home-show-done');
   return true;
 }
 function hideHome(opts) {

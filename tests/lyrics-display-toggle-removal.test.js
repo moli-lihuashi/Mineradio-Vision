@@ -95,8 +95,8 @@ function analyze(s) {
     issues.push('沉浸模式/经典预设共用的 setParticleLyricsSilently 被误删');
   }
 
-  // F. 桌面歌词功能必须完整保留
-  if (!/id="t-desktopLyrics"/.test(s.html)) issues.push('视觉控制台的桌面歌词主开关被误删');
+  // F. 桌面歌词功能必须完整保留（主开关在三条杠菜单的快捷格里，2026-11-23 起）
+  if (!/id="qm-shortcut-desktopLyrics"/.test(s.html)) issues.push('桌面歌词主开关被误删（三条杠快捷格）');
   if (!/toggleFx\('desktopLyrics'\)/.test(s.html)) issues.push('桌面歌词主开关逻辑被误删');
   if (!/toggleDesktopLyrics/.test(s.hotkeys)) issues.push('桌面歌词热键条目被误删');
   if (!/Alt\+KeyL/.test(s.hotkeys) || !/Ctrl\+Alt\+KeyL/.test(s.hotkeys)) {
@@ -174,7 +174,7 @@ test('检测函数对 6 个回归变异体全部判红（自检，防假阴性�
     },
     {
       name: '桌面歌词功能被误删',
-      apply: s => ({ ...s, html: s.html.replace('id="t-desktopLyrics"', 'id="t-desktopLyrics-removed"') })
+      apply: s => ({ ...s, html: s.html.replace('id="qm-shortcut-desktopLyrics"', 'id="qm-shortcut-desktopLyrics-removed"') })
     }
   ];
   const base = loadSources();

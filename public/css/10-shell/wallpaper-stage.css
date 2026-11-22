@@ -32,6 +32,7 @@
 :is(body.wallpaper-stage, html.wp-stage) #home-platform-recommend,
 :is(body.wallpaper-stage, html.wp-stage) #top-right,
 :is(body.wallpaper-stage, html.wp-stage) #player-quick-menu-popover,
+:is(body.wallpaper-stage, html.wp-stage) #settings-modal,
 :is(body.wallpaper-stage, html.wp-stage) #skin-popover,
 :is(body.wallpaper-stage, html.wp-stage) #mini-queue-popover,
 :is(body.wallpaper-stage, html.wp-stage) #fx-fab,

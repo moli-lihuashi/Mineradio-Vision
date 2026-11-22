@@ -187,7 +187,10 @@ const os = require('os');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { Worker } = require('worker_threads');
-const QRCode = require('qrcode');
+/* qrcode 只在「酷狗扫码登录」时用，但它会连带拉起 pngjs 渲染器，实测热态
+ * require 就要 631ms（占服务端启动 1465ms 的四成）。服务端是同步 require 的，
+ * 这段时间整个 Electron 主进程消息泵被堵住 —— 冷启动时窗口已经显示，
+ * 用户看到的就是鼠标转圈。改为酷狗服务内部按需加载（见 server/lib/kugou-service.js）。 */
 const { analyzePodcastDjStream, analyzePodcastDjIntro, nativeDjAvailable } = require('./dj-analyzer');
 const {
   appendCuefieldFeedback,
@@ -603,11 +606,29 @@ function serveStatic(res, filePath) {
     });
   });
 }
+/* 改缓存目录后的一次性设置快照（主进程写、这里读、页面写回 localStorage）。
+ * 为什么不在主进程直接写 localStorage：跨 profile 复制 leveldb 实测无效
+ * （文件字节一致，Chromium 仍读不到），只能走渲染进程的 API。 */
+function readSettingsSnapshotForInject() {
+  const file = process.env.MINERADIO_SETTINGS_SNAPSHOT_FILE;
+  if (!file) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!parsed || !parsed.values || typeof parsed.values !== 'object') return null;
+    return parsed.values;
+  } catch (_) {
+    return null;
+  }
+}
 function serveIndexHtml(res, filePath) {
   fs.readFile(filePath, 'utf8', (err, html) => {
     if (responseSettled(res)) return;
     if (err) { res.writeHead(404); res.end('Not Found'); return; }
-    const inject = '<script>window.__MINERADIO_API_TOKEN__=' + JSON.stringify(API_TOKEN) + ';</script>';
+    let inject = '<script>window.__MINERADIO_API_TOKEN__=' + JSON.stringify(API_TOKEN) + ';</script>';
+    const snapshot = readSettingsSnapshotForInject();
+    if (snapshot) {
+      inject += '<script>window.__MINERADIO_SETTINGS_SNAPSHOT__=' + JSON.stringify(snapshot) + ';</script>';
+    }
     const out = html.includes('<head>')
       ? html.replace('<head>', '<head>' + inject)
       : (html.includes('</head>') ? html.replace('</head>', inject + '</head>') : inject + html);
@@ -1411,7 +1432,6 @@ const kugouService = require("./server/lib/kugou-service")({
   KUGOU_QR_APPID,
   KUGOU_QR_CLIENTVER,
   KUGOU_QR_SRC_APPID,
-  QRCode,
   UA,
   getKugouCookie,
   getKugouLoginInfo,

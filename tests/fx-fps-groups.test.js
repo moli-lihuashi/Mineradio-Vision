@@ -62,7 +62,8 @@ test('两组标题都写明作用范围，且有视觉分隔', () => {
   assert.ok(html.includes('壁纸帧率 <small class="fx-label-scope">只影响壁纸窗口，与桌面歌词无关</small>'),
     '壁纸帧率要写清「只影响壁纸窗口，与桌面歌词无关」');
   const css = read(CSS);
-  assert.ok(css.includes('#fx-panel .wallpaper-settings-group[hidden]{display:none}'),
+  // 2026-11-23 起这条规则同时服务视觉控制台与设置页，前缀是 :is(#fx-panel,#settings-modal)
+  assert.match(css, /\.wallpaper-settings-group\[hidden\]\{display:none\}/,
     '容器 hidden 必须真的生效（.fx-seg 自带 display 会盖掉 UA 规则）');
   assert.ok(css.includes('.wallpaper-settings-group{margin-top:16px;padding-top:14px;border-top:'),
     '壁纸设置与桌面歌词帧率之间要有分隔线');

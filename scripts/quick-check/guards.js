@@ -3737,6 +3737,66 @@ function checkLiquidGlassBackdropImageGuard() {
   console.log('[OK] liquid glass mirror composites both static custom background and WE image, cover-fitted and CORS-safe.');
 }
 
+/* 改缓存目录时带上界面设置（2026-11-22）
+ * 换缓存根 = 换 Chromium profile = localStorage 全空（默认 profile 实测 111 个键，
+ * 桌面歌词/经典预设歌词布局/音量/首页网格都在里面）。
+ *
+ * 跨 profile 复制 leveldb 实测无效（复制过去的 000003.log 与源字节一致、键名都在，
+ * 但 Chromium 打开后只读到应用新建的键），所以必须走渲染进程 API。这条守卫钉住全链：
+ *   ① 改目录前渲染进程导出 localStorage 快照（saveSettingsSnapshot）；
+ *   ② 主进程把快照落盘，并支持页面回调 consume 删除；
+ *   ③ 服务端返回 index.html 时注入 __MINERADIO_SETTINGS_SNAPSHOT__；
+ *   ④ index.html 的 head 内联脚本在任何模块之前写回 localStorage。 */
+function checkCacheSettingsSnapshotGuard() {
+  logStep('Cache settings snapshot guard');
+  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
+  const preloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
+  const serverText = fs.readFileSync(path.join(appRoot, 'server.js'), 'utf8');
+  const indexText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  const uiText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '07-fx', '08-cache-storage-settings.js'), 'utf8');
+
+  if (!/function writeSettingsSnapshot\(/.test(mainText)) fail('main process cannot persist a settings snapshot: changing the cache dir drops every localStorage setting');
+  if (!/function consumeSettingsSnapshot\(/.test(mainText)) fail('main process cannot delete the one-shot settings snapshot');
+  if (!/mineradio-cache-save-settings-snapshot/.test(mainText)) fail('missing IPC that receives the settings snapshot from the renderer');
+  if (!/mineradio-cache-consume-settings-snapshot/.test(mainText)) fail('missing IPC that consumes the settings snapshot after it was applied');
+  if (!/MINERADIO_SETTINGS_SNAPSHOT_FILE/.test(mainText)) fail('main process does not tell the server where the snapshot lives');
+  /* 登录 cookie 用 safeStorage 加密，OS 密钥在 profile 的 Local State 里；
+   * 只搬 localStorage 不搬 Local State，换目录后旧 cookie 全部解不开（登录全没）。 */
+  if (!/function snapshotProfileLocalState\(/.test(mainText)) fail('main process does not snapshot the profile Local State: changing the cache dir would make every stored login cookie undecryptable');
+  if (!/function applyProfileLocalStateSnapshot\(/.test(mainText)) fail('main process never restores the profile Local State into the new cache profile');
+  if (!/snapshotProfileLocalState\(prev\)/.test(mainText)) fail('setCacheSettings must snapshot the Local State before switching the cache root');
+  const lsApplyAt = mainText.indexOf('applyProfileLocalStateSnapshot(cacheSettings)');
+  const lsSetPathAt = mainText.indexOf("app.setPath('cache', cacheSettings.chromiumPath)");
+  if (lsApplyAt < 0) fail('startup does not restore the Local State snapshot');
+  if (lsSetPathAt > 0 && lsApplyAt > lsSetPathAt) fail('Local State must be restored before app.setPath("cache"), otherwise Chromium already opened the profile with a fresh key');
+
+  if (!/^\s*saveSettingsSnapshot:/m.test(preloadText)) fail('preload does not expose saveSettingsSnapshot');
+  if (!/^\s*consumeSettingsSnapshot:/m.test(preloadText)) fail('preload does not expose consumeSettingsSnapshot');
+
+  if (!/__MINERADIO_SETTINGS_SNAPSHOT__/.test(serverText)) fail('server does not inject the settings snapshot into index.html');
+
+  const restoreAt = indexText.indexOf('__MINERADIO_SETTINGS_SNAPSHOT__');
+  if (restoreAt < 0) fail('index.html never writes the snapshot back into localStorage');
+  const firstModuleTag = indexText.indexOf('<script src="js/modules/');
+  if (firstModuleTag > 0 && restoreAt > firstModuleTag) {
+    fail('index.html must restore the snapshot before any js/modules script runs, otherwise modules already read the defaults');
+  }
+  if (!/localStorage\.setItem\(k,/.test(indexText)) fail('index.html restore script does not call localStorage.setItem');
+
+  /* 必须真的「先导出再改目录」：只看 typeof 检测会被绕过，必须匹配调用形式。 */
+  const exportCallAt = uiText.search(/desktopWindow\.saveSettingsSnapshot\(\{ values:/);
+  const setCallAt = uiText.search(/setCacheSettings\(\{ rootPath: res\.path \}\)/);
+  if (exportCallAt < 0) fail('cache settings UI never calls saveSettingsSnapshot with the localStorage values');
+  if (setCallAt < 0) fail('cache settings UI lost its setCacheSettings call');
+  if (exportCallAt > setCallAt) {
+    fail('cache settings UI must export the snapshot BEFORE calling setCacheSettings, otherwise the old profile is already gone');
+  }
+  if (!/return saving\.then\(function\(\) \{[\s\S]{0,200}setCacheSettings\(/.test(uiText)) {
+    fail('cache settings UI must await the snapshot export before switching the cache root');
+  }
+  console.log('[OK] Changing the cache dir carries the UI settings across (snapshot → server inject → head restore, no leveldb copying).');
+}
+
 function checkSmoothnessRegressionGuard() {
   logStep('Smoothness regression guard (startup navigation + lyric pause + shader warmup)');
   const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
@@ -3749,6 +3809,16 @@ function checkSmoothnessRegressionGuard() {
   const retryAt = mainText.indexOf("writeStartupState('navigation-retry'");
   if (usableAt < 0) fail('navigation-timeout-but-usable state is not recorded');
   if (retryAt < 0 || usableAt > retryAt) fail('usability check must run before navigation-retry/stop()');
+  /* 重试前回填启动页必须 await：loadFile 是异步导航，不 await 会和下一次 loadURL
+   * 抢同一个 webContents —— 第二次导航被取消，报 ERR_FAILED (-2)，错误框里只剩这个
+   * 二次症状（实测 2026-11-22，MR-BOOT-WINDOW-LOAD）。 */
+  const retryBody = mainText.slice(retryAt, retryAt + 1600);
+  if (!/await withStartupTimeout\(\s*win\.loadFile\(/.test(retryBody)) {
+    fail('startup placeholder loadFile must be awaited before retrying navigation, otherwise it cancels the retry (ERR_FAILED -2)');
+  }
+  if (!/attemptErrors\.push/.test(mainText)) {
+    fail('navigation retry must keep every attempt\'s failure reason; keeping only the last one hides the real cause (e.g. attempt 1 timeout behind attempt 2 ERR_FAILED)');
+  }
 
   const lyricText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '14-stage-lyrics-rendering.js'), 'utf8');
   if (!/var _genuinePause = !!\(audio && audio\.paused && !audio\.ended && lyricsLines\.length\)/.test(lyricText)) {
@@ -3843,6 +3913,153 @@ function checkCacheSettingsStablePathGuard() {
   console.log('[OK] cache-settings.json persists in the stable userData, with legacy migration and valuable-cache migration in place.');
 }
 
+/* 悬浮小组件宿主契约（Enhanced Remote Widget，MIT）。
+ * 三层结构：页面桥接 → 主进程宿主 → widget 窗口（前端零改动，只认 window.foliaWidget）。
+ * 任何一层被拆掉都表现为「点开关没反应」或「窗口空白」，静态守卫在这里钉死。 */
+function checkFloatingWidgetHostGuard() {
+  logStep('Floating widget host guard');
+  const widgetDir = path.join(appRoot, 'desktop', 'floating-widget');
+  for (const file of ['widget.html', 'widget-preload.cjs', 'window-layouts.cjs', 'widget-visibility.cjs', 'widget-player.mjs']) {
+    if (!fs.existsSync(path.join(widgetDir, file))) {
+      fail('floating widget asset missing: desktop/floating-widget/' + file);
+    }
+  }
+  /* widget.html 必须仍用官方 preload：换成别的 preload 会让 window.foliaWidget 消失，整窗白屏。 */
+  const widgetHtml = fs.readFileSync(path.join(widgetDir, 'widget.html'), 'utf8');
+  if (!/mineradio-local:/.test(widgetHtml)) {
+    fail('widget.html CSP must allow the app-local cover protocol, otherwise local-library covers render blank');
+  }
+
+  const hostText = fs.readFileSync(path.join(appRoot, 'desktop', 'floating-widget.js'), 'utf8');
+  for (const fn of ['initFloatingWidget', 'toggleFloatingWidget', 'disposeFloatingWidget']) {
+    if (!new RegExp('function ' + fn + '\\(').test(hostText)) {
+      fail('floating widget host is missing ' + fn + '()');
+    }
+  }
+  if (hostText.indexOf("preload: path.join(WIDGET_DIR, 'widget-preload.cjs')") < 0) {
+    fail('floating widget window must load widget-preload.cjs (window.foliaWidget is the only host contract)');
+  }
+  /* 布局存储必须落稳定 userData：setPath('cache') 会篡改 userData。 */
+  if (!/stableUserDataDir/.test(hostText)) {
+    fail('floating widget layout store must resolve against the stable userData captured before setPath(cache)');
+  }
+  /* 操作必须校验 sender 再转发，否则任意窗口都能控制播放。 */
+  if (!/function isWidgetSender/.test(hostText) || hostText.indexOf('isWidgetSender(event)') < 0) {
+    fail('floating widget IPC must verify the sender window before accepting actions');
+  }
+
+  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
+  if (!/require\('\.\/floating-widget'\)/.test(mainText)) {
+    fail('desktop/main.js does not require the floating widget host');
+  }
+  if (mainText.indexOf('floatingWidget.initFloatingWidget(') < 0) {
+    fail('desktop/main.js never initializes the floating widget host (the FX toggle would silently do nothing)');
+  }
+  if (mainText.indexOf('floatingWidget.disposeFloatingWidget()') < 0) {
+    fail('shutdown must dispose the floating widget host, otherwise its windows outlive the app');
+  }
+
+  const preloadText = fs.readFileSync(path.join(appRoot, 'desktop', 'preload.js'), 'utf8');
+  for (const channel of [
+    'mineradio-floating-widget-status',
+    'mineradio-floating-widget-toggle',
+    'mineradio-floating-widget-sync',
+  ]) {
+    if (preloadText.indexOf(channel) < 0) fail('desktop/preload.js is missing the ' + channel + ' bridge');
+  }
+
+  const bridgeRel = 'js/modules/10-shell/30-floating-widget-bridge.js';
+  const bridgeText = fs.readFileSync(path.join(appRoot, 'public', bridgeRel), 'utf8');
+  const loaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'index-loader.js'), 'utf8');
+  if (loaderText.indexOf(bridgeRel) < 0) {
+    fail('the floating widget bridge module is not registered in index-loader (dead file, no effect)');
+  }
+  /* payload 字段必须与原版 client.mjs 的 pushCurrentState 对齐，否则小组件显示空信息。 */
+  for (const field of ['songKey', 'title', 'artist', 'album', 'coverUrl', 'position', 'duration',
+                       'state', 'lyricPosition', 'lyricRate', 'liked', 'canLike', 'currentLyric']) {
+    if (!new RegExp('\\b' + field + ':').test(bridgeText)) {
+      fail('floating widget payload is missing the ' + field + ' field expected by widget-player.mjs');
+    }
+  }
+  /* 歌词行必须转成小组件的 startTime/fullText 形状，并带原始 words 的逐词时间。 */
+  if (!/startTime: start/.test(bridgeText) || !/fullText:/.test(bridgeText)) {
+    fail('floating widget lyrics must be normalized to { startTime, endTime, fullText }');
+  }
+  /* 歌词异步晚到：必须有签名兜住，否则切歌后小组件一直显示上一首歌词。 */
+  if (!/floatingWidgetBridgeLyricSignature/.test(bridgeText)) {
+    fail('floating widget bridge must detect late-arriving lyrics (signature) and re-push the full set');
+  }
+  /* 入口：2026-11-23 起从视觉控制台的 #t-floatingWidget 换成三条杠菜单的快捷格
+   * （视觉控制台里那份与快捷格重复，已按用户要求删除）。仍然要求必须有入口接线。 */
+  const htmlText = fs.readFileSync(path.join(appRoot, 'public', 'index.html'), 'utf8');
+  if (htmlText.indexOf('id="qm-shortcut-floating"') < 0 || htmlText.indexOf('toggleFloatingWidgetPanel(') < 0) {
+    fail('三条杠菜单需要有「小组件」快捷格并接线到 toggleFloatingWidgetPanel()');
+  }
+  console.log('[OK] floating widget host: assets, preload contract, IPC sender check, payload fields, loader entry and menu shortcut are all intact.');
+}
+
+/* 悬浮小组件的液态玻璃主题（mode-liquid）：透明窗口 + CSS 玻璃语言。
+ * 关键判据来自实测：小组件是 transparent 窗口，背后桌面像素 DOM/canvas 读不到；
+ * 唯一可行的折射源 desktopCapturer 在 Windows 上反复挂起（帧率 13→0 波动），
+ * 不能作为稳定背景。所以这个主题的契约是「窗口真透明 + 无框」：
+ * 桌面由 OS 合成透出，玻璃质感靠封面描边/半透明控件/文字阴影表达。 */
+/* 悬浮小组件的液态玻璃主题（mode-liquid）：透明窗口 + CSS 玻璃语言。
+ * 判据来自实测：小组件是 transparent 窗口，背后桌面像素 DOM/canvas 读不到；
+ * 唯一可行的折射源 desktopCapturer 在 Windows 上反复挂起（抓帧 13→0 波动），
+ * 不能作为稳定背景。所以这个主题的契约是「窗口真透明 + 无框」：
+ * 桌面由 OS 合成直接透出，玻璃质感靠封面描边 / 半透明控件 / 文字阴影表达。 */
+function checkFloatingWidgetLiquidThemeGuard() {
+  logStep('Floating widget liquid theme guard');
+  const dir = path.join(appRoot, 'desktop', 'floating-widget');
+  const css = fs.readFileSync(path.join(dir, 'widget.css'), 'utf8');
+  const start = css.indexOf('.widget-card.mode-liquid {');
+  if (start < 0) fail('widget.css is missing the mode-liquid theme rules');
+  const block = css.slice(start, css.indexOf('}', start));
+  /* 玻璃面契约（2026-11-23 定稿）：桌面要透出来，但不能是「什么都没有」——
+   * 必须有一层低 alpha 的白色渐变面 + 顶部内高光 + 落影，且仍然没有硬边框。
+   * 完全透明会让用户觉得「玻璃被删掉了」；不透明的板子又挡住桌面。 */
+  if (!/linear-gradient\([^)]*rgba\(255, 255, 255/.test(block)) {
+    fail('mode-liquid needs a translucent white gradient pane, otherwise it reads as either a plain hole or an opaque board');
+  }
+  if (block.indexOf('border: none !important') < 0) {
+    fail('mode-liquid must have no hard border: the user explicitly removed the frame');
+  }
+  if (!/inset 0 1px 0 rgba\(255, 255, 255/.test(block)) {
+    fail('mode-liquid needs an inset top highlight to read as glass rather than a flat tint');
+  }
+  if (!/0 1\dpx 3\dpx rgba\(0, 0, 0/.test(block)) {
+    fail('mode-liquid needs an outer drop shadow so the glass separates from the wallpaper');
+  }
+  if (block.indexOf('backdrop-filter') < 0) {
+    fail('mode-liquid should still request backdrop-filter (harmless where unsupported, better where it works)');
+  }  /* 文字可读性兜底：桌面背后什么都有可能 */
+  if (!/text-shadow:[^;]*rgba\(0, 0, 0/.test(css)) {
+    fail('mode-liquid text needs a shadow fallback, otherwise white lyrics vanish on a bright wallpaper');
+  }
+  /* 封面是唯一的实体面：必须有圆角与内描边，否则和桌面糊在一起 */
+  if (!/\.widget-card\.mode-liquid \.cover \{[\s\S]{0,400}inset 0 0 0 1px/.test(css)) {
+    fail('mode-liquid cover needs an inset hairline so the artwork reads as a pane of glass on the desktop');
+  }
+  /* 不再依赖 WebGL 折射：player 里不能有任何 liquid 运行时接线。
+   * （文件本身可能被并行会话恢复，所以判据放在「谁在用它」上，而不是文件存在与否。） */
+  const player = fs.readFileSync(path.join(dir, 'widget-player.mjs'), 'utf8');
+  if (player.indexOf('createLiquidTheme') >= 0 || player.indexOf('liquidTheme') >= 0) {
+    fail('widget-player must not wire the WebGL liquid theme: it cannot refract the desktop and its backdrop capture hangs');
+  }
+  if (player.indexOf('widget-desktop-backdrop') >= 0) {
+    fail('widget-player must not listen for desktop backdrop frames; that path is unreliable on Windows and was removed');
+  }
+  const host = fs.readFileSync(path.join(appRoot, 'desktop', 'floating-widget.js'), 'utf8');
+  if (host.indexOf('desktopCapturer') >= 0 || host.indexOf('startDesktopCapture') >= 0) {
+    fail('floating widget must not capture the desktop: getSources hangs intermittently on Windows and frames never reach the glass reliably');
+  }
+  const stateText = fs.readFileSync(path.join(dir, 'widget-state.mjs'), 'utf8');
+  if (stateText.indexOf("cls: 'mode-liquid'") < 0) fail('MODES must expose the mode-liquid theme');
+  const html = fs.readFileSync(path.join(dir, 'widget.html'), 'utf8');
+  if (html.indexOf('data-mode="6"') < 0) fail('settings theme picker has no 7th option for 液态玻璃');
+  console.log('[OK] liquid theme: transparent frameless card, hairline cover, text shadow fallback; no unreliable desktop capture.');
+}
+
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard, checkOverlayTaskbarGuard, checkFoliaBackgroundLayerGuard, checkCacheSettingsStablePathGuard, checkLiquidGlassBackdropImageGuard, checkSmoothnessRegressionGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard, checkOverlayTaskbarGuard, checkFoliaBackgroundLayerGuard, checkCacheSettingsStablePathGuard, checkLiquidGlassBackdropImageGuard, checkFloatingWidgetHostGuard, checkFloatingWidgetLiquidThemeGuard, checkSmoothnessRegressionGuard, checkCacheSettingsSnapshotGuard
 };

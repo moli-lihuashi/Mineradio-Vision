@@ -1,6 +1,38 @@
 var fxPanelTab = 'presets';
+/* tab 高亮胶囊的位置不靠百分比公式算：直接读当前 active 按钮的真实盒子。
+ * 原因：CSS 里原来的 `translateX(index * (100% + gap))` 是按 6 列推的，
+ * 去掉「高级」页后 5 列会累积出 7px 误差（实测最后一格偏左），
+ * 而 grid 分配的列宽本身也不严格等分。 */
+function syncFxPanelTabPill() {
+  var tabs = document.getElementById('fx-panel-tabs');
+  if (!tabs) return;
+  var btn = tabs.querySelector('button.active') || tabs.querySelector('[data-fx-tab]');
+  if (!btn) return;
+  // 面板收着时测不到宽度，别把变量写成 0
+  if (btn.offsetWidth < 8) return;
+  tabs.style.setProperty('--fx-tab-left', btn.offsetLeft + 'px');
+  tabs.style.setProperty('--fx-tab-width', btn.offsetWidth + 'px');
+}
+/* 2026-11-23：Folia 的入口开关删了，改成「tab 即世界」——
+ * 切到 Folia 页就进入，切走就退出。这是它现在唯一的进出门。
+ * 用 typeof 兜住加载时序（12-folia 的运行时排在 07-fx 之后）。 */
+function syncFoliaWorldWithTab(prevTab, nextTab) {
+  if (prevTab === nextTab) return;
+  if (nextTab === 'folia') {
+    if (typeof foliaWorldEnter === 'function') {
+      try { foliaWorldEnter({ silent: true }); } catch (_) { }
+    }
+    return;
+  }
+  if (prevTab === 'folia' && typeof foliaWorldExit === 'function') {
+    try { foliaWorldExit({ silent: true }); } catch (_) { }
+  }
+}
 function setFxPanelTab(tab) {
-  var allowed = { presets:1, folia:1, appearance:1, lyrics:1, motion:1, advanced:1 };
+  // 2026-11-23：「高级」页整块搬进设置页（性能 / 内存 / 缓存 / 输出），
+  // 这里只剩五个视觉页；旧调用传 advanced 一律回落到预设页。
+  var allowed = { presets:1, folia:1, appearance:1, lyrics:1, motion:1 };
+  var prevTab = fxPanelTab;
   fxPanelTab = allowed[tab] ? tab : 'presets';
   var panel = document.getElementById('fx-panel');
   if (panel) panel.setAttribute('data-active-tab', fxPanelTab);
@@ -21,6 +53,13 @@ function setFxPanelTab(tab) {
   }
   repositionFxFloatingPanels();
   if (fxPanelTab === 'motion') scheduleFxParticleFireRefresh();
+  syncFoliaWorldWithTab(prevTab, fxPanelTab);
+  syncFxPanelTabPill();
+  // 面板刚展开的那一帧按钮还没有宽度，等过渡走完再对准一次
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(function () { syncFxPanelTabPill(); });
+    setTimeout(syncFxPanelTabPill, 480);
+  }
 }
 function fxPanelInputId(node) {
   var input = node && node.querySelector ? node.querySelector('input[id]') : null;
@@ -33,7 +72,8 @@ function fxPanelTargetForNode(node, current) {
   if (id === 'preset-grid' || id === 'user-archive-grid') return 'presets';
   if (id === 'fx-lyric-fold') return 'lyrics';
   if (id === 'fx-overlay-fold' || id === 'fx-stage-fold') return 'motion';
-  if (id === 'fx-advanced' || node.classList.contains('fx-actions')) return 'advanced';
+  // 全局「恢复默认」跟着预设页走（原来的高级页已并入设置页）
+  if (node.classList.contains('fx-actions')) return 'presets';
   if (node.classList.contains('lyric-color-row') || node.classList.contains('cover-color-pop') || node.classList.contains('color-lab-pop') || node.classList.contains('cover-color-loupe')) return 'appearance';
   if (inputId === 'fx-bgopacity' || inputId === 'fx-glassaberration') return 'appearance';
   if (/^fx-liquidglass/.test(inputId)) return 'appearance';
@@ -67,8 +107,7 @@ function organizeFxPanel() {
     ['folia', 'Folia'],
     ['appearance', '\u5916\u89c2'],
     ['lyrics', '\u6b4c\u8bcd'],
-    ['motion', '\u52a8\u6001'],
-    ['advanced', '\u9ad8\u7ea7']
+    ['motion', '\u52a8\u6001']
   ];
   var tabs = document.createElement('div');
   tabs.className = 'fx-panel-tabs';
@@ -129,6 +168,16 @@ function organizeFxPanel() {
     if (!btn) return;
     setFxPanelTab(btn.getAttribute('data-fx-tab'));
   });
+  // 面板宽度会随窗口 / DIY 模式变化，列宽跟着变，胶囊要重新量
+  if (!panel._fxTabPillResizeBound) {
+    panel._fxTabPillResizeBound = true;
+    window.addEventListener('resize', function () { syncFxPanelTabPill(); });
+  }
+  /* 存档恢复的 Folia：让 tab 反映实际世界，否则会停在「预设」页、
+   * 画面却已经是 Folia —— 用户再点一下「预设」就把世界关了。 */
+  if (fxPanelTab !== 'folia' && typeof foliaWorldActive === 'function') {
+    try { if (foliaWorldActive()) fxPanelTab = 'folia'; } catch (_) { }
+  }
   panel._fxPanelOrganized = true;
   repairFxParticleCountPlacement();
   setFxPanelTab(fxPanelTab);

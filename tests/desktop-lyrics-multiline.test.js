@@ -1337,8 +1337,9 @@ function testDesktopLyricsSettingsSurviveRestart() {
   storedLayoutJson = null;
 }
 
-/* 面板里的「桌面歌词高度 / 左右」两个滑块按用户要求删掉了（歌词窗口可以直接拖），
- * 主开关则要留在「镜头与叠加」的开关网格里，而不是被搬去歌词折叠区。 */
+/* 面板里的「桌面歌词高度 / 左右」两个滑块按用户要求删掉了（歌词窗口可以直接拖）。
+ * 2026-11-23：主开关也从「镜头与叠加」网格移出，改由三条杠菜单的快捷格承担 ——
+ * 同一开关两处出现属于重复入口，用户要求只留一处。 */
 function testPanelDropsPositionSliders() {
   const indexHtml = readSource(path.join(appRoot, 'public', 'index.html'));
   assert.ok(!/id="fx-desktoplyricsx"/.test(indexHtml), '「桌面歌词左右」滑块应已删除（歌词可直接拖）');
@@ -1346,7 +1347,8 @@ function testPanelDropsPositionSliders() {
 
   const overlayGrid = (indexHtml.match(/<div class="fx-toggle-grid">[\s\S]*?<\/div>\s*<div class="fx-dl-hint"/) || [''])[0];
   assert.ok(overlayGrid, '应能找到「镜头与叠加」的开关网格');
-  assert.ok(overlayGrid.indexOf('id="t-desktopLyrics"') >= 0, '桌面歌词主开关应出现在「镜头与叠加」开关网格里');
+  assert.ok(/id="qm-shortcut-desktopLyrics"[^>]*toggleFx\('desktopLyrics'\)/.test(indexHtml),
+    '桌面歌词主开关应出现在三条杠菜单的快捷格里（视觉控制台里那份已按「不重复」删掉）');
 
   const layoutSourceText = readSource(path.join(appRoot, 'public', 'js', 'modules', '07-fx', '05b-fx-panel-layout.js'));
   const moved = (layoutSourceText.match(/\[([\s\S]*?)\]\.forEach\(function\(id\)\{ moveToggleToGrid/) || [])[1] || '';
@@ -1378,12 +1380,15 @@ function testDesktopLyricsSettingsHiddenUntilEnabled() {
 
   const cssSource = readSource(path.join(appRoot, 'public', 'css', '07-fx', 'fx-panel.css'));
   assert.ok(/\.fx-dl-settings\{display:none\}/.test(cssSource), '默认（关）时设置区必须隐藏');
-  assert.ok(/#fx-panel\.dl-on \.fx-dl-settings\{display:block\}/.test(cssSource), 'CSS 要让 dl-on 时展开设置区');
-  assert.ok(/#fx-panel\.dl-off \.fx-dl-dependent\{display:none\}/.test(cssSource), '关掉时从属开关也要一起收起');
+  /* 2026-11-23：这组参数搬进设置页后，两个容器共享同一份显隐规则，
+   * 选择器前缀是 :is(#fx-panel,#settings-modal)，所以这里只校验类名与状态。 */
+  assert.ok(/\.dl-on \.fx-dl-settings\{display:block\}/.test(cssSource), 'CSS 要让 dl-on 时展开设置区');
+  assert.ok(/\.dl-off \.fx-dl-dependent\{display:none\}/.test(cssSource), '关掉时从属开关也要一起收起');
 
   const indexHtml = readSource(path.join(appRoot, 'public', 'index.html'));
-  const settingsBlock = (indexHtml.match(/<div class="fx-dl-settings" id="fx-desktop-lyrics-settings">[\s\S]*?\n {6}<\/div>/) || [''])[0];
-  assert.ok(settingsBlock, '面板里应有 #fx-desktop-lyrics-settings 容器');
+  // 容器已搬进设置页，缩进与结尾位置都变了 —— 用「开始标签 → 下一个顶层注释/结束」的区间取内容。
+  const settingsBlock = (indexHtml.match(/<div class="fx-dl-settings" id="fx-desktop-lyrics-settings">[\s\S]*?<!-- 壁纸设置/) || [''])[0];
+  assert.ok(settingsBlock, '设置页里应有 #fx-desktop-lyrics-settings 容器');
   ['fx-desktoplyricssize', 'fx-desktoplyricsopacity', 'fx-desktoplyricstilt',
     'desktop-lyrics-lines-seg', 'desktop-lyrics-motion-seg', 'desktop-lyrics-fps-seg'].forEach(function (id) {
     assert.ok(settingsBlock.indexOf('id="' + id + '"') >= 0, id + ' 应该被收进桌面歌词设置容器里');

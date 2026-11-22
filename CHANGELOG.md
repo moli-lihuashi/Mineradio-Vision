@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.3.4 · 2026-11-23
+
+### 悬浮小组件
+
+- 新增独立桌面小组件窗口：透明、可拖动、可缩放，显示当前歌曲封面、标题、歌手与播放控制。入口在视觉控制台的「挂件」页。
+- 小组件设置页内嵌在皮肤面板里，可调尺寸密度、显示项与液态玻璃风格；样式使用与主界面同一套玻璃语言（透明卡片 + 内描边 + 双层文字阴影保证可读性），不做 WebGL 折射——小组件是独立透明窗口，读不到桌面像素。
+- 主窗口与小组件通过 IPC 双向同步：播放状态上行、操作指令下行，切歌与暂停即时反映。
+
+### 设置页与皮肤中心
+
+- **三条杠菜单改为只放开关与跳转**，参数集中到应用内「设置」覆盖层，分 7 个页签：常规 / 播放 / 音频 / 桌面歌词 / 性能 / 存储 / 关于。
+- 搬过去的是同一批 DOM（id 与事件绑定不变），控件样式由 `#fx-panel` 扩展到 `:is(#fx-panel, #settings-modal)` 共享，没有第二套皮肤。
+- **T 恤按钮改为整屏皮肤面板**：红心 / 收藏演出 / 桌面宠物 / 控制条频谱 / 挂件 / 玻璃六个页签。液态玻璃参数（作用于 Home 卡片、控制台与面板）在这里调整。
+- 新增均衡器机架样式（`eq-rack.css`）。
+
+### 启动速度
+
+- **启动模块请求合并**：`index-loader` 原本要发 213 个模块请求，现在合并成 2 个批量接口（`POST /boot-modules`）。带路径白名单、token 门禁、ETag 与内存+磁盘两级缓存。
+- **二维码库改为按需加载**：`qrcode` 会连带拉起 `pngjs` 渲染器，热态 require 就要 631ms（占服务端启动 1465ms 的四成），而它只在酷狗扫码登录时用。服务端同步 require 期间整个 Electron 主进程消息泵被堵住，表现为冷启动时窗口已显示但鼠标转圈。
+
+### 缓存目录（续）
+
+- **改缓存目录不再丢界面设置**：界面设置存在 Chromium profile 的 localStorage 里，换缓存根等于换空 profile（默认 profile 实测 111 个键）。跨 profile 复制 leveldb 实测无效——文件字节完全一致，Chromium 仍只读到新建的 11 个键。改为改目录时导出快照、下次启动由服务端注入 `index.html`、在模块读设置之前写回，写回成功后删除快照（一次性，不覆盖用户新改的值）。
+- **改缓存目录不再丢登录**：cookie 用 `safeStorage` 加密，而 Windows 上 OS 加密密钥放在 profile 的 `Local State` 里。换 profile 就换密钥，旧 cookie 全部解不开（实测 `.kugou-cookie` 427 字节、解密后长度为 0）。现在改目录时一并快照 `Local State`，下次启动在 Chromium 打开新 profile 之前写回；目标 profile 已有 `Local State` 时不覆盖，避免让新凭据失效。
+
+### 其他
+
+- 服务端新增 `/floating-widget/` 前缀路由，只暴露 `desktop/floating-widget` 这一个目录，供小组件设置页以 iframe 内嵌。
+- 新增 4 个测试：启动模块批量接口、玻璃背景缓存、运行时卡顿守卫、小组件宿主。
+
 ## v3.3.3 · 2026-11-21
 
 ### 流畅度
@@ -32,6 +62,8 @@
 
 - **改缓存目录重启后弹回原路径**：`cache-settings.json` 原来从 `app.getPath('userData')` 读写，而 `setPath('cache', X)` 会把 userData 篡改成 `X/<APP>`，于是配置被写进 Chromium 缓存目录、重启时在真实位置读不到。现在改用 `setPath` 之前捕获的稳定路径；旧位置残留的配置会一次性迁移回来。
 - **改目录不再丢弃已有缓存**：节奏分析（重新分析耗时长）与歌词/译文（重新拉取要走网络）会自动搬到新目录；Chromium 缓存（封面/网络/音频分片）不搬，避免连带复制 200MB+ 垃圾。改目录后的提示会报出迁移数量。
+- **改目录不再丢设置**：界面设置（桌面歌词字号/行数/动效、经典预设歌词布局、音量、首页网格等）都存在 Chromium profile 的 localStorage 里，换缓存根等于换一个空 profile（默认 profile 实测 111 个键），以前改完目录会全部回到默认。试过直接复制 profile 的 leveldb，实测无效（复制过去的 `000003.log` 与源文件字节完全一致、键名都在，Chromium 打开后只读到应用新建的键）；改为走渲染进程 API：改目录前把 localStorage 全量导出成快照 → 下次启动服务端返回 index.html 时注入 `__MINERADIO_SETTINGS_SNAPSHOT__` → head 内联脚本在任何模块读设置之前写回 → 写回成功后删除一次性快照。端到端实测：12 个键全部从旧目录带到全新空目录，`desktopLyricsSize/lines`、`classicLyricCurvature` 读回一致。新增 `checkCacheSettingsSnapshotGuard`（5 处注入回归全部可拦截）。
+- **改目录不再丢登录**：cookie 用 safeStorage 加密，而 Windows 上那把 OS 密钥放在 Chromium profile 的 `Local State`（`os_crypt.encrypted_key`）里，换缓存根就换密钥——旧 cookie 文件还在却解不开，表现是「登录全没了」（实测：427 字节文件解密报 `Error while decrypting the ciphertext`）。现在改目录时把 `Local State` 一并快照，下次启动在 `setPath` 之前写进新 profile，新旧会话共用同一把密钥。若新 profile 已经有自己的 `Local State`（用户已在新目录登录），跳过覆盖、保留更新的那把。实测：新旧 profile 的 `Local State` SHA256 逐字节一致；保护分支日志为 `snapshot skipped: target profile already has one`。
 
 ### 视觉控制台
 
@@ -53,7 +85,7 @@
 - Folia 模组：移除 visualizer-jump，新增 huajian / miside-drop / visualizer52hz。
 - 删除死代码 `09b-playback-core.js`、`05-prismal-fill.js`。
 - 新增 12 个回归测试（壁纸舞台、桌面歌词、模组兼容、酷狗会员与登录身份等）。
-- 新增 4 个静态守卫：`checkSmoothnessRegressionGuard`（启动导航 / 暂停保留整轨 / shader 预热 / 同步建行预算）、`checkFoliaBackgroundLayerGuard`、`checkLiquidGlassBackdropImageGuard`、`checkCacheSettingsStablePathGuard`，六处注入回归全部可拦截；另有 `tests/fx-panel-scroll-keeper.test.js`。
+- 新增 5 个静态守卫：`checkSmoothnessRegressionGuard`（启动导航 / 暂停保留整轨 / shader 预热 / 同步建行预算，9 处注入回归全部可拦截）、`checkFoliaBackgroundLayerGuard`、`checkLiquidGlassBackdropImageGuard`、`checkCacheSettingsStablePathGuard`、`checkCacheSettingsSnapshotGuard`（5 处注入回归全部可拦截）；另有 `tests/fx-panel-scroll-keeper.test.js`。
 
 ## v3.3.2 · 2026-11-16 重新构建批次
 

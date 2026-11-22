@@ -64,7 +64,11 @@ test('皮肤弹层里有宠物板块，且加载了 16c 模块', () => {
   const html = read(HTML);
   assert.match(html, /id="skin-pet-grid"/, '皮肤弹层必须有宠物格子容器');
   assert.match(html, /data-pet-act="photo"/, '要有「用照片生成」入口');
-  assert.match(html, /data-pet-act="petdex"/, '要有「从 Petdex 导入」入口');
+  /* 2026-11-23：「从 Petdex 导入」按钮按用户要求删掉，改成进宠物页就自动展开
+   * 宠物库（#skin-pet-dex-slot 是它的槽位），入口从按钮变成了 tab 本身。 */
+  assert.match(html, /id="skin-pet-dex-slot"/, '宠物页要有 Petdex 宠物库的槽位');
+  assert.match(read('public/js/modules/07-fx/05e-skin-popover.js'), /openSkinPetDex\(\)/,
+    '切到宠物页时要展开宠物库');
   assert.match(read(LOADER), /16c-pet-skin\.js/, 'index-loader 必须加载 16c');
 });
 

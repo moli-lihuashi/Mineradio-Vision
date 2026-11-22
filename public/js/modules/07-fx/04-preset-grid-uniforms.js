@@ -121,7 +121,9 @@ function setPreset(p, opts) {
   if (changed && typeof updateEmptyHomeVisibility === 'function') {
     try { updateEmptyHomeVisibility({ forceLoad: false }); } catch (_) {}
   }
+  if (typeof markAppPerf === 'function') markAppPerf('preset-grid-refresh-start');
   refreshPresetGrid();
+  if (typeof markAppPerf === 'function') markAppPerf('preset-grid-refresh-done');
   if (changed && !opts.skipTransition) triggerPresetParticleTransition(prev, p);
   // 每个预设对应的相机基线 (改 userOrbit)
   if (changed && !opts.preserveCamera) {

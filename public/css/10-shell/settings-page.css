@@ -1,0 +1,273 @@
+/* =============================================================================
+ * 设置页 + 三条杠主菜单（2026-11-23）
+ *
+ * 背景：三条杠弹层原本塞了淡入淡出 / 10 段均衡 / 变速 / 歌曲过渡 / 定时 / 休息提醒，
+ * 视觉控制台的「高级」页又塞了画质、GPU 节流、内存压缩、缓存目录、输出设备。
+ * 两处都是「常用操作」与「一年调一次」混在一起，越加越臃肿。
+ *
+ * 这次按酷狗音乐的做法拆开：
+ *   · 三条杠 = 扁平主菜单，一行一个入口，只放开关与跳转；
+ *   · 设置 = 独立覆盖层，顶部 tab + 分组，承接所有低频参数。
+ *
+ * 控件本身不重写：搬过去的 .fx-slider / .fx-toggle / .fx-seg 仍是原来那批 DOM，
+ * id 与事件绑定原样保留。样式依靠把 fx-glass.css / prismal-chrome.css 里的
+ * #fx-panel 前缀扩成 :is(#fx-panel,#settings-modal) 来共享（见那两个文件）。
+ * ========================================================================== */
+
+/* ---------- 三条杠主菜单：快捷图标行 ---------- */
+/* 248px 四等分放不下「视觉控制台」四个字，会折成两行；这里加宽到 276 并禁止折行。 */
+#player-quick-menu-popover{width:276px;padding:12px 12px 10px}
+.qm-shortcuts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;margin:-2px 0 6px}
+.qm-shortcut{display:flex;flex-direction:column;align-items:center;gap:7px;padding:9px 1px 7px;
+  border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.60);
+  font-family:inherit;font-size:10px;font-weight:600;letter-spacing:0;white-space:nowrap;cursor:pointer;
+  transition:background .18s,color .18s}
+.qm-shortcut:hover{background:rgba(255,255,255,.06);color:#fff}
+.qm-shortcut-ico{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:rgba(224,250,255,.78);
+  transition:border-color .2s,background .2s,color .2s,box-shadow .2s}
+.qm-shortcut-ico svg{width:17px;height:17px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.qm-shortcut:hover .qm-shortcut-ico{border-color:rgba(255,255,255,.24);color:#fff}
+.qm-shortcut.on .qm-shortcut-ico{border-color:rgba(0,245,212,.44);background:rgba(0,245,212,.13);color:#d6fff8;
+  box-shadow:0 0 16px rgba(0,245,212,.18)}
+.qm-shortcut.on{color:rgba(214,255,248,.92)}
+
+/* ---------- 三条杠主菜单：一行一项 ---------- */
+.qm-list{display:flex;flex-direction:column;gap:1px}
+/* .qm-item 自带 display:flex，UA 的 [hidden]{display:none} 会被压掉
+ * （同 .fx-slider[hidden] 那个坑）——未登录时「退出登录」必须真的收起来。 */
+.qm-item[hidden]{display:none!important}
+.qm-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:0;border-radius:10px;
+  background:transparent;color:rgba(255,255,255,.80);font-family:inherit;font-size:12.5px;
+  cursor:pointer;text-align:left;transition:background .16s,color .16s}
+.qm-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.qm-item-ico{width:16px;height:16px;flex:0 0 auto;opacity:.66;display:block;fill:none;stroke:currentColor;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.qm-item:hover .qm-item-ico{opacity:.95}
+.qm-item-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qm-item small{font-size:10px;color:rgba(255,255,255,.36);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.qm-chev{width:13px;height:13px;flex:0 0 auto;opacity:.30;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.qm-item:hover .qm-chev{opacity:.6}
+.qm-list + .qm-list{margin-top:2px}
+.qm-list-foot .qm-item{color:rgba(255,255,255,.62);font-size:12px}
+.qm-list-foot .qm-item:hover{color:rgba(255,140,150,.96);background:rgba(255,83,103,.10)}
+
+/* 定时关闭收进一行，点开才铺开原有的整套控件（DOM 沿用 quick menu 里那套） */
+.qm-sleep-fold > summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;
+  padding:9px 10px;border-radius:10px;color:rgba(255,255,255,.80);font-size:12.5px;
+  transition:background .16s,color .16s}
+.qm-sleep-fold > summary::-webkit-details-marker{display:none}
+.qm-sleep-fold > summary:hover{background:rgba(255,255,255,.07);color:#fff}
+.qm-sleep-fold > summary small{margin-left:auto;font-size:10px;color:rgba(0,245,212,.76);font-variant-numeric:tabular-nums}
+.qm-sleep-fold > summary .qm-chev{transition:transform .2s}
+.qm-sleep-fold[open] > summary .qm-chev{transform:rotate(90deg)}
+.qm-sleep-fold[open] > summary{background:rgba(255,255,255,.05);color:#fff}
+.qm-sleep-body{padding:4px 4px 2px}
+.qm-sleep-body .quick-menu-section-title{display:none}
+
+/* ---------- 设置页 / 皮肤面板：共用的一套「终端克制」外观 ----------
+ * 参照 Claude Code 的界面语言：暖黑底、1px 细边、小圆角、不用发光，
+ * 层级靠间距与明度差，数字和英文标识走等宽。
+ * 这些变量挂在两个覆盖层上（不是 :root），不会漏到主界面。 */
+#settings-modal,#skin-popover{
+  --panel-line:rgba(255,255,255,.085);
+  --panel-line-strong:rgba(255,255,255,.16);
+  --panel-bg:#121211;
+  --panel-bg-2:#191918;
+  --panel-ink:rgba(255,255,255,.94);
+  --panel-ink-2:rgba(255,255,255,.60);
+  --panel-ink-3:rgba(255,255,255,.34);
+  --panel-mono:var(--font-mono,"JetBrains Mono","SF Mono",ui-monospace,monospace);
+  --panel-radius:14px;
+  --panel-radius-sm:9px;
+}
+
+/* ---------- 设置页：遮罩与外框 ---------- */
+/* 层级：压过 quick menu / 皮肤弹层（620）与视觉控制台（18），
+ * 但要低于 about / update 这类 .modal-mask —— 它们默认 z-index:50，
+ * 所以设置页打开时把 modal-mask 抬到 900，否则「完整构建溯源」会被盖住看不见。 */
+#settings-modal{position:fixed;inset:0;z-index:640;display:flex;align-items:center;justify-content:center;
+  padding:28px;background:rgba(8,8,7,.74);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  opacity:0;pointer-events:none;transition:opacity .18s ease}
+body.settings-page-open #settings-modal{opacity:1;pointer-events:auto}
+/* 设置页是 fixed 覆盖层，外层不该跟着滚：一旦 document 能滚，
+ * 定位到某个控件时会把「标题 + tab」顶出可视区，底部还露出窗口底色。 */
+body.settings-page-open{overflow:hidden}
+body.settings-page-open .modal-mask{z-index:900}
+body.settings-page-open #toast{z-index:920}
+
+.settings-shell{width:min(1080px,94vw);height:min(744px,90vh);display:flex;flex-direction:column;
+  border-radius:var(--panel-radius);border:1px solid var(--panel-line);overflow:hidden;
+  background:var(--panel-bg);
+  box-shadow:0 28px 72px rgba(0,0,0,.52);
+  transform:translateY(10px);
+  transition:transform .24s cubic-bezier(.2,.8,.3,1)}
+body.settings-page-open .settings-shell{transform:none}
+
+.settings-head{flex:0 0 auto;display:flex;align-items:flex-end;gap:18px;padding:22px 28px 14px}
+.settings-kicker{font-family:var(--panel-mono);font-size:9px;font-weight:500;letter-spacing:1.6px;
+  color:var(--panel-ink-3);margin-bottom:6px;text-transform:uppercase}
+.settings-title{margin:0;font-size:19px;line-height:1.2;font-weight:640;letter-spacing:.2px;color:var(--panel-ink)}
+.settings-head-spacer{flex:1 1 auto}
+.settings-search{position:relative;width:232px;flex:0 0 auto}
+.settings-search input{width:100%;height:32px;border-radius:var(--panel-radius-sm);padding:0 30px 0 29px;
+  border:1px solid var(--panel-line);background:rgba(255,255,255,.028);
+  color:var(--panel-ink);font-family:inherit;font-size:12px;outline:none;
+  transition:border-color .16s,background .16s}
+.settings-search input::placeholder{color:var(--panel-ink-3)}
+.settings-search input:focus{border-color:var(--panel-line-strong);background:rgba(255,255,255,.05)}
+.settings-search-ico{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;
+  color:var(--panel-ink-3);pointer-events:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.settings-search-clear{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:22px;height:22px;
+  display:none;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;
+  color:var(--panel-ink-3);cursor:pointer;font-size:14px;line-height:1;padding:0}
+.settings-search-clear:hover{background:rgba(255,255,255,.07);color:var(--panel-ink)}
+.settings-search.has-value .settings-search-clear{display:flex}
+.settings-close{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--panel-line);border-radius:var(--panel-radius-sm);background:transparent;
+  color:var(--panel-ink-2);cursor:pointer;transition:background .16s,color .16s,border-color .16s}
+.settings-close:hover{background:rgba(255,255,255,.06);border-color:var(--panel-line-strong);color:var(--panel-ink)}
+.settings-close svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+
+.settings-tabs{flex:0 0 auto;display:flex;gap:0;padding:0 22px;overflow-x:auto;
+  border-bottom:1px solid var(--panel-line);scrollbar-width:none}
+.settings-tabs::-webkit-scrollbar{height:0}
+.settings-tab{position:relative;padding:9px 13px 11px;border:0;background:transparent;
+  color:var(--panel-ink-3);font-family:inherit;font-size:12.5px;font-weight:500;letter-spacing:.1px;
+  cursor:pointer;white-space:nowrap;transition:color .16s}
+.settings-tab:hover{color:var(--panel-ink-2)}
+.settings-tab.active{color:var(--panel-ink);font-weight:640}
+.settings-tab.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;
+  border-radius:1px;background:#00f5d4}
+
+.settings-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 28px 40px}
+.settings-body::-webkit-scrollbar{width:8px}
+.settings-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.13);border-radius:999px;border:2px solid transparent;background-clip:content-box}
+.settings-body:hover::-webkit-scrollbar-thumb{background:rgba(255,255,255,.24);background-clip:content-box}
+
+.settings-page{display:none;max-width:780px}
+.settings-page.active{display:block}
+
+.settings-group{margin-bottom:26px}
+.settings-group:last-child{margin-bottom:0}
+/* 分组标题走等宽的克制写法：小号、宽字距、低对比，不跟内容抢注意力 */
+.settings-group-title{font-family:var(--panel-mono);font-size:10px;font-weight:500;letter-spacing:1.1px;
+  color:rgba(255,255,255,.46);margin:0 0 9px;text-transform:uppercase}
+.settings-group-note{font-size:10.5px;line-height:1.65;color:var(--panel-ink-3);margin-top:8px}
+.settings-group-body > .fx-section-label:first-child{margin-top:0}
+
+/* 「关于」页的三行事实 + 两个按钮（这两组之前没有任何样式，是裸 div） */
+.settings-fact{display:flex;align-items:baseline;gap:16px;min-height:34px;padding:7px 0;
+  border-bottom:1px solid rgba(255,255,255,.055)}
+.settings-fact:last-of-type{border-bottom:0}
+.settings-fact > span{flex:0 0 108px;font-size:11.5px;color:var(--panel-ink-2)}
+.settings-fact > b{flex:1 1 auto;min-width:0;font-family:var(--panel-mono);font-size:11.5px;font-weight:500;
+  color:var(--panel-ink);font-variant-numeric:tabular-nums;word-break:break-all}
+.settings-actions{display:flex;gap:9px;margin-top:14px}
+
+/* 组标题已经承担了「窗口 / 淡入淡出 / 歌曲过渡」这类小标题，
+   组里第一行再冒一个同名 section-label 就重复了。 */
+.settings-group-body > .fx-section-label:first-child,
+.settings-group-body > .quick-menu-section-title:first-child{display:none}
+
+/* 设置页里不折叠：点进来就是要改参数，再点一次 summary 只是多一道门槛。
+   summary 里的 *_summary 文案仍在 DOM 里，三条杠菜单的摘要照旧读得到。 */
+#settings-modal #audio-tuning-fold > summary,
+#settings-modal #playback-advanced-fold > summary,
+#settings-modal #track-transition-fold > summary{display:none}
+
+/* 桌面歌词参数常显：主开关在视觉控制台，这边只负责调，
+   不能因为开关没开就整页空白（原面板里那套 dl-on/dl-off 收起逻辑在设置页不适用）。 */
+#settings-modal .fx-dl-settings{display:block}
+
+/* lyrics.css 的窄窗媒体查询会把 .fx-toggle-grid 压成 1 列，那条是给 444px 的
+   视觉控制台写的；设置页宽得多，保持两列。 */
+#settings-modal .fx-toggle-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+/* 选中态在设置页里要更明确：这里没有 prismal 镜片，只靠 .085 的底色几乎看不出来。
+   · playlist.css 那条 .fx-seg button.active 带 !important，所以这里也必须带；
+   · fx-glass.css 给 .fx-seg 加了一层 135deg 白色高光 ::before（inset:0），
+     它压在 static 的按钮上面 —— 不把选中项提到 z-index:1，青色底会被这层灰白盖掉。
+   强度按面板的克制基调收过：底色 .20 → .14，描边 .40 → .30，去掉发光。 */
+#settings-modal .fx-seg button.active{position:relative;z-index:1;
+  background:rgba(0,245,212,.14)!important;color:#e9fffb!important;font-weight:640;
+  box-shadow:inset 0 0 0 1px rgba(0,245,212,.30)!important}
+
+/* 面板里不要 .fx-seg 那层 135deg 白高光（fx-glass.css 加的 inset:0 伪元素）：
+   它盖在按钮上，会让选中项看成一块灰白渐变，把强调色压没。视觉控制台里保留它，
+   因为那边按钮更小、需要那点体积感。 */
+#settings-modal .fx-seg::before,
+#skin-popover .fx-seg::before{display:none!important}
+
+/* 开关的「亮起」在 444px 的面板里是块小色片，放到 1000px 宽的设置页就是一大片青。
+   面板里收敛成浅底 + 细边，圆点保持实色即可表达状态。 */
+#settings-modal .fx-toggle.on,
+#skin-popover .fx-toggle.on{
+  background:rgba(0,245,212,.075)!important;
+  border-color:rgba(0,245,212,.22)!important;
+  color:rgba(214,255,248,.92)!important;
+  box-shadow:none!important;
+}
+#settings-modal .fx-toggle.on::after,
+#skin-popover .fx-toggle.on::after{
+  background:#00f5d4!important;box-shadow:none!important;
+}
+#settings-modal .fx-toggle.on::before,
+#skin-popover .fx-toggle.on::before{display:none!important}
+
+/* 面板里的控件比 444px 的视觉控制台宽裕，圆角统一收小一档、数字走等宽 */
+#settings-modal .fx-slider,
+#skin-popover .fx-slider,
+#settings-modal .fx-toggle,
+#skin-popover .fx-toggle,
+#settings-modal .fx-seg,
+#skin-popover .fx-seg,
+#settings-modal .lyric-color-row,
+#skin-popover .lyric-color-row{border-radius:var(--panel-radius-sm)}
+#settings-modal .fx-slider output,
+#skin-popover .fx-slider output,
+#settings-modal .fx-sub,
+#skin-popover .fx-sub{font-variant-numeric:tabular-nums}
+
+/* 三条杠菜单的摘要数字也用等宽，换行时不跳字宽 */
+.qm-item small,.qm-sleep-fold > summary small,#player-quick-menu-popover .quick-menu-section-title{
+  font-variant-numeric:tabular-nums}
+
+/* 三条杠里「应用工具」这个分组标题紧贴上一项，给点呼吸 */
+.player-quick-menu-popover .quick-menu-section-title{margin:10px 0 6px}
+
+/* 休息提醒的状态行与预览按钮：不要被拉成整行 */
+#settings-modal .break-reminder-status{margin-top:8px}
+#settings-modal .break-reminder-panel-row{justify-content:flex-start}
+#settings-modal .break-reminder-panel-row .fx-mini-btn{flex:0 0 auto;min-width:96px;padding:0 16px}
+
+/* 搜索命中：临时高亮整行，滚到视野中间后自动褪掉 */
+.settings-hit{animation:settings-hit-pulse 1.6s ease-out 1}
+@keyframes settings-hit-pulse{
+  0%{box-shadow:0 0 0 2px rgba(0,245,212,.55),0 0 26px rgba(0,245,212,.28)}
+  100%{box-shadow:0 0 0 2px rgba(0,245,212,0),0 0 0 rgba(0,245,212,0)}
+}
+.settings-empty{padding:34px 4px;color:rgba(255,255,255,.34);font-size:12px;line-height:1.7}
+
+/* 搜索结果面板：贴在搜索框下方 */
+.settings-search-results{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:3;
+  max-height:320px;overflow-y:auto;padding:6px;border-radius:12px;
+  border:1px solid rgba(157,184,207,.22);background:rgba(12,15,19,.98);
+  box-shadow:0 20px 46px rgba(0,0,0,.5)}
+.settings-search-results[hidden]{display:none}
+.settings-search-result{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;border:0;border-radius:8px;
+  background:transparent;color:rgba(255,255,255,.78);font-family:inherit;font-size:11.5px;cursor:pointer;text-align:left}
+.settings-search-result:hover{background:rgba(255,255,255,.08);color:#fff}
+.settings-search-result small{margin-left:auto;font-size:9.5px;color:rgba(255,255,255,.32);flex:0 0 auto}
+
+/* 窄窗口：设置页铺满，缩边距 */
+@media (max-width:820px){
+  #settings-modal{padding:0}
+  .settings-shell{width:100vw;height:100vh;border-radius:0;border:0}
+  .settings-head{padding:20px 18px 12px}
+  .settings-tabs{padding:0 12px}
+  .settings-body{padding:16px 18px 36px}
+  .settings-search{width:170px}
+  #settings-modal .fx-toggle-grid{grid-template-columns:1fr}
+}

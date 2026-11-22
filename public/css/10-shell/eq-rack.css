@@ -1,0 +1,81 @@
+/* =============================================================================
+ * 十段均衡器：竖向推子（2026-11-23）
+ *
+ * 原来是十行横向滑块 —— 和播放器的 EQ 直觉完全相反：频段是一条曲线，
+ * 竖着摆才能一眼看出「低频抬了多少、高频削了多少」。
+ *
+ * 轨道填充靠 --at-fill（0% = -12dB，100% = +12dB），由 04-mood/01-audio-tuning.js
+ * 的 syncUi() 写；推子本体仍是原生 input[type=range]，键盘、无障碍、拖拽都不用手写。
+ * 垂直方向用 writing-mode: vertical-lr + direction: rtl（Chromium 下 range 会跟着转）。
+ * ========================================================================== */
+
+.at-eq-rack{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px;
+  padding:18px 12px 10px;border-radius:12px;
+  border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.022);margin:10px 0 8px}
+.at-eq-band{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0}
+.at-eq-slot{position:relative;width:100%;height:198px;display:flex;align-items:center;justify-content:center}
+/* 0dB 参考线：范围是对称的 -12…+12，容器正中就是 0dB，抬升/衰减一眼可判 */
+.at-eq-slot::after{content://;position:absolute;left:2px;right:2px;top:50%;height:1px;/n  background:rgba(255,255,255,.07);pointer-events:none}
+
+.at-eq-range{
+  writing-mode:vertical-lr;
+  direction:rtl;                 /* 上 = 大值，符合「推子往上推是加」 */
+  width:22px;height:198px;
+  margin:0;padding:0;border:0;background:transparent;outline:none;
+  -webkit-appearance:none;appearance:none;cursor:ns-resize;
+}
+.at-eq-range::-webkit-slider-runnable-track{
+  width:2px;height:100%;border-radius:2px;border:0;
+  background:linear-gradient(to top,
+    #3f8ede 0 var(--at-fill,50%),
+    rgba(255,255,255,.13) var(--at-fill,50%) 100%);
+}
+.at-eq-range::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:13px;height:13px;margin-left:-5.5px;border-radius:50%;
+  background:#0d1117;border:2px solid #5aa2ef;
+  box-shadow:0 0 0 3px rgba(63,142,222,.14);
+  transition:box-shadow .16s ease,transform .16s ease;
+}
+.at-eq-range:hover::-webkit-slider-thumb{box-shadow:0 0 0 4px rgba(63,142,222,.22)}
+.at-eq-range:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px rgba(63,142,222,.34)}
+.at-eq-range:active::-webkit-slider-thumb{transform:scale(1.1)}
+.at-eq-range::-moz-range-track{width:2px;height:100%;border-radius:2px;background:rgba(255,255,255,.13);border:0}
+.at-eq-range::-moz-range-progress{width:2px;border-radius:2px;background:#3f8ede}
+.at-eq-range::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:#0d1117;border:2px solid #5aa2ef}
+
+.at-eq-freq{font-family:var(--panel-mono,ui-monospace,monospace);font-size:10px;
+  line-height:1;color:rgba(255,255,255,.56);font-variant-numeric:tabular-nums}
+.at-eq-val{font-family:var(--panel-mono,ui-monospace,monospace);font-size:10px;
+  line-height:1;color:rgba(255,255,255,.42);font-variant-numeric:tabular-nums}
+.at-eq-band.is-boost .at-eq-val{color:rgba(90,162,239,.72)}
+.at-eq-band.is-cut .at-eq-val{color:rgba(255,255,255,.34)}
+
+/* ---------- 预设卡片：给每个预设画一条自己的曲线 ---------- */
+/* 覆盖 shell.css 里那排纯文字小按钮。频谱柱子由 01-audio-tuning.js 按 PRESETS 生成。 */
+.audio-tuning-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 8px}
+.audio-tuning-presets button{
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;
+  min-height:74px;padding:11px 8px 10px;border-radius:10px;
+  border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.022);
+  color:rgba(255,255,255,.58);font-family:inherit;cursor:pointer;
+  transition:border-color .16s,background .16s,color .16s}
+.audio-tuning-presets button:hover{border-color:rgba(255,255,255,.18);background:rgba(255,255,255,.045);
+  color:rgba(255,255,255,.86)}
+.audio-tuning-presets button.active{border-color:rgba(90,162,239,.46);background:rgba(63,142,222,.10);
+  color:#dcecff}
+.at-preset-wave{display:flex;align-items:flex-end;justify-content:center;gap:3px;height:34px;width:100%}
+.at-preset-wave i{flex:1 1 0;max-width:4px;min-height:2px;border-radius:1px;
+  background:rgba(255,255,255,.20);transition:background .16s}
+.audio-tuning-presets button:hover .at-preset-wave i{background:rgba(255,255,255,.34)}
+.audio-tuning-presets button.active .at-preset-wave i{background:#5aa2ef}
+.at-preset-name{font-size:11px;font-weight:600;line-height:1;letter-spacing:.3px}
+
+/* 窄面板：十根推子挤不下时允许横向滚动，不压缩可点区域 */
+@media (max-width:640px){
+  .at-eq-rack{grid-template-columns:repeat(10,min-width:0);overflow-x:auto;gap:2px}
+  .audio-tuning-presets{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+/* 前级 / 平衡这两根横向滑块：和竖向推子用同一支蓝，别一个白一个蓝 */
+#settings-modal .at-control-row input[type=range]{accent-color:#3f8ede}

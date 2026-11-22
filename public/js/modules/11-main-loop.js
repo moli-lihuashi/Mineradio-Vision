@@ -992,6 +992,15 @@ var _lgBgImageEl = null;
 var _lgBgImageDecoded = null;
 var _lgBgImageUrl = '';
 var _lgBgImageStyleAt = 0;
+/* 壁纸/封面一变就要立刻让镜像重读 CSS 变量。
+ * 原来只有 2 秒 TTL：切歌或换壁纸后，玻璃会继续画上一张图 —— 用户实测
+ * 「切换壁纸时 liquid 透过来的还是上次的壁纸」。由 applyCustomBackground()
+ * 在写完 --custom-bg-image / --custom-bg-color 后调用本函数失效缓存。 */
+function invalidateLiquidGlassBackdropCache() {
+  _lgBgImageStyleAt = 0;
+  _lgMirrorBgColorAt = 0;
+}
+try { window.__lgInvalidateBackdropCache = invalidateLiquidGlassBackdropCache; } catch (_) {}
 var _lgBgImageRaw = '';
 var _lgBgImageOpacity = 0;
 function liquidGlassDrawCustomBgImage(ctx, W, H) {

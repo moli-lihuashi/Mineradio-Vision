@@ -155,6 +155,8 @@
           if (typeof global.homePetPickPhoto === 'function') global.homePetPickPhoto();
           else setNote('照片生成还没就绪');
         } else if (kind === 'petdex') {
+          // 面板开着时直接把宠物库展开在这一页里，不再弹首页那个浮层
+          if (typeof global.openSkinPetDex === 'function' && global.openSkinPetDex()) return;
           if (typeof global.HomePetPetdex !== 'undefined' && global.HomePetPetdex.openPanel) {
             global.HomePetPetdex.openPanel();
           } else {

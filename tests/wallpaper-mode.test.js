@@ -303,12 +303,14 @@ function testWallpaperPanelVisibilityFollowsToggle() {
     'applyWallpaperModeState 要调用 updateWallpaperPanelVisibility（开关切换即时生效）');
 
   /* hidden 属性必须真的能藏住：.fx-slider/.fx-seg/.fx-section-label 都带 display:grid/flex，
-   * 会盖掉 UA 的 [hidden]{display:none}。缺这条 CSS 就是「代码设了 hidden，面板里照样显示」。 */
+   * 会盖掉 UA 的 [hidden]{display:none}。缺这条 CSS 就是「代码设了 hidden，面板里照样显示」。
+   * 2026-11-23 起这些规则同时服务视觉控制台与设置页，选择器前缀写成
+   * :is(#fx-panel,#settings-modal)，所以这里只认「类名 + display:none」，不再钉死前缀。 */
   const panelCss = readSource(path.join(appRoot, 'public', 'css', '07-fx', 'fx-panel.css'));
-  assert.ok(/#fx-panel \.fx-slider\[hidden\][\s\S]{0,200}display:none/.test(panelCss),
+  assert.ok(/\.fx-slider\[hidden\][\s\S]{0,200}display:none/.test(panelCss),
     'CSS 要显式让 .fx-slider[hidden] 的 display:none 生效');
-  assert.ok(/#fx-panel \.fx-seg\[hidden\]/.test(panelCss), 'CSS 要覆盖 .fx-seg[hidden]');
-  assert.ok(/#fx-panel \.fx-section-label\[hidden\]/.test(panelCss), 'CSS 要覆盖 .fx-section-label[hidden]');
+  assert.ok(/\.fx-seg\[hidden\]/.test(panelCss), 'CSS 要覆盖 .fx-seg[hidden]');
+  assert.ok(/\.fx-section-label\[hidden\]/.test(panelCss), 'CSS 要覆盖 .fx-section-label[hidden]');
 }
 
 /* ---- 12d：开发锁已解除 ------------------------------------------------------ */
@@ -491,8 +493,10 @@ function testLegacyCanvasChainRemoved() {
 const indexHtml = readSource(indexPath);
 
 function testIndexHtmlUnlock() {
-  const start = indexHtml.indexOf('id="t-wallpaperMode"');
-  assert.ok(start >= 0, 'index.html 要有壁纸模式开关');
+  /* 2026-11-23：壁纸模式开关从视觉控制台搬到三条杠菜单的快捷格（视觉控制台里那份
+   * 与快捷格重复，已按用户要求删除）。下面的检查跟着挪到新位置。 */
+  const start = indexHtml.indexOf('id="qm-shortcut-wallpaper"');
+  assert.ok(start >= 0, '三条杠菜单要有壁纸模式快捷开关');
   const chunk = indexHtml.slice(Math.max(0, start - 200), start + 400);
   assert.ok(!/dev-locked/.test(chunk), '壁纸模式开关不得再有 dev-locked');
   assert.ok(!/fx-dev-badge/.test(chunk), '壁纸模式开关不得再有「开发中」徽标');
@@ -510,7 +514,7 @@ function testIndexHtmlUnlock() {
 
   /* 开关的 title 是用户唯一的操作提示。新形态下主窗口一直可用，
    * 退出就是「再点一次」—— 不能再写「Esc 退出 / 点托盘切回」那套旧说法。 */
-  const toggleTag = indexHtml.slice(start, indexHtml.indexOf('</div>', start));
+  const toggleTag = indexHtml.slice(start, indexHtml.indexOf('</button>', start));
   assert.ok(/title="[^"]*再点一次/.test(toggleTag), '壁纸模式开关的提示要说明「再点一次关闭」');
   assert.ok(!/title="[^"]*Esc/.test(toggleTag), 'Esc 退出已取消，提示里不能再写 Esc');
   assert.ok(!/title="[^"]*托盘/.test(toggleTag), '主窗口一直可用，不需要再让用户去点托盘');

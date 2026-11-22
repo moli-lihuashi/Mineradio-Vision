@@ -498,21 +498,26 @@ html body #fx-panel.fx-css-glass .fx-panel-tabs {
 }
 
 /* 选中态位置由 setFxPanelTab() 写在 #fx-panel 上的 data-active-tab 驱动。
-   6 列等宽：列宽 = (padding-box 宽 - 25px 间隙) / 6；每步位移 = 自身宽 + 5px gap。 */
+   2026-11-23：「高级」页并进设置页后只剩 5 列 —— 列宽 = (padding-box 宽 - 20px 间隙) / 5，
+   每步位移 = 自身宽 + 5px gap。分母没跟着改时，胶囊会停在 Folia 与「外观」之间
+   （第 2.4 格的位置），看起来像多出一个空按钮。 */
 html body #fx-panel.fx-css-glass[data-active-tab="presets"] .fx-panel-tabs { --fx-tab-index: 0; }
 html body #fx-panel.fx-css-glass[data-active-tab="folia"] .fx-panel-tabs { --fx-tab-index: 1; }
 html body #fx-panel.fx-css-glass[data-active-tab="appearance"] .fx-panel-tabs { --fx-tab-index: 2; }
 html body #fx-panel.fx-css-glass[data-active-tab="lyrics"] .fx-panel-tabs { --fx-tab-index: 3; }
 html body #fx-panel.fx-css-glass[data-active-tab="motion"] .fx-panel-tabs { --fx-tab-index: 4; }
-html body #fx-panel.fx-css-glass[data-active-tab="advanced"] .fx-panel-tabs { --fx-tab-index: 5; }
 
+/* 选中态位置：--fx-tab-left / --fx-tab-width 由 syncFxPanelTabPill() 从
+ * 「当前 active 按钮的 offsetLeft / offsetWidth」直接写进来。
+ * 原先按 6 列算的百分比公式在 5 列下会有累积误差（实测最后一格偏 7px），
+ * 而 grid 分配宽度本身也不是严格等分，所以改成对准实际盒子。 */
 html body #fx-panel.fx-css-glass .fx-panel-tabs::before {
   content: '' !important;
   position: absolute !important;
-  left: 5px !important;
+  left: var(--fx-tab-left, 5px) !important;
   top: 5px !important;
   bottom: 5px !important;
-  width: calc((100% - 35px) / 6) !important;
+  width: var(--fx-tab-width, calc((100% - 30px) / 5)) !important;
   z-index: 0 !important;
   pointer-events: none !important;
   border-radius: 11px !important;
@@ -530,8 +535,7 @@ html body #fx-panel.fx-css-glass .fx-panel-tabs::before {
     0 0 20px rgba(var(--fx-lg-accent),.10),
     inset 0 1px 0 rgba(255,255,255,.44),
     inset 0 -1px 0 rgba(0,0,0,.14) !important;
-  transform: translateX(calc(var(--fx-tab-index) * (100% + 5px)));
-  transition: transform .42s cubic-bezier(.16,1,.3,1);
+  transition: left .42s cubic-bezier(.16,1,.3,1), width .42s cubic-bezier(.16,1,.3,1);
 }
 
 /* 顶部一道镜面弧，和面板本体的高光语言保持一致 */
@@ -579,13 +583,8 @@ html body #fx-panel.fx-css-glass .fx-panel-tabs button::after {
   content: none !important;
 }
 
-/* 窄屏改成横向滚动后不再是 6 等宽列，改成固定 58px 步长 */
-@media (max-width:720px) {
-  html body #fx-panel.fx-css-glass .fx-panel-tabs::before {
-    width: 58px !important;
-    transform: translateX(calc(var(--fx-tab-index) * 63px));
-  }
-}
+/* 窄屏改成横向滚动后，胶囊位置同样由 syncFxPanelTabPill() 按实际按钮写变量，
+   这里不再需要固定 58px / 63px 的估算值。 */
 
 /* ------------------------------------------------------------- 10) 无障碍 / 降级 */
 @media (prefers-reduced-motion: reduce) {

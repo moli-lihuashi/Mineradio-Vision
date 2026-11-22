@@ -160,6 +160,13 @@ function updateDesktopLyricsPanelVisibility() {
   var on = !!(fx && fx.desktopLyrics) && !locked;
   panel.classList.toggle('dl-on', on);
   panel.classList.toggle('dl-off', !on);
+  /* 2026-11-23：这组参数已搬进设置页，显隐仍以同一个开关为准，
+   * 所以两个容器都挂一份同名字段，样式规则写成 :is(#fx-panel,#settings-modal).dl-on。 */
+  var settings = document.getElementById('settings-modal');
+  if (settings) {
+    settings.classList.toggle('dl-on', on);
+    settings.classList.toggle('dl-off', !on);
+  }
 }
 // 壁纸模式的「帧数 / 透明度」只在开关打开时显示（与桌面歌词设置块同一条 UX 约定）。
 // 整组共用一个容器控制显隐：标题和选项条分开设 hidden 时，曾出现只露出帧率条、没有标题，

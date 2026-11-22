@@ -12,7 +12,13 @@ body.home-preset-enter #sonic-topography-frame,
 body.home-preset-enter.sonic-topography-active #sonic-topography-frame{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important;transform:none!important}
 body.empty-home-active .home-card,
 body.empty-home-active .home-visual{animation:none!important;transition:border-color .22s cubic-bezier(.16,1,.3,1),background .22s,box-shadow .22s!important}
-body.splash-active #empty-home,body.immersive-mode #empty-home{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
+/* 开屏未退场时压住首页；一旦进入退场态（body.splash-revealing，dismissSplash 里加），
+ * 必须立刻放行：splash 本身此时已经 pointer-events:none 并在淡出，但 #empty-home
+ * 若继续 visibility:hidden + pointer-events:none，用户看到的就是「窗口出来了、
+ * 首页也在下面，却点不动」的 1.18s 空窗（实测 splash-dismiss 2927ms →
+ * home-revealed 4114ms）。#hint / #top-right 早就用的是 :not(.splash-revealing)，
+ * 这里原本是漏掉的一个。 */
+body.splash-active:not(.splash-revealing) #empty-home,body.immersive-mode #empty-home{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
 body.empty-home-active #canvas-container{filter:none}
 body.home-wallpaper-preview #canvas-container{filter:none}
 .empty-home-shell{--home-shell-gap:14px;--home-rail-gap:12px;--home-tile-min-h:166px;--home-scene-card-min-h:132px;--home-disc-size:200px;--home-wave-h:68px;--home-shell-min-w:904px;--home-shell-min-h:440px;height:100%;min-height:var(--home-shell-min-h);min-width:0;display:grid;grid-template-columns:minmax(370px,.94fr) minmax(520px,1.06fr);grid-template-rows:auto 1fr;gap:var(--home-shell-gap);align-content:stretch}

@@ -133,6 +133,10 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   getCacheSettings: () => ipcRenderer.invoke('mineradio-cache-get-settings'),
   chooseCacheDirectory: () => ipcRenderer.invoke('mineradio-cache-choose-directory'),
   setCacheSettings: (payload) => ipcRenderer.invoke('mineradio-cache-set-settings', payload || {}),
+  // 改缓存目录前把 localStorage 全量交给主进程（跨 profile 复制 leveldb 无效）
+  saveSettingsSnapshot: (payload) => ipcRenderer.invoke('mineradio-cache-save-settings-snapshot', payload || {}),
+  // 页面已把快照写回 localStorage → 删掉一次性快照文件
+  consumeSettingsSnapshot: () => ipcRenderer.invoke('mineradio-cache-consume-settings-snapshot'),
   // 阶段 3A：可选 WASAPI 共享输出（默认关；PCM 由渲染进程旁路推送）
   wasapiAvailable: () => ipcRenderer.invoke('mineradio-wasapi-available'),
   wasapiStatus: () => ipcRenderer.invoke('mineradio-wasapi-status'),
@@ -176,6 +180,38 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('desktop-window-state', listener);
     return () => ipcRenderer.removeListener('desktop-window-state', listener);
+  },
+  /* ---- 悬浮小组件（Enhanced Remote Widget）----
+   * 状态上行用 send（高频、不等待回执），操作下行用 on 订阅（主进程推过来）。 */
+  floatingWidget: {
+    status: () => ipcRenderer.invoke('mineradio-floating-widget-status'),
+    toggle: (visible) => ipcRenderer.invoke('mineradio-floating-widget-toggle',
+      typeof visible === 'boolean' ? { visible } : {}),
+    setAlwaysOnTop: (value) => ipcRenderer.invoke('mineradio-floating-widget-set-always-on-top', !!value),
+    /* 打开的偏好设置窗口（布局 / 主题 / 歌词样式 / 尺寸 / 滚轮行为） */
+    openSettings: () => ipcRenderer.invoke('mineradio-floating-widget-open-settings'),
+    /* 内嵌版：皮肤面板直接取快照 / 下发设置，不弹独立窗口 */
+    settingsPanelOpen: () => ipcRenderer.invoke('mineradio-floating-widget-open-settings-panel'),
+    applySettings: (payload) => ipcRenderer.invoke('mineradio-floating-widget-apply-settings', payload),
+    onSettingsState: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('mineradio-floating-widget-settings-state', listener);
+      return () => ipcRenderer.removeListener('mineradio-floating-widget-settings-state', listener);
+    },
+    sync: (state) => ipcRenderer.send('mineradio-floating-widget-sync', state),
+    onAction: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, action) => callback(action);
+      ipcRenderer.on('mineradio-floating-widget-action', listener);
+      return () => ipcRenderer.removeListener('mineradio-floating-widget-action', listener);
+    },
+    onVisibility: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('mineradio-floating-widget-visibility', listener);
+      return () => ipcRenderer.removeListener('mineradio-floating-widget-visibility', listener);
+    },
   },
 });
 

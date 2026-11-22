@@ -120,7 +120,7 @@ html.control-glass-svg-ok .prism-lens-pill.is-pressing{
 }
 
 /* ===== FX segmented controls: quiet recessed track + soft glass thumb ===== */
-#fx-panel .fx-seg.prism-lens-host{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host{
   display:flex;
   flex-wrap:nowrap;
   align-items:stretch;
@@ -140,9 +140,9 @@ html.control-glass-svg-ok .prism-lens-pill.is-pressing{
   -webkit-backdrop-filter:none!important;
   transform:none!important
 }
-#fx-panel .fx-seg.prism-lens-host::before{display:none!important;content:none!important}
-#fx-panel .fx-seg.prism-lens-host:hover,
-#fx-panel .fx-seg.prism-lens-host:active{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host::before{display:none!important;content:none!important}
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host:hover,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host:active{
   background:rgba(0,0,0,.30)!important;
   border-color:rgba(255,255,255,.10)!important;
   transform:none!important;
@@ -150,7 +150,7 @@ html.control-glass-svg-ok .prism-lens-pill.is-pressing{
     inset 0 1px 2px rgba(0,0,0,.35),
     inset 0 0 0 1px rgba(255,255,255,.03)!important
 }
-#fx-panel .fx-seg.prism-lens-host > button{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host > button{
   flex:1 1 0;
   min-width:0;
   height:auto;
@@ -170,17 +170,17 @@ html.control-glass-svg-ok .prism-lens-pill.is-pressing{
   -webkit-backdrop-filter:none!important;
   transition:color .18s ease,background .18s ease
 }
-#fx-panel .fx-seg.prism-lens-host > button:hover{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host > button:hover{
   color:rgba(255,255,255,.78)!important;
   background:rgba(255,255,255,.035)!important
 }
-#fx-panel .fx-seg.prism-lens-host > button.active{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host > button.active{
   color:#fff!important;
   background:transparent!important;
   border-color:transparent!important;
   text-shadow:none!important
 }
-#fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host .prism-lens-pill{
   border-radius:11px!important;
   background:rgba(255,255,255,.11);
   border:1px solid rgba(255,255,255,.13);
@@ -189,7 +189,7 @@ html.control-glass-svg-ok .prism-lens-pill.is-pressing{
     0 1px 2px rgba(0,0,0,.2),
     0 4px 12px rgba(0,0,0,.16)
 }
-html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
+html.control-glass-svg-ok :is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.prism-lens-host .prism-lens-pill{
   background:rgba(255,255,255,.06);
   border-color:rgba(255,255,255,.15);
   box-shadow:
@@ -200,8 +200,8 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
 }
 
 /* Multi-option FPS grid: chip board, not a giant sausage */
-#fx-panel .fx-seg.foreground-fps-seg.prism-lens-host,
-#fx-panel #foreground-fps-seg.prism-lens-host{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.foreground-fps-seg.prism-lens-host,
+:is(#fx-panel,#settings-modal,#skin-popover) #foreground-fps-seg.prism-lens-host{
   display:grid!important;
   grid-template-columns:repeat(4,minmax(0,1fr));
   gap:4px!important;
@@ -209,8 +209,8 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
   border-radius:16px!important;
   overflow:hidden!important
 }
-#fx-panel .fx-seg.foreground-fps-seg.prism-lens-host > button,
-#fx-panel #foreground-fps-seg.prism-lens-host > button{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.foreground-fps-seg.prism-lens-host > button,
+:is(#fx-panel,#settings-modal,#skin-popover) #foreground-fps-seg.prism-lens-host > button{
   flex:none;
   min-height:32px;
   padding:8px 4px!important;
@@ -219,44 +219,44 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
   border-bottom:0!important;
   font-variant-numeric:tabular-nums
 }
-#fx-panel .fx-seg.foreground-fps-seg.prism-lens-host > button:first-of-type,
-#fx-panel #foreground-fps-seg.prism-lens-host > button:first-of-type,
-#fx-panel #foreground-fps-seg.prism-lens-host > button[data-foreground-fps="vsync"]{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.foreground-fps-seg.prism-lens-host > button:first-of-type,
+:is(#fx-panel,#settings-modal,#skin-popover) #foreground-fps-seg.prism-lens-host > button:first-of-type,
+:is(#fx-panel,#settings-modal,#skin-popover) #foreground-fps-seg.prism-lens-host > button[data-foreground-fps="vsync"]{
   grid-column:1 / -1
 }
-#fx-panel .fx-seg.foreground-fps-seg.prism-lens-host .prism-lens-pill,
-#fx-panel #foreground-fps-seg.prism-lens-host .prism-lens-pill{
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg.foreground-fps-seg.prism-lens-host .prism-lens-pill,
+:is(#fx-panel,#settings-modal,#skin-popover) #foreground-fps-seg.prism-lens-host .prism-lens-pill{
   border-radius:12px!important
 }
 
 /* 5-option quality row stays single line with slightly tighter padding */
-#fx-panel #performance-quality-seg.prism-lens-host > button{
+:is(#fx-panel,#settings-modal,#skin-popover) #performance-quality-seg.prism-lens-host > button{
   padding:7px 2px!important;
   font-size:11px
 }
 
 /* ---- Normal FX sliders + volume (NOT particle fire track) ---- */
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range],
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range],
 #volume-slider{
   -webkit-appearance:none;appearance:none;
   height:26px;background:transparent;outline:none
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-runnable-track,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-runnable-track,
 #volume-slider::-webkit-slider-runnable-track{
   height:4px;border-radius:999px;
   background:
     linear-gradient(90deg,rgba(90,180,255,.88),rgba(90,180,255,.55)) 0/var(--prism-fill,0%) 100% no-repeat,
     rgba(255,255,255,.12);
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-track,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-track,
 #volume-slider::-moz-range-track{
   height:4px;border-radius:999px;background:rgba(255,255,255,.12);border:0
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-progress,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-progress,
 #volume-slider::-moz-range-progress{
   height:4px;border-radius:999px;background:rgba(90,180,255,.78)
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
 #volume-slider::-webkit-slider-thumb{
   -webkit-appearance:none;appearance:none;
   width:28px;height:18px;margin-top:-7px;border-radius:999px;
@@ -276,7 +276,7 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
     transform .32s cubic-bezier(.34,1.4,.64,1),
     box-shadow .24s ease
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-moz-range-thumb,
 #volume-slider::-moz-range-thumb{
   width:28px;height:18px;border-radius:999px;
   background:rgba(255,255,255,.16);
@@ -290,8 +290,8 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
   transition:transform .32s cubic-bezier(.34,1.4,.64,1),box-shadow .24s ease
 }
 /* Press / drag: enlarge via scale only (no width change → fill won't jump) */
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
 #volume-slider:active::-webkit-slider-thumb,
 #volume-slider.is-dragging::-webkit-slider-thumb{
   cursor:grabbing;
@@ -303,8 +303,8 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
     0 0 18px rgba(255,90,170,.28),
     0 8px 22px rgba(0,0,0,.34)
 }
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-moz-range-thumb,
-#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-moz-range-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-moz-range-thumb,
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-moz-range-thumb,
 #volume-slider:active::-moz-range-thumb,
 #volume-slider.is-dragging::-moz-range-thumb{
   cursor:grabbing;
@@ -315,7 +315,7 @@ html.control-glass-svg-ok #fx-panel .fx-seg.prism-lens-host .prism-lens-pill{
     0 0 18px rgba(255,90,170,.28),
     0 8px 20px rgba(0,0,0,.32)
 }
-html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
+html.control-glass-svg-ok :is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]::-webkit-slider-thumb,
 html.control-glass-svg-ok #volume-slider::-webkit-slider-thumb{
   background:rgba(255,255,255,.08);
   backdrop-filter:url(#mineradio-control-glass-filter) saturate(1.08);
@@ -327,8 +327,8 @@ html.control-glass-svg-ok #volume-slider::-webkit-slider-thumb{
     0 0 14px rgba(255,90,170,.14),
     0 6px 16px rgba(0,0,0,.24)
 }
-html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
-html.control-glass-svg-ok #fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
+html.control-glass-svg-ok :is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range]:active::-webkit-slider-thumb,
+html.control-glass-svg-ok :is(#fx-panel,#settings-modal,#skin-popover) .fx-slider:not(.fx-fire-slider-row) input[type=range].is-dragging::-webkit-slider-thumb,
 html.control-glass-svg-ok #volume-slider:active::-webkit-slider-thumb,
 html.control-glass-svg-ok #volume-slider.is-dragging::-webkit-slider-thumb{
   box-shadow:

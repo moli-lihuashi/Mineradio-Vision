@@ -1,0 +1,211 @@
+/* =============================================================================
+ * 偏好设置的深色版（2026-11-23）—— 只在「嵌进皮肤面板」时生效
+ *
+ * widget-settings.css 是上游 Folia 的浅色 iOS 设计（独立 520×640 窗口用的）。
+ * 嵌进播放器的深色面板后，白底 + 圆角画布看起来像「窗口里又套了一个窗口」，
+ * 所以这里用 html[data-embedded="1"] 作用域整页深色化：
+ *   · 独立窗口（没有 preload 桥、不带这个属性）仍是原来的浅色；
+ *   · 面板内嵌时跟面板同一套底色与 1px 细边。
+ *
+ * 同时隐藏 #sheet 自带的标题栏（「偏好设置 / 让小组件适合你的桌面 / 完成」）——
+ * 面板本来就有自己的标题和关闭按钮，留着就是两层标题。
+ * ========================================================================== */
+
+/* ---------- 底色与 token ---------- */
+html[data-embedded="1"].settings-page,
+html[data-embedded="1"] body,
+html[data-embedded="1"] .widget-card,
+html[data-embedded="1"] #sheet,
+html[data-embedded="1"] #sheet .sheet-inner {
+  background: #121211;
+}
+html[data-embedded="1"] #sheet {
+  --bg: #121211;
+  --dialog-bg: #1a1a19;
+  --surface: #1b1b1a;
+  --surface-hi: #242423;
+  --line: rgba(255, 255, 255, .09);
+  --text: rgba(255, 255, 255, .94);
+  --text-2: rgba(255, 255, 255, .62);
+  --text-3: rgba(255, 255, 255, .42);
+  --accent: #3f8ede;
+  --accent-on: #fff;
+  --solid: rgba(255, 255, 255, .10);
+  --solid-on: #eaf2ff;
+  color: var(--text);
+}
+
+/* 面板自带标题与关闭按钮，这里不要第二套 */
+html[data-embedded="1"] .sheet-head { display: none; }
+
+/* ---------- 分页 tab ---------- */
+html[data-embedded="1"] .settings-tabs {
+  margin: 6px 0 14px;
+  background: rgba(255, 255, 255, .045);
+  border: 1px solid rgba(255, 255, 255, .07);
+}
+html[data-embedded="1"] .settings-tab { color: rgba(255, 255, 255, .62); }
+html[data-embedded="1"] .settings-tab[aria-selected="true"] {
+  background: rgba(255, 255, 255, .075);
+  color: #f2f2f0;
+  box-shadow: none;
+}
+html[data-embedded="1"] .settings-tab:hover:not([aria-selected="true"]) {
+  background: rgba(255, 255, 255, .05);
+  color: #f2f2f0;
+}
+
+/* ---------- 分组卡片与文字 ---------- */
+html[data-embedded="1"] .settings-group {
+  background: #191918;
+  border-color: rgba(255, 255, 255, .08);
+}
+html[data-embedded="1"] .row { border-color: rgba(255, 255, 255, .07); }
+html[data-embedded="1"] .row-label > span:first-child { color: #f2f2f0; }
+html[data-embedded="1"] .row-sub,
+html[data-embedded="1"] .group-note,
+html[data-embedded="1"] .settings-section h2,
+html[data-embedded="1"] .layout-option-description,
+html[data-embedded="1"] .layout-option-size,
+html[data-embedded="1"] .lyric-style-preview figcaption,
+html[data-embedded="1"] .offset-endpoints,
+html[data-embedded="1"] #lyric-opacity-value,
+html[data-embedded="1"] .lyric-color-row label,
+html[data-embedded="1"] .select-option-description,
+html[data-embedded="1"] .circuit-font-heading output,
+html[data-embedded="1"] .circuit-auto-option,
+html[data-embedded="1"] #offset-value {
+  color: rgba(255, 255, 255, .42);
+}
+
+/* ---------- 开关 ---------- */
+html[data-embedded="1"] .toggle-track { background: rgba(255, 255, 255, .16); }
+html[data-embedded="1"] .toggle-track::after {
+  background: #e8ecf3;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+}
+html[data-embedded="1"] .toggle input:checked + .toggle-track { background: #3f8ede; }
+
+/* ---------- 分段按钮 ---------- */
+html[data-embedded="1"] .segments { background: rgba(255, 255, 255, .045); }
+html[data-embedded="1"] .seg { color: rgba(255, 255, 255, .62); }
+html[data-embedded="1"] .seg.active {
+  background: rgba(255, 255, 255, .10);
+  color: #f2f2f0;
+  box-shadow: none;
+}
+html[data-embedded="1"] .seg:hover:not(.active) { background: rgba(255, 255, 255, .07); }
+
+/* ---------- 主题卡 ---------- */
+html[data-embedded="1"] .theme-option { color: rgba(255, 255, 255, .62); }
+html[data-embedded="1"] .theme-option.active {
+  border-color: #3f8ede;
+  background: rgba(63, 142, 222, .14);
+  color: #cfe3ff;
+}
+html[data-embedded="1"] .theme-swatch { border-color: rgba(255, 255, 255, .16); }
+
+/* ---------- 布局卡 ---------- */
+html[data-embedded="1"] .layout-option {
+  background: #1b1b1a;
+  border-color: rgba(255, 255, 255, .08);
+}
+html[data-embedded="1"] .layout-option:hover { background: #212120; }
+html[data-embedded="1"] .layout-option.active {
+  border-color: #3f8ede;
+  background: rgba(63, 142, 222, .12);
+}
+html[data-embedded="1"] .layout-option-visual {
+  background: #121211;
+  border-color: rgba(255, 255, 255, .14);
+}
+html[data-embedded="1"] .layout-check { color: #5aa2ef; }
+
+/* ---------- 表单控件 ---------- */
+html[data-embedded="1"] select,
+html[data-embedded="1"] .motion-select-trigger {
+  background: #1b1b1a;
+  border-color: rgba(255, 255, 255, .14);
+  color: #f2f2f0;
+}
+html[data-embedded="1"] .motion-select-trigger:hover {
+  background: #212120;
+  border-color: rgba(255, 255, 255, .24);
+}
+html[data-embedded="1"] .motion-select.is-open .motion-select-trigger {
+  border-color: #3f8ede;
+  box-shadow: 0 0 0 2px rgba(63, 142, 222, .18);
+}
+html[data-embedded="1"] .motion-select-panel {
+  background: #1a1a19;
+  border-color: rgba(255, 255, 255, .12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+}
+html[data-embedded="1"] .motion-select-option { color: #f2f2f0; }
+html[data-embedded="1"] .motion-select-option.is-active { background: rgba(255, 255, 255, .06); }
+html[data-embedded="1"] .motion-select-option[aria-selected="true"] { background: rgba(63, 142, 222, .16); }
+html[data-embedded="1"] .motion-select-option[aria-selected="true"].is-active { background: rgba(63, 142, 222, .22); }
+html[data-embedded="1"] .select-option-icon {
+  background: #121211;
+  border-color: rgba(255, 255, 255, .12);
+  color: rgba(255, 255, 255, .62);
+}
+html[data-embedded="1"] .select-option-check,
+html[data-embedded="1"] .size-reset,
+html[data-embedded="1"] .circuit-reset-button { color: #5aa2ef; }
+html[data-embedded="1"] .lyric-color-control input[type="color"],
+html[data-embedded="1"] .lyric-color-control input[type="text"] {
+  background: #121211;
+  border-color: rgba(255, 255, 255, .16);
+  color: #f2f2f0;
+}
+
+/* ---------- 页脚与 Circuit 区 ---------- */
+html[data-embedded="1"] .settings-footer {
+  background: #121211;
+  border-color: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .42);
+}
+html[data-embedded="1"] .circuit-edit-button {
+  background: #1b1b1a;
+  border-color: rgba(255, 255, 255, .14);
+  color: #f2f2f0;
+}
+html[data-embedded="1"] .circuit-edit-button:hover { background: #212120; }
+html[data-embedded="1"] .circuit-edit-button[aria-pressed="true"] {
+  border-color: #3f8ede;
+  background: rgba(63, 142, 222, .16);
+  color: #cfe3ff;
+}
+html[data-embedded="1"] .circuit-field-option {
+  background: #1b1b1a;
+  border-color: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .62);
+}
+html[data-embedded="1"] .circuit-field-option:has(input:checked) {
+  border-color: rgba(63, 142, 222, .42);
+  background: rgba(63, 142, 222, .12);
+  color: #f2f2f0;
+}
+
+/* ---------- 内嵌时的间距与滚动条 ---------- */
+html[data-embedded="1"] #sheet .sheet-body { padding: 0 2px 8px; }
+html[data-embedded="1"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+html[data-embedded="1"] ::-webkit-scrollbar-track { background: transparent; }
+html[data-embedded="1"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .14);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+html[data-embedded="1"] ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .24); background-clip: content-box; }
+
+/* 内嵌时把「撑满视口 + 内部滚动」这条链整条拆掉：
+   上游 widget.css 里 .sheet-inner 是 height:100%/flex，.sheet-body 是 flex:1/overflow:auto，
+   只要它们还在，量出来的高度永远等于 iframe 高度，内容超出部分会被 iframe 裁掉。 */
+html[data-embedded="1"].settings-page,
+html[data-embedded="1"] body { height: auto; min-height: 0; overflow: visible; }
+html[data-embedded="1"] .widget-card { height: auto; min-height: 0; overflow: visible; }
+html[data-embedded="1"] #sheet { display: block; height: auto; min-height: 0; overflow: visible; }
+html[data-embedded="1"] #sheet .sheet-inner { display: block; height: auto; min-height: 0; overflow: visible; }
+html[data-embedded="1"] #sheet .sheet-body { flex: none; height: auto; max-height: none; overflow: visible; scrollbar-gutter: auto; }

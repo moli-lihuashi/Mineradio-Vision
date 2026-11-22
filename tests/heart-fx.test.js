@@ -242,8 +242,13 @@ test('皮肤弹层：开关手势与互斥', () => {
   assert.match(toggleFn, /if \(typeof closePlayerQuickMenu === 'function'\) closePlayerQuickMenu\(\);/,
     '打开皮肤要收掉播放选项，两块玻璃不能叠着');
   assert.match(toggleFn, /syncHeartFxGrid\(\)/, '打开时要懒渲染/同步六格');
-  assert.match(toggleFn, /positionSkinPopover\(e && e\.currentTarget\)/,
-    '弹层要贴着被点的那颗按钮，全屏那颗才不会飞到左上角');
+  /* 2026-11-23：弹层升级成整屏面板后不再跟着按钮定位，
+   * 原断言「贴着被点的那颗按钮」失效；现在要保证旧弹层写的 inline 定位被清掉，
+   * 否则面板会被钉在按钮下方而不是铺满窗口。 */
+  assert.match(toggleFn, /positionSkinPopover\(\)/, '打开时要复位定位');
+  const posFn = extractFunction(skinSrc, 'positionSkinPopover');
+  assert.match(posFn, /pop\.style\.top = ''/, '整屏面板要清掉旧弹层的 inline top');
+  assert.match(posFn, /pop\.style\.right = ''/, '整屏面板要清掉旧弹层的 inline right');
 
   const unlessFn = extractFunction(skinSrc, 'closeSkinPopoverUnless');
   assert.match(unlessFn, /pop\.contains\(target\)/, '点弹层内部不关');

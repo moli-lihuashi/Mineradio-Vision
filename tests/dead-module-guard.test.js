@@ -77,7 +77,10 @@ test('index-loader 与 HTML 脚本通道并集覆盖全部模块，无死文件�
   const loader = fs.readFileSync(path.join(PUBLIC, 'js/index-loader.js'), 'utf8');
   const { core, deferred } = parseLoaderPaths(loader);
   // 2026-11-21：+1 = 10-shell/09-wallpaper-stage-sync.js（壁纸模式播放镜像）
-  assert.equal(core.length, 133, 'core module count changed — update expectation deliberately');
+  // 2026-11-22：+1 = 10-shell/30-floating-widget-bridge.js（悬浮小组件桥接）
+  // 2026-11-23：+1 = 10-shell/31-settings-page.js（设置页开合 / 搜索 / 菜单摘要同步）
+  // 2026-11-23：+1 = 10-shell/32-widget-settings-inline.js（皮肤面板里的挂件设置）
+  assert.equal(core.length, 136, 'core module count changed — update expectation deliberately');
   assert.equal(deferred.length, 80, 'deferred module count changed — update expectation deliberately');
   const overlap = deferred.filter((p) => core.includes(p));
   assert.deepEqual(overlap, [], 'same module must not load twice across waves');

@@ -1,0 +1,19 @@
+{
+  "folium": 1,
+  "id": "enhanced-remote-widget",
+  "name": "增强版悬浮小组件",
+  "version": "1.15.5",
+  "author": "Antigravity",
+  "description": "桌面悬浮音乐小组件，提供五种自适应布局、Circuit 无边框封面海报、自由排版与信息自选、灰度抗锯齿逐词歌词与可切换翻译、可隐藏歌词控制栏、歌词颜色与描边自定义、可配置滚轮操作、沉浸与贴边模式、独立偏好设置窗口。",
+  "main": "index.cjs",
+  "client": "client.mjs",
+  "preview": "preview.jpg",
+  "permissions": [
+    "playback.control",
+    "net.fetch",
+    "filesystem.data",
+    "playback.read",
+    "stageLayers"
+  ],
+  "folia": ">=0.7.22 <0.8.0"
+}

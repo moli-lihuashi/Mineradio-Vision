@@ -112,6 +112,7 @@ function resetVisualIconColor() {
   setVisualIconColor(fxDefaults.visualIconColor || '#7fd8ff');
 }
 function applyCustomBackground() {
+  if (typeof markAppPerf === 'function') markAppPerf('custom-bg-start');
   /* 桌面效果层不画任何内置背景（#custom-bg 在 wallpaper-stage.css 里整层隐藏），
    * 但这条函数仍会把用户的自定义背景视频塞进 <video> 并 play() —— 等于在效果层里
    * 多解一份 1080p/4K 视频，而画面上一个像素都看不到。这里直接跳过并确保视频是停的。 */
@@ -149,6 +150,11 @@ function applyCustomBackground() {
     layer.style.setProperty('--custom-bg-image-opacity', image ? opacity.toFixed(3) : '0');
     layer.style.setProperty('--custom-bg-video-opacity', hasVideo ? opacity.toFixed(3) : '0');
     layer.style.setProperty('--custom-bg-overlay-opacity', media ? '0.18' : '0');
+  }
+  /* 镜像（LiquidGlass 的折射源）对 CSS 变量有 2s TTL，不失效就会继续画上一张壁纸。
+   * 函数声明在 11-main-loop，合并成单 script 后已提升，可直接按名调用。 */
+  if (typeof invalidateLiquidGlassBackdropCache === 'function') {
+    try { invalidateLiquidGlassBackdropCache(); } catch (_) {}
   }
   var token = ++customBgApplyToken;
   if (!video) return;

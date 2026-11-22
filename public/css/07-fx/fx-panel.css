@@ -288,12 +288,12 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 /* hidden 属性要真的生效：.fx-slider / .fx-seg / .fx-section-label 都自带 display，
    UA 的 [hidden]{display:none} 会被它们覆盖。壁纸模式的帧数/透明度、折叠区的提示
    都靠 hidden 收起，少了这条会「设了 hidden 还显示」。 */
-#fx-panel .fx-slider[hidden],
-#fx-panel .fx-seg[hidden],
-#fx-panel .fx-section-label[hidden]{display:none}
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-slider[hidden],
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-seg[hidden],
+:is(#fx-panel,#settings-modal,#skin-popover) .fx-section-label[hidden]{display:none}
 
 /* 壁纸设置与桌面歌词设置分开：统一容器 + 顶部分隔线，避免两条帧率条挨在一起被当成一组 */
-#fx-panel .wallpaper-settings-group[hidden]{display:none}
+:is(#fx-panel,#settings-modal,#skin-popover) .wallpaper-settings-group[hidden]{display:none}
 .wallpaper-settings-group{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
 .fx-label-scope{margin-left:6px;font-size:9px;font-weight:600;letter-spacing:0;text-transform:none;
   color:rgba(255,255,255,.4)}
@@ -390,10 +390,10 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 /* 桌面歌词：主开关放在「镜头与叠加」开关网格里，细项设置只在开关打开时展开。
    关掉时给一行提示，避免用户以为设置丢了。 */
 .fx-dl-settings{display:none}
-#fx-panel.dl-on .fx-dl-settings{display:block}
+:is(#fx-panel,#settings-modal,#skin-popover).dl-on .fx-dl-settings{display:block}
 .fx-dl-hint{margin-top:12px;padding:10px 12px;border-radius:10px;border:1px dashed rgba(0,245,212,.26);background:rgba(0,245,212,.05);font-size:11px;line-height:1.55;color:rgba(255,255,255,.56);letter-spacing:.2px}
 #fx-panel.dl-on .fx-dl-hint{display:none}
-#fx-panel.dl-off .fx-dl-dependent{display:none}
+:is(#fx-panel,#settings-modal,#skin-popover).dl-off .fx-dl-dependent{display:none}
 .fx-fold-nested-parent{border:1px solid rgba(0,245,212,.16);background:rgba(0,245,212,.025)}
 .fx-fold-nested-parent > .fx-fold-head{padding:13px 12px}
 .fx-fold-nested-parent > .fx-fold-head .fx-fold-title strong{color:rgba(0,245,212,.92);letter-spacing:.6px}

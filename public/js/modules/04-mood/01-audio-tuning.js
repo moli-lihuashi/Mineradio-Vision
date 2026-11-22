@@ -394,8 +394,19 @@
     for (var i = 0; i < EQ_BANDS.length; i++) {
       var input = el('at-eq-' + i);
       var label = el('at-eq-v-' + i);
-      if (input) input.value = String(settings.eq[i]);
+      if (input) {
+        input.value = String(settings.eq[i]);
+        // 竖向推子：--at-fill 是从底部算起的填充高度，-12dB 为 0%、+12dB 为 100%
+        if (input.style && typeof input.style.setProperty === 'function') {
+          input.style.setProperty('--at-fill', Math.round(((settings.eq[i] + EQ_LIMIT_DB) / (EQ_LIMIT_DB * 2)) * 100) + '%');
+        }
+      }
       if (label) label.textContent = fmtDb(settings.eq[i]);
+      var bandNode = input && input.closest ? input.closest('.at-eq-band') : null;
+      if (bandNode) {
+        bandNode.classList.toggle('is-boost', settings.eq[i] > 0.25);
+        bandNode.classList.toggle('is-cut', settings.eq[i] < -0.25);
+      }
     }
     var preamp = el('at-preamp');
     var preampV = el('at-preamp-v');
@@ -425,15 +436,42 @@
     var rows = el('audio-tuning-eq-rows');
     if (!rows || rows.getAttribute('data-built') === '1') return;
     rows.setAttribute('data-built', '1');
-    var html = '';
+    var html = '<div class="at-eq-rack">';
     for (var i = 0; i < EQ_BANDS.length; i++) {
-      html += '<div class="at-control-row">' +
-        '<label for="at-eq-' + i + '">' + EQ_LABELS[i] + '</label>' +
-        '<input id="at-eq-' + i + '" type="range" min="-12" max="12" step="0.5" value="' + settings.eq[i] +
-        '" data-band="' + i + '" aria-label="' + EQ_LABELS[i] + '赫兹均衡增益">' +
-        '<span id="at-eq-v-' + i + '">' + fmtDb(settings.eq[i]) + '</span></div>';
+      var fill = Math.round(((settings.eq[i] + EQ_LIMIT_DB) / (EQ_LIMIT_DB * 2)) * 100);
+      html += '<div class="at-eq-band">' +
+        '<div class="at-eq-slot">' +
+        '<input id="at-eq-' + i + '" class="at-eq-range" type="range" min="-' + EQ_LIMIT_DB + '" max="' + EQ_LIMIT_DB +
+        '" step="0.5" value="' + settings.eq[i] + '" data-band="' + i + '" style="--at-fill:' + fill + '%"' +
+        ' aria-label="' + EQ_BANDS[i] + '赫兹均衡增益">' +
+        '</div>' +
+        '<span class="at-eq-freq">' + EQ_LABELS[i] + '</span>' +
+        '<span class="at-eq-val" id="at-eq-v-' + i + '">' + fmtDb(settings.eq[i]) + '</span>' +
+        '</div>';
     }
+    html += '</div>';
     rows.innerHTML = html;
+    /* 预设卡片的频谱缩略：按预设自己的曲线画十根柱子。
+     * 整块包 try/catch —— 单测里的 document/元素是能力极简的桩，
+     * 少一个 querySelector 就把 buildUi 整个打断，得不偿失。 */
+    try {
+      /* 预设卡片的频谱缩略：按预设自己的曲线画十根柱子，一眼能看出风格差异。
+       * 走宿主元素 + 能力检测，不直接 document.querySelectorAll —— 单测里的 document
+       * 是只有 getElementById 的桩，直接调会 TypeError 把整个 buildUi 打断。 */
+      var presetHost = el('audio-tuning-presets');
+      if (presetHost && typeof presetHost.querySelectorAll === 'function') Array.prototype.forEach.call(presetHost.querySelectorAll('button[data-preset]'), function (btn) {
+        var wave = btn.querySelector('.at-preset-wave');
+        var preset = PRESETS[btn.getAttribute('data-preset')];
+        if (!wave || !preset || wave.childElementCount) return;
+        var bars = '';
+        for (var k = 0; k < preset.length; k++) {
+          var h = 24 + ((preset[k] + EQ_LIMIT_DB) / (EQ_LIMIT_DB * 2)) * 56;
+          bars += '<i style="height:' + h.toFixed(0) + '%"></i>';
+        }
+        wave.innerHTML = bars;
+      });
+
+    } catch (_) {}
     rows.addEventListener('input', function (e) {
       var t = e.target;
       if (!t || t.getAttribute('data-band') == null) return;

@@ -5,6 +5,15 @@
 // 从 server.js 抽出（原为 server.js 2911–3560 的后半段）。
 // 与 kugou-protocol.js 互不引用：两边都只依赖 server.js 注入的符号（依赖图实证）。
 
+// qrcode 只在扫码登录时用，且会连带拉起 pngjs（热态 require 631ms）。
+// 服务端同步 require 期间 Electron 主进程消息泵被堵 → 冷启动窗口转圈 2s。
+// 这里按需加载：用户点「酷狗扫码登录」时才付这一次代价（首帧二维码多几十 ms）。
+let _qrcodeLib = null;
+function qrcodeLib() {
+  if (!_qrcodeLib) _qrcodeLib = require('qrcode');
+  return _qrcodeLib;
+}
+
 module.exports = function createKugouService(deps) {
   const {
     KUGOU_ID,
@@ -13,7 +22,6 @@ module.exports = function createKugouService(deps) {
     KUGOU_QR_APPID,
     KUGOU_QR_CLIENTVER,
     KUGOU_QR_SRC_APPID,
-    QRCode,
     UA,
     getKugouCookie,
     getKugouLoginInfo,
@@ -126,7 +134,7 @@ module.exports = function createKugouService(deps) {
       throw err;
     }
     const loginUrl = 'https://h5.kugou.com/apps/loginQRCode/html/index.html?qrcode=' + encodeURIComponent(key);
-    const img = await QRCode.toDataURL(loginUrl, { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+    const img = await qrcodeLib().toDataURL(loginUrl, { margin: 1, width: 220, errorCorrectionLevel: 'M' });
     return {
       provider: 'kugou',
       key,

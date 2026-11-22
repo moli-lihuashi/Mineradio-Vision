@@ -131,9 +131,10 @@ function refreshFoliaWorldUi() {
   if (lists) lists.hidden = !active;
   var hint = document.getElementById('fx-folia-hint');
   if (hint) {
+    /* 2026-11-23 起没有入口开关了：切到这一页就是进入，切走就是退出。 */
     hint.textContent = active
       ? '画面已交给 Folia：原有预设、3D 歌词与镜头暂停；音频与歌词仍在跑。'
-      : '开启后，画面交给 Folia，原有预设与 3D 歌词暂停。';
+      : '切到这一页即进入 Folia；切回其他页就回到原世界。';
   }
   var error = document.getElementById('fx-folia-error');
   if (error) {

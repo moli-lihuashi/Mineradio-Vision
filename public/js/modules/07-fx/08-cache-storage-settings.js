@@ -80,8 +80,24 @@ function chooseCacheDirectory() {
       return;
     }
     if (!confirm('将缓存目录更改为:\n' + res.path + '\n\n节奏分析与歌词缓存会自动搬到新目录，' +
+      '界面设置（桌面歌词、预设布局、音量等）会在重启后一并带过去；\n' +
       'Chromium 缓存（封面/网络/音频分片）不迁移、仍留在旧目录可手动清理。\n\n确认更改?')) return;
-    return desktopWindow.setCacheSettings({ rootPath: res.path });
+    /* 换缓存根 = 换 Chromium profile = localStorage 全空。这里必须在页面还活着时
+     * 把设置全量交给主进程，服务端下次返回 index.html 时注入、页面 head 脚本写回。
+     * 快照失败不阻塞改目录：最坏结果只是设置回默认，目录本身仍能正常切换。 */
+    var snapshotValues = {};
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (key) snapshotValues[key] = localStorage.getItem(key);
+      }
+    } catch (_) {}
+    var saving = (window.desktopWindow && typeof desktopWindow.saveSettingsSnapshot === 'function')
+      ? desktopWindow.saveSettingsSnapshot({ values: snapshotValues }).catch(function(){ return { ok: false }; })
+      : Promise.resolve({ ok: false });
+    return saving.then(function() {
+      return desktopWindow.setCacheSettings({ rootPath: res.path });
+    });
   }).then(function(snapshot) {
     if (!snapshot) return;
     if (snapshot.ok === false) {
@@ -93,9 +109,10 @@ function chooseCacheDirectory() {
     if (m && (m.copied || m.failed)) {
       showToast('缓存目录已更新，迁移节奏/歌词 ' + m.copied + ' 个' +
         (m.skipped ? '（跳过 ' + m.skipped + ' 个）' : '') +
-        (m.failed ? '，失败 ' + m.failed + ' 个' : '') + '，重启后完全生效');
+        (m.failed ? '，失败 ' + m.failed + ' 个' : '') +
+        (snapshot.settingsSnapshotReady ? '，界面设置已备份' : '') + '，重启后完全生效');
     } else {
-      showToast('缓存目录已更新，重启后完全生效');
+      showToast('缓存目录已更新' + (snapshot.settingsSnapshotReady ? '，界面设置已备份' : '') + '，重启后完全生效');
     }
   }).catch(function(err) {
     showToast('缓存设置失败: ' + (err && err.message || '未知错误'));

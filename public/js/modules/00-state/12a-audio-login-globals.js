@@ -306,6 +306,9 @@ function markAppPerf(name) {
   try {
     var value = performance.now();
     appPerfMarks.push({ name: name, value: Math.round(value) });
+    /* 运行期也会复用这个标记（runtime-stall 记录器带最近 6 条），必须裁剪：
+     * 原实现只服务启动期，从不清理；运行期 mark 一多就是无界增长。 */
+    if (appPerfMarks.length > 200) appPerfMarks.splice(0, appPerfMarks.length - 200);
     if (performance && performance.mark) performance.mark('mineradio:' + name);
     if (appPerfMarks.length <= 16) console.debug('[MineradioPerf]', name, Math.round(value) + 'ms');
   } catch (e) {}

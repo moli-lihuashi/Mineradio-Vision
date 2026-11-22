@@ -159,6 +159,17 @@ module.exports = function createHttpServer(deps) {
     sendJSON(res, { ch, medians });
   }
 
+  /* 启动模块批量接口：把 index-loader 的 213 个模块请求合并成 2 个。
+   * 路径白名单 / token 门禁 / ETag / 内存+磁盘缓存都在 server/lib/boot-modules.js。
+   * 磁盘缓存目录从 beatmap 缓存目录的父级推导（= 用户配置的缓存根），
+   * 不额外传参、也不依赖 app.isPackaged：CLI 模式下没有该 env 就只走内存缓存。 */
+  const bootCacheDir = (() => {
+    const beatmaps = String(process.env.MINERADIO_BEAT_CACHE_DIR || '').trim();
+    if (!beatmaps) return '';
+    return path.join(path.dirname(beatmaps), 'boot-modules');
+  })();
+  const bootModules = require('./boot-modules')({ appRoot, sendJSON, assertIndexToken, cacheDir: bootCacheDir });
+
   // 抽成具名 async 函数，由下面的同步监听器统一 .catch()。
   // http.createServer 不会处理 async 监听器返回的 rejected Promise：
   // 以前任一 handler 抛出未被自身捕获的异常时，这个连接既没有响应、
@@ -255,6 +266,14 @@ module.exports = function createHttpServer(deps) {
       return;
     }
 
+    /* ---------- 启动模块批量接口（POST /boot-modules）----------
+     * 必须在 /api/ 收口与静态资源之前：它不是 /api/ 路径，掉到静态处理器
+     * 会变成一次 404（且写入时机在 fs 回调里，容易撞 ERR_HTTP_HEADERS_SENT）。 */
+    if (pn === '/boot-modules' && req.method === 'POST') {
+      await bootModules.handle(req, res, url);
+      return;
+    }
+
     /* ---------- /api/* 必须在这里收口，绝不允许掉到静态资源处理器 ----------
      * 静态资源处理器对不存在文件的处理是「writeHead(404)」，而走到这里时 res 可能
      * 已经发过头（见上面 matcher 循环的注释）—— 那就是一次 ERR_HTTP_HEADERS_SENT，
@@ -269,6 +288,22 @@ module.exports = function createHttpServer(deps) {
     // ---------- 静态资源 ----------
       if (pn === '/favicon.ico') {
       serveStatic(res, path.join(appRoot, 'build', 'icon.ico'));
+      return;
+    }
+
+    /* 悬浮小组件的偏好设置页要嵌进皮肤面板（iframe），而它住在 desktop/ 下、
+     * 不在 public/ 的静态根里。这里单独挂一条前缀，只暴露这一个目录。 */
+    if (pn.startsWith('/floating-widget/')) {
+      const widgetDir = path.resolve(appRoot, 'desktop', 'floating-widget');
+      let rel = pn.slice('/floating-widget/'.length);
+      try { rel = decodeURIComponent(rel); } catch (_) { rel = ''; }
+      const target = path.resolve(widgetDir, rel);
+      if (!rel || (!target.startsWith(widgetDir + path.sep) && target !== widgetDir)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      serveStatic(res, target);
       return;
     }
 

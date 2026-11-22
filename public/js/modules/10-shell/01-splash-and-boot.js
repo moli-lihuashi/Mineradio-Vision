@@ -1668,3 +1668,83 @@ setTimeout(function () {
   if (typeof initUpdatePreview === 'function') initUpdatePreview();
 }, 9000);
 
+
+/* ===== 运行期卡顿记录器（2026-11-22）=====
+ * enter-perf 只覆盖「启动窗口」；用户报的「返回 home 时白屏 ~2s + 鼠标转圈」
+ * 发生在运行期，startup-error.log 里既无崩溃也无重载，等于没有任何证据。
+ * 这里常驻监听 longtask 与 rAF 缺帧：只有 ≥400ms 才写一行，且 800ms 内最多一条；
+ * 输出与 enter-perf 共用 logs/enter-perf.log，用 kind=runtime-stall 区分。
+ * 只在 splash 退场后启用，避免与启动期埋点重复采样。 */
+(function installRuntimeStallRecorder() {
+  try {
+    if (typeof window === 'undefined' || typeof PerformanceObserver !== 'function') return;
+    var lastNoteAt = 0;
+    var activated = false;
+    function activatedNow() {
+      if (activated) return true;
+      if (document.body && !document.body.classList.contains('splash-active')) {
+        activated = true;
+        return true;
+      }
+      return false;
+    }
+    function note(type, duration, startAt, extra) {
+      if (!activatedNow()) return;
+      var now = Date.now();
+      if (now - lastNoteAt < 250) return;
+      lastNoteAt = now;
+      try {
+        if (!window.desktopWindow || typeof window.desktopWindow.notePerfEvent !== 'function') return;
+        var marks = [];
+        if (typeof appPerfMarks !== 'undefined' && appPerfMarks && appPerfMarks.length) {
+          marks = appPerfMarks.slice(-6).map(function (m) { return { n: m.name, t: m.value }; });
+        }
+        var payload = {
+          kind: 'runtime-stall',
+          ts: new Date().toISOString(),
+          type: type,
+          duration: Math.round(duration),
+          startAt: Math.round(startAt),
+          body: String((document.body && document.body.className) || '').slice(0, 260),
+          href: String(location.href || '').slice(0, 180),
+          visible: document.visibilityState,
+          marks: marks
+        };
+        if (extra && typeof extra === 'object') { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) payload[k] = extra[k]; } }
+        window.desktopWindow.notePerfEvent(payload);
+      } catch (_) {}
+    }
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (entry) {
+          if (entry.duration >= 200) note('longtask', entry.duration, entry.startTime);
+        });
+      }).observe({ entryTypes: ['longtask'] });
+    } catch (_) {}
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (entry) {
+          if (entry.duration < 200) return;
+          var ss = Math.round((entry.styleAndLayoutStart || 0) - entry.startTime);
+          var rs = Math.round((entry.renderStart || 0) - entry.startTime);
+          note('loaf', entry.duration, entry.startTime, {
+            renderStartMs: rs > 0 ? rs : 0,
+            styleLayoutMs: ss > 0 ? ss : 0,
+            blockingMs: Math.round(entry.blockingDuration || 0),
+            scripts: (entry.scripts || []).slice(0, 4).map(function (sc) {
+              return { name: String(sc.sourceFunctionName || sc.invoker || '?').slice(0, 60), dur: Math.round(sc.duration || 0) };
+            })
+          });
+        });
+      }).observe({ entryTypes: ['long-animation-frame'] });
+    } catch (_) {}
+    var lastFrame = performance.now();
+    (function frame() {
+      var t = performance.now();
+      var gap = t - lastFrame;
+      lastFrame = t;
+      if (gap >= 200 && document.visibilityState === 'visible') note('frame-gap', gap, t);
+      requestAnimationFrame(frame);
+    })();
+  } catch (_) {}
+})();

@@ -45,6 +45,9 @@ const appMemory = require('./app-memory');
 const systemMemory = require('./system-memory');
 // 内置歌单库（自包含，只依赖 node 内置模块）
 const { BuiltInPlaylistLibrary } = require('./built-in-playlist-library');
+// 悬浮小组件（Enhanced Remote Widget，MIT）：原版是官方 Folia 的主进程模组，
+// 这里用自己的窗口 + IPC 重建宿主，前端零改动。见 desktop/floating-widget.js 头部说明。
+const floatingWidget = require('./floating-widget');
 
 // ---- 懒加载：重模块首次 IPC 时再 require / 实例化 ----
 let _spotifyApiMod = null;
@@ -724,6 +727,116 @@ function readCacheSettings() {
     }
   } catch (_) {}
   return normalizeCacheSettings(null);
+}
+
+/* ===== 改缓存目录时带上界面设置 =====
+ * 界面设置（desktopLyrics*、classicLyric*、音量、首页网格……）都存在 Chromium profile
+ * 的 localStorage 里，换缓存根就等于换一个空 profile → 设置全回默认（默认 profile
+ * 实测 111 个键）。
+ *
+ * 试过「跨 profile 复制 leveldb」并实测无效：复制过去的 Local Storage/000003.log
+ * 与源文件字节完全一致、键名都在，但 Chromium 打开后只读到应用新建的 11 个键，
+ * 迁来的设置一个都没读到（2026-11-22 实测）。所以改走渲染进程的 API：
+ *   ① 改目录时把 localStorage 全量导出成快照文件（此时页面还活着，读得到）；
+ *   ② 下次启动，服务端返回 index.html 时把快照注入 __MINERADIO_SETTINGS_SNAPSHOT__；
+ *   ③ index.html 的 head 内联脚本在任何模块读设置之前写回 localStorage；
+ *   ④ 页面写回成功后回调 consume，主进程删除快照（一次性，避免盖掉用户新改的值）。 */
+const CACHE_SETTINGS_SNAPSHOT_FILE = 'cache-settings-snapshot.json';
+function cacheSettingsSnapshotPath() {
+  return path.join(_STABLE_USER_DATA, CACHE_SETTINGS_SNAPSHOT_FILE);
+}
+function writeSettingsSnapshot(values) {
+  try {
+    if (!values || typeof values !== 'object') return false;
+    const clean = {};
+    let count = 0;
+    for (const key of Object.keys(values)) {
+      if (!key || key.length > 256) continue;
+      const value = values[key];
+      if (value == null) continue;
+      const text = String(value);
+      if (text.length > 256 * 1024) continue;
+      clean[key] = text;
+      count += 1;
+      if (count >= 2000) break;
+    }
+    if (!count) return false;
+    fs.mkdirSync(_STABLE_USER_DATA, { recursive: true });
+    const tmp = cacheSettingsSnapshotPath() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, origin: 'local', savedAt: Date.now(), values: clean }), 'utf8');
+    fs.renameSync(tmp, cacheSettingsSnapshotPath());
+    console.log('[CacheSettings] settings snapshot saved, keys:', count);
+    return true;
+  } catch (e) {
+    console.warn('[CacheSettings] settings snapshot write failed:', e && e.message || e);
+    return false;
+  }
+}
+function consumeSettingsSnapshot() {
+  try {
+    if (fs.existsSync(cacheSettingsSnapshotPath())) fs.unlinkSync(cacheSettingsSnapshotPath());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+/* ===== 登录凭据的加密密钥也要跟着缓存目录走 =====
+ * cookie 文件（.cookie/.kugou-cookie/…）存在稳定路径，但它是用 safeStorage 加密的，
+ * 而 Electron 在 Windows 上把 OS 加密密钥放在 Chromium profile 的 `Local State`
+ * 里（os_crypt）。换缓存根 = 换 profile = 换密钥 → 旧 cookie 全部解不开，
+ * 表现是「登录全没了」，而文件明明还在（2026-11-22 实测：.kugou-cookie 427 字节，
+ * 解密后 len=0）。
+ * 所以改目录时把 Local State 一并快照，下次启动在 Chromium 打开新 profile 之前写回去。 */
+const CACHE_LOCAL_STATE_SNAPSHOT_FILE = 'cache-local-state.snapshot';
+function localStateSnapshotPath() {
+  return path.join(_STABLE_USER_DATA, CACHE_LOCAL_STATE_SNAPSHOT_FILE);
+}
+function profileLocalStatePath(settings) {
+  try {
+    if (!settings || !settings.chromiumPath) return '';
+    return path.join(settings.chromiumPath, APP_NAME, 'Local State');
+  } catch (_) {
+    return '';
+  }
+}
+function snapshotProfileLocalState(settings) {
+  try {
+    const src = profileLocalStatePath(settings);
+    if (!src || !fs.existsSync(src)) return false;
+    fs.mkdirSync(_STABLE_USER_DATA, { recursive: true });
+    fs.copyFileSync(src, localStateSnapshotPath());
+    console.log('[CacheSettings] profile Local State snapshot saved (keeps logins decryptable):', src);
+    return true;
+  } catch (e) {
+    console.warn('[CacheSettings] Local State snapshot failed:', e && e.message || e);
+    return false;
+  }
+}
+/* 在 setPath('cache') 之前调用：把旧 profile 的 Local State 放到新 profile 根，
+ * 使新会话沿用同一把 OS 加密密钥，旧 cookie 继续可解。 */
+function applyProfileLocalStateSnapshot(settings) {
+  try {
+    const snap = localStateSnapshotPath();
+    if (!fs.existsSync(snap)) return false;
+    const dst = profileLocalStatePath(settings);
+    if (!dst) return false;
+    /* 目标已经有 Local State 就不覆盖：那说明新 profile 已经自己加密过东西
+     * （用户在新目录登录过 / 写过 cookie）。用旧密钥盖上去会让**新**凭据失效，
+     * 比不迁移更糟。快照无论用不用都删掉，避免反复参与后续启动。 */
+    if (fs.existsSync(dst)) {
+      try { fs.unlinkSync(snap); } catch (_) {}
+      console.log('[CacheSettings] Local State snapshot skipped: target profile already has one (keeping the newer key)');
+      return false;
+    }
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(snap, dst);
+    fs.unlinkSync(snap);
+    console.log('[CacheSettings] profile Local State restored into the new cache profile:', dst);
+    return true;
+  } catch (e) {
+    console.warn('[CacheSettings] Local State restore failed:', e && e.message || e);
+    return false;
+  }
 }
 function writeCacheSettings(settings) {
   try {
@@ -2779,6 +2892,16 @@ ipcMain.handle('mineradio-cache-choose-directory', async () => {
   }
 });
 
+/* 改缓存目录前由渲染进程把 localStorage 全量交过来。必须走这条路：跨 profile
+ * 复制 Chromium 的 leveldb 实测无效（文件字节一致，崩溃后仍只读到应用新建的键）。 */
+ipcMain.handle('mineradio-cache-save-settings-snapshot', (_event, payload) => {
+  if (!isTrustedMainWindowIpc(_event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  const values = payload && typeof payload === 'object' ? payload.values : null;
+  const saved = writeSettingsSnapshot(values);
+  return { ok: saved, keys: saved ? Object.keys(values || {}).length : 0 };
+});
+ipcMain.handle('mineradio-cache-consume-settings-snapshot', () => ({ ok: consumeSettingsSnapshot() }));
+
 ipcMain.handle('mineradio-cache-set-settings', async (event, payload) => {
   if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
   try {
@@ -2798,11 +2921,27 @@ ipcMain.handle('mineradio-cache-set-settings', async (event, payload) => {
     if (migration.copied || migration.failed) {
       console.log('[CacheSettings] migrated cache:', JSON.stringify(migration));
     }
+    /* 缓存根变了 → 先把当前 profile 的 Local State 存下来（含 safeStorage 的 OS
+     * 加密密钥），否则新 profile 换密钥、所有平台登录 cookie 全部解不开。 */
+    const localStateSnapshotSaved = (changed && prev.chromiumPath !== next.chromiumPath)
+      ? snapshotProfileLocalState(prev)
+      : false;
     const wroteOk = writeCacheSettings(next);
     console.log('[CacheSettings] write result:', wroteOk, 'config path:', cacheSettingsConfigPath());
+    /* 缓存根变了 → 设置快照必须由渲染进程提供（它才读得到 localStorage）。
+     * 前端在调用本 IPC 之前会先 invoke 'mineradio-cache-save-settings-snapshot'；
+     * 这里只报告快照是否就位，便于前端提示。 */
+    const settingsSnapshotReady = (changed && prev.chromiumPath !== next.chromiumPath)
+      ? fs.existsSync(cacheSettingsSnapshotPath())
+      : false;
+    if (changed && prev.chromiumPath !== next.chromiumPath && !settingsSnapshotReady) {
+      console.warn('[CacheSettings] cache root changed without a settings snapshot; UI settings will fall back to defaults after restart');
+    }
     cacheSettings = next;
     const snapshot = await cacheSettingsSnapshot();
     snapshot.migration = migration;
+    snapshot.settingsSnapshotReady = settingsSnapshotReady;
+    snapshot.localStateSnapshotSaved = localStateSnapshotSaved;
     return snapshot;
   } catch (e) {
     console.error('[CacheSettings] set-settings error:', e);
@@ -4131,6 +4270,9 @@ async function loadMainWindowWithRetry(win, extraQuery = '') {
      chrome，不存在「先画整个播放器再藏起来」那一下闪烁。 */
   const extra = extraQuery ? String(extraQuery) : '';
   let lastError = null;
+  /* 每次 attempt 的真实失败原因。只留 lastError 会把 attempt 1 的超时信息覆盖成
+   * attempt 2 的 ERR_FAILED，用户看到的错误框里就只剩「导航被取消」这种二次症状。 */
+  const attemptErrors = [];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (!win || win.isDestroyed()) throw new Error('Main BrowserWindow was destroyed before navigation');
     const targetUrl = `${baseUrl}/?startupAttempt=${attempt}&startupAt=${Date.now()}${tokenQuery}${extra}`;
@@ -4145,6 +4287,7 @@ async function loadMainWindowWithRetry(win, extraQuery = '') {
       return targetUrl;
     } catch (error) {
       lastError = error;
+      attemptErrors.push(`#${attempt} ${String((error && (error.code || error.message)) || error).slice(0, 160)}`);
       console.warn(`[StartupWindow] navigation attempt ${attempt} promise rejected:`, error.message || error);
       /* 重试前认账：页面已就绪就别换页。多等 1.5s 也比重载掉一次播放便宜。 */
       if (await mainPageUsableAfterNavigation(win, targetUrl)) {
@@ -4158,12 +4301,24 @@ async function loadMainWindowWithRetry(win, extraQuery = '') {
       }
       writeStartupState('navigation-retry', { navigationAttempt: attempt, retryAt: Date.now(), lastNavigationError: String(error && error.message || error) });
       try { win.webContents.stop(); } catch (_) {}
-      // stop() 会清掉当前帧，透明窗口立刻变白窗——回填启动页保住深色首屏
-      try { win.loadFile(path.join(__dirname, 'startup.html')).catch(() => {}); } catch (_) {}
+      /* stop() 会清掉当前帧，透明窗口立刻变白窗——回填启动页保住深色首屏。
+       * 这里必须 await：loadFile 是异步导航，不 await 就会和下一次 loadURL 抢同一个
+       * webContents —— 第二次导航被它取消，报 ERR_FAILED (-2)，最终错误框里只剩下
+       * 这个二次症状（实测 2026-11-22：attempt 1 超时 15s + attempt 2 ERR_FAILED）。
+       * 回填只是视觉保底，失败/超时都不阻塞重试。 */
+      try {
+        await withStartupTimeout(
+          win.loadFile(path.join(__dirname, 'startup.html')),
+          3000,
+          'startup-placeholder',
+          () => { try { win.webContents.stop(); } catch (_) {} },
+        );
+      } catch (_) {}
       if (attempt < 2) await startupDelay(500);
     }
   }
-  const error = new Error(`loadURL failed after retry: ${startupErrorText(lastError)}`);
+  const history = attemptErrors.length > 1 ? ` | attempts: ${attemptErrors.join(' ; ')}` : '';
+  const error = new Error(`loadURL failed after retry: ${startupErrorText(lastError)}${history}`);
   error.code = (lastError && lastError.code) || 'MINERADIO_NAVIGATION_FAILED';
   throw error;
 }
@@ -4780,6 +4935,13 @@ app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 // 缓存目录可配置：默认根目录 = userData/cache (不改变现有行为，仅提供配置能力)
 cacheSettings = ensureCacheDirectories(readCacheSettings());
+/* 设置快照的落点交给 server：它返回 index.html 时把快照注入页面，由 head 内联脚本
+ * 写回 localStorage（跨 profile 复制 leveldb 实测无效，只能走渲染进程的 API）。 */
+try { process.env.MINERADIO_SETTINGS_SNAPSHOT_FILE = cacheSettingsSnapshotPath(); } catch (_) {}
+/* 紧接着把上次改目录时存下的 profile Local State 放进新 profile：safeStorage 的
+ * OS 加密密钥在这里，不写回去的话旧 cookie 全部解不开（表现为「登录全没了」）。
+ * 必须在 Chromium 打开新 profile 之前完成。 */
+try { applyProfileLocalStateSnapshot(cacheSettings); } catch (_) {}
 // 关键：_REAL_APP_DATA 已在 cacheSettingsConfigPath() 附近（setPath 之前）捕获。
 // Electron 的 setPath('cache', X) 会把 app.getPath('appData') 也改成 X，导致 app.getPath('userData')
 // 变成 X/Mineradio（即 chromium 缓存目录）。cookie 写到那里会被 Chromium 清理，登录状态丢失。
@@ -4879,6 +5041,17 @@ if (!gotSingleInstanceLock) {
     screen.on('display-added', handleDisplayLayoutChanged);
     screen.on('display-removed', handleDisplayLayoutChanged);
     await ensureMainWindowCreated();
+    /* 悬浮小组件宿主：窗口按需创建，这里只装 IPC 与存储。
+     * stableUserData 必须传 setPath('cache') 之前捕获的值（见 resolveStorePath 注释）。 */
+    try {
+      floatingWidget.initFloatingWidget({
+        getMainWindow: () => mainWindow,
+        isTrustedIpc: isTrustedMainWindowIpc,
+        stableUserData: _STABLE_USER_DATA,
+      });
+    } catch (error) {
+      console.warn('[FloatingWidget] init failed:', (error && error.message) || error);
+    }
   }).catch((e) => reportWindowCreationFailure('Main', e));
 
   // 子进程崩溃（GPU / raster / utility / audio）——renderer 的 reason=crashed 常常是它们的连锁反应，
@@ -4970,6 +5143,7 @@ if (!gotSingleInstanceLock) {
     }
     unregisterMineradioGlobalHotkeys();
     closeOverlayWindows();
+    try { floatingWidget.disposeFloatingWidget(); } catch (_) {}
     destroyTray();
     if (localServer && localServer.close) localServer.close();
     // powershell 鼠标轮询 / 光标监视是独立 OS 进程，主进程退出不一定带走。
