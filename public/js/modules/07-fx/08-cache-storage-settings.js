@@ -79,7 +79,8 @@ function chooseCacheDirectory() {
       showToast('选择目录失败: ' + (res && res.error || '未知错误'));
       return;
     }
-    if (!confirm('将缓存目录更改为:\n' + res.path + '\n\n新目录将成为歌词、Chromium、节拍、更新文件的存储位置。\n已有数据不会自动迁移，需手动复制。\n\n确认更改?')) return;
+    if (!confirm('将缓存目录更改为:\n' + res.path + '\n\n节奏分析与歌词缓存会自动搬到新目录，' +
+      'Chromium 缓存（封面/网络/音频分片）不迁移、仍留在旧目录可手动清理。\n\n确认更改?')) return;
     return desktopWindow.setCacheSettings({ rootPath: res.path });
   }).then(function(snapshot) {
     if (!snapshot) return;
@@ -88,7 +89,14 @@ function chooseCacheDirectory() {
       return;
     }
     renderCacheSettings(snapshot);
-    showToast('缓存目录已更新，重启后完全生效');
+    var m = snapshot.migration;
+    if (m && (m.copied || m.failed)) {
+      showToast('缓存目录已更新，迁移节奏/歌词 ' + m.copied + ' 个' +
+        (m.skipped ? '（跳过 ' + m.skipped + ' 个）' : '') +
+        (m.failed ? '，失败 ' + m.failed + ' 个' : '') + '，重启后完全生效');
+    } else {
+      showToast('缓存目录已更新，重启后完全生效');
+    }
   }).catch(function(err) {
     showToast('缓存设置失败: ' + (err && err.message || '未知错误'));
   });

@@ -37,6 +37,8 @@ var stageLyrics = {
   starRiverHeight: 0.58,
   lockFitScale: 1,
   snapCameraLockFrames: 0,
+  /* 暂停时整轨只隐藏不拆（见 tickLyricsParticles）：恢复播放靠这个标记把 visible 还原 */
+  pauseHiddenTrack: false,
 };
 var lyricSunColor = new THREE.Color(0xffe6a4);
 var lyricSunHotColor = new THREE.Color(0xfff4cc);

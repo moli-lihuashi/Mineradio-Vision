@@ -106,6 +106,14 @@ function commitIncomingStageLyricTrackMesh(trackMesh, payload, redrawOnly) {
   }
   if (!trackMesh.parent) stageLyrics.group.add(trackMesh);
   stageLyrics.current = trackMesh;
+  /* 新 mesh 提交时清掉「暂停隐藏」标志：否则暂停中切歌，新 mesh 会继承旧轨的
+   * visible=false（tick 的暂停分支继续按 _genuinePause 把它再藏一遍），表现成
+   * 「切歌后歌词空白」。切歌等于换了一条新轨，隐藏状态不该跨轨延续；恢复播放后
+   * 走正常 setLyricTrackTarget 重新显示当前行。 */
+  if (stageLyrics.pauseHiddenTrack) {
+    stageLyrics.pauseHiddenTrack = false;
+    trackMesh.visible = true;
+  }
   trackMesh.userData.lyricRevealWatchAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   trackMesh.userData.lyricRevealUploadedSeen = 0;
   if (typeof initializeStageLyricPersistentTrack === 'function') {
@@ -739,6 +747,9 @@ function handoffStageLyricsForNewTrack() {
   stageLyrics.nextText = '';
   stageLyrics.next2Text = '';
   stageLyrics.currentPayload = null;
+  /* 切歌即换轨，「暂停隐藏」态不该跨轨延续：这里清掉，交接间隙里 tick 的暂停分支
+   * 才不会继续按旧标志把旧 mesh 再藏一遍 / 或误拆新 mesh。 */
+  stageLyrics.pauseHiddenTrack = false;
   return true;
 }
 
@@ -765,6 +776,9 @@ function clearStageLyrics() {
   stageLyrics.nextText = '';
   stageLyrics.next2Text = '';
   stageLyrics.currentPayload = null;
+  /* 整轨释放时同步清掉「暂停隐藏」标志：否则曲目结束/切歌释放整轨后，
+   * pauseHiddenTrack 还挂着，下一首歌起播的 tick 会误清/误设一次 visible。 */
+  stageLyrics.pauseHiddenTrack = false;
   while (stageLyrics.outgoing.length) disposeLyricMesh(stageLyrics.outgoing.pop());
 }
 
@@ -1460,6 +1474,30 @@ function tickLyricsParticles() {
     // 暂停保留歌词：真暂停(非曲目结束)且开启时，保留当前歌词不退出
     var _pauseHold = fx.lyricPauseHold && audio && audio.paused && !audio.ended && lyricsLines.length && stageLyrics.current;
     if (!_pauseHold) {
+      /* 暂停只隐藏整轨，不拆 mesh：整轨是 40+ 行的几何/纹理，拆掉后恢复播放要重画
+       * 字符遮罩画布 + 重传纹理，实测恢复首帧 149ms（2026-11-21 流畅度测试）。
+       * 对用户而言「暂停不显示歌词」与隐藏等价；恢复时走正常 setLyricTrackTarget。
+       *
+       * 判据必须与 _pauseHold 同源（audio.paused && !audio.ended），不能用外层的
+       * !playing：切歌/缓冲瞬间 playing 可能短暂为 false 而音频仍在播，用 playing
+       * 判会把正在显示的整轨藏掉一帧；lyricsLines 为空时同理不能hide。
+       * 曲目结束（ended）仍走原清理，避免整轨常驻内存。 */
+      var _pauseTrack = stageLyrics.current;
+      var _pauseTrackData = _pauseTrack && _pauseTrack.userData && _pauseTrack.userData.lyric;
+      var _genuinePause = !!(audio && audio.paused && !audio.ended && lyricsLines.length);
+      if (_genuinePause && _pauseTrack && _pauseTrackData && _pauseTrackData.trackPersistent) {
+        /* 同一条轨暂停（currentIdx 已推进过）→ 隐藏整轨，恢复时 setLyricTrackTarget 重定位。
+         * 切歌后新 mesh 刚 commit 进来时 currentIdx 还是 -1（歌词行要播放分支才推进），
+         * 此时保持原样直接 return：既不能隐藏（藏了就是「切歌后歌词空白」），也不能
+         * fall through 到下面的拆轨逻辑（拆了恢复播放又要重建 149ms）。 */
+        if (stageLyrics.currentIdx !== -1) {
+          if (_pauseTrack.visible !== false) _pauseTrack.visible = false;
+          stageLyrics.pauseHiddenTrack = true;
+        }
+        hideStageNextLineSmooth();
+        hideStageNext2LineSmooth();
+        return;
+      }
       if (stageLyrics.current) {
         stageLyrics.current.userData.state = 'out';
         stageLyrics.current.userData.age = 0;
@@ -1472,6 +1510,10 @@ function tickLyricsParticles() {
       hideStageNext2LineSmooth();
     }
     return;
+  }
+  if (stageLyrics.pauseHiddenTrack) {
+    stageLyrics.pauseHiddenTrack = false;
+    if (stageLyrics.current) stageLyrics.current.visible = true;
   }
   var t = getAdjustedLyricPlaybackTime(stageLyricPlaybackSeconds());
   var newIdx = -1;

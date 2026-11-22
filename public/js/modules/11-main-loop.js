@@ -162,6 +162,7 @@ function wallpaperStageFrameGapMs() {
 }
 var mainLoopBackgroundTimer = 0;
 var mainLoopAnimationRequested = false;
+var lyricShaderWarmReady = false;
 function mainLoopDeepBackgroundSleeping() {
   return typeof isDeepBackgroundMode === 'function'
     && isDeepBackgroundMode()
@@ -400,6 +401,13 @@ function animate() {
     prevTime = now;
     tickDeepBackgroundFrame(now, deepDt);
     return;
+  }
+  /* 歌词 shader 常驻预热：锁住 program 不被整轨 dispose 后重编译。必须放在深后台检查
+   * 之后 —— 深后台时 renderer 缩到 4×4 且 render 被跳过，此时建预热 mesh 只会白建，
+   * program 并不会真正编译（lyricShaderWarmReady 却会被误标 true，之后不再重试）。
+   * 前台时首帧建，失败（scene 未就绪）下一帧再试；成功后不再调用。 */
+  if (!lyricShaderWarmReady) {
+    try { if (typeof ensureLyricShaderWarmup === 'function' && ensureLyricShaderWarmup() === true) lyricShaderWarmReady = true; } catch (_) {}
   }
   if (shouldSkipAdaptiveRenderFrame(now)) {
     if (window.__mineradioPerf && typeof window.__mineradioPerf.count === 'function') {
@@ -974,6 +982,54 @@ function liquidGlassBgVideoEl() {
   _lgBgVideoEl = document.getElementById('custom-bg-video');
   return _lgBgVideoEl;
 }
+/* 静态背景图源（--custom-bg-image）：玻璃镜像必须自己画它。
+ * 2026-11-22 实测：用户设了二次元背景图（bgImage 有 data URL、opacity=1），
+ * 但镜像均色仍 [1.7,1.9,2.1] 近黑 —— 合成清单只有底色+视频+WebGL，
+ * 从未包含 #custom-bg::before 的静态图，所以玻璃透出来是黑的。
+ * CSS 里 --custom-bg-image 设在 #custom-bg 元素上（不是 documentElement），
+ * 绘制对齐 background-size:cover / background-position:center。 */
+var _lgBgImageEl = null;
+var _lgBgImageDecoded = null;
+var _lgBgImageUrl = '';
+var _lgBgImageStyleAt = 0;
+var _lgBgImageRaw = '';
+var _lgBgImageOpacity = 0;
+function liquidGlassDrawCustomBgImage(ctx, W, H) {
+  var el = (_lgBgImageEl && _lgBgImageEl.isConnected)
+    ? _lgBgImageEl : (_lgBgImageEl = document.getElementById('custom-bg'));
+  if (!el) return;
+  /* WE 壁纸激活时 CSS 把 #custom-bg 整层 opacity:0，镜像也不该画它。 */
+  if (document.body.classList.contains('wallpaper-engine-active')) return;
+  /* 背景图/透明度只在用户改背景时变，2s 缓存 getComputedStyle —— high/ultra 档
+   * stride=1 每帧 blit，逐帧强制样式重算没收益。与下方 _lgMirrorBgColor 同风格。 */
+  var nowMs = performance.now();
+  if (!_lgBgImageStyleAt || (nowMs - _lgBgImageStyleAt) > 2000) {
+    var cs = getComputedStyle(el);
+    _lgBgImageRaw = (cs.getPropertyValue('--custom-bg-image') || '').trim();
+    var op = parseFloat(cs.getPropertyValue('--custom-bg-image-opacity'));
+    _lgBgImageOpacity = isFinite(op) ? op : 0;
+    _lgBgImageStyleAt = nowMs;
+  }
+  var raw = _lgBgImageRaw;
+  var opacity = _lgBgImageOpacity;
+  if (!raw || raw === 'none' || opacity <= 0) return;
+  var m = /^url\(["']?([\s\S]+?)["']?\)$/.exec(raw);
+  var url = m ? m[1] : '';
+  if (!url) return;
+  if (url !== _lgBgImageUrl) {
+    _lgBgImageUrl = url;
+    _lgBgImageDecoded = new Image();
+    _lgBgImageDecoded.src = url;
+  }
+  if (!_lgBgImageDecoded || !_lgBgImageDecoded.complete || !_lgBgImageDecoded.naturalWidth) return;
+  var iw = _lgBgImageDecoded.naturalWidth, ih = _lgBgImageDecoded.naturalHeight;
+  var scale = Math.max(W / iw, H / ih);
+  var dw = iw * scale, dh = ih * scale;
+  var prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = opacity;
+  try { ctx.drawImage(_lgBgImageDecoded, (W - dw) / 2, (H - dh) / 2, dw, dh); } catch (_) {}
+  ctx.globalAlpha = prevAlpha;
+}
 function liquidGlassMirrorBlitStride() {
   var quality = (typeof resolvedPerformanceQuality === 'function') ? resolvedPerformanceQuality() : 'balanced';
   /* 实测（2026-11-11，真实存档，原生世界）：主循环 45fps（22.2ms/帧）。
@@ -1068,6 +1124,9 @@ function updateLiquidGlassBackdropMirror() {
   }
   _lgMirrorCtx.fillStyle = _lgMirrorBgColor;
   _lgMirrorCtx.fillRect(0, 0, W, H);
+  /* 静态背景图（用户设的二次元壁纸等）必须先画：后面 WE 镜像/视频/WebGL 覆盖其上。
+   * 漏掉这一源 = 玻璃折射纯黑底（2026-11-22 复发根因）。 */
+  liquidGlassDrawCustomBgImage(_lgMirrorCtx, W, H);
   // Wallpaper Engine 壁纸激活时，玻璃的背景就是它 —— 不加这一源，
   // LiquidGlass 面板在 WE 壁纸上永远透出黑（2026-11-13 用户实测：
   // 手动导入/DIY 视频正常、WE 库点选的壁纸全黑，根因即此名单缺源）。
@@ -1080,6 +1139,19 @@ function updateLiquidGlassBackdropMirror() {
     try {
       _lgMirrorCtx.drawImage(weMirror, 0, 0, W, H);
     } catch (_) {}
+  } else if (document.body.classList.contains('wallpaper-engine-active')
+             && !document.body.classList.contains('wallpaper-engine-dwm-active')) {
+    /* WE 静态壁纸（图片预览 / 图片原图）：11-13 只补了视频镜像，图片从未进合成，
+     * 用户在 WE 图片壁纸上玻璃全黑。图片必须 crossOrigin=anonymous 加载才不污染
+     * 镜像 canvas（02-wallpaper-engine-fns.js 已设）。object-fit:cover 对齐 CSS。 */
+    var weImg = document.getElementById('wallpaper-engine-image');
+    if (weImg && weImg.complete && weImg.naturalWidth >= 2) {
+      var iscale = Math.max(W / weImg.naturalWidth, H / weImg.naturalHeight);
+      var isw = weImg.naturalWidth * iscale, ish = weImg.naturalHeight * iscale;
+      try {
+        _lgMirrorCtx.drawImage(weImg, (W - isw) / 2, (H - ish) / 2, isw, ish);
+      } catch (_) {}
+    }
   } else {
     var vid = liquidGlassBgVideoEl();
     if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {

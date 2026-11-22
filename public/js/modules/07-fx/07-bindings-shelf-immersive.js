@@ -451,6 +451,8 @@ function bindFxPanelDom() {
   updateFxInputs();
   initFxParticleFireSlider();
   scheduleFxParticleFireRefresh();
+  /* 点按钮后列表重建会把 .fx-scroll 钳回顶部，这里装滚动位置守护。 */
+  if (typeof bindFxPanelScrollKeeper === 'function') bindFxPanelScrollKeeper();
   fxPanelDomBound = true;
 }
 function toggleFx(key) {

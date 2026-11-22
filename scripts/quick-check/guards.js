@@ -3644,6 +3644,205 @@ function checkOverlayTaskbarGuard() {
   console.log('[OK] both desktop overlays use the Windows tool-window style while the main window stays on the taskbar.');
 }
 
+/* Folia 世界的层级契约：背景壳层（.folia-bg-host, z 0）在模式宿主（.folia-mode-host, z 1）
+ * 下面，所以任何模式的画布都必须是透明的，否则用户选的背景永远透不出来。
+ * 镜台曾经用 setClearColor(bg, 1) 铺满整块不透明画布 → 「换背景什么都没变」，
+ * 而且壁纸效果层只把 alpha 0 当成特例，主窗口一直是 1，问题藏了很久。 */
+function checkFoliaBackgroundLayerGuard() {
+  logStep('Folia background layer guard');
+  const foliaDir = path.join(appRoot, 'public', 'js', 'modules', '12-folia');
+  const files = fs.readdirSync(foliaDir).filter((f) => f.endsWith('.js'));
+  let sawRenderer = false;
+  for (const file of files) {
+    const text = fs.readFileSync(path.join(foliaDir, file), 'utf8');
+    if (text.indexOf('new THREE.WebGLRenderer') < 0) continue;
+    sawRenderer = true;
+    const calls = text.match(/setClearColor\([^;]*?\);/g) || [];
+    for (const call of calls) {
+      if (!/,\s*0\);$/.test(call.replace(/\s+/g, ' ').trim())) {
+        fail('folia mode ' + file + ' clears its WebGL canvas opaque (' + call.trim()
+          + '), which hides the shared background layer underneath');
+      }
+    }
+  }
+  if (!sawRenderer) fail('expected at least one folia WebGL mode (diorama) to be found for the clear-alpha check');
+
+  const css = fs.readFileSync(path.join(appRoot, 'public', 'css', '12-folia', 'folia-world.css'), 'utf8');
+  const bgHost = css.indexOf('.folia-bg-host {');
+  const modeHost = css.indexOf('.folia-mode-host {');
+  if (bgHost < 0 || modeHost < 0) fail('folia background/mode host rules are gone');
+  const zOf = (start) => {
+    const block = css.slice(start, css.indexOf('}', start));
+    const m = block.match(/z-index:\s*(-?\d+)/);
+    return m ? Number(m[1]) : null;
+  };
+  if (zOf(bgHost) !== 0 || zOf(modeHost) !== 1) {
+    fail('folia layering must stay .folia-bg-host(z 0) < .folia-mode-host(z 1)');
+  }
+
+  console.log('[OK] folia mode canvases stay transparent above the shared background layer.');
+}
+
+/* 流畅度回归守卫（2026-11-21 流畅度测试批次）
+ * ① 启动导航超时后，页面已就绪就不得整页重载（否则打断正在播放的音频）；
+ * ② 暂停不得拆掉整轨歌词（拆了恢复要重建 40+ 行，实测 149ms），只允许隐藏；
+ * ③ 歌词 shader 常驻预热必须存在并被主循环调用。 */
+/* 玻璃镜像必须包含静态背景图源：#custom-bg::before 的 --custom-bg-image。
+ * 2026-11-22 复发：镜像合成只有底色+视频+WebGL，漏了用户设的静态壁纸图，
+ * 玻璃折射出来是纯黑（镜像均色 [1.7,1.9,2.1]）。 */
+function checkLiquidGlassBackdropImageGuard() {
+  logStep('Liquid glass backdrop static image guard');
+  const loopText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '11-main-loop.js'), 'utf8');
+  if (!/function liquidGlassDrawCustomBgImage/.test(loopText)) {
+    fail('LiquidGlass backdrop mirror has no static custom-background image source; glass refracts black when a still wallpaper is set');
+  }
+  const draw = loopText.slice(loopText.indexOf('function liquidGlassDrawCustomBgImage'));
+  const drawEnd = draw.indexOf('\n}', draw.indexOf('ctx.globalAlpha = prevAlpha'));
+  const drawBody = draw.slice(0, drawEnd);
+  if (!/getPropertyValue\(['"]--custom-bg-image['"]\)/.test(drawBody) ||
+      !/getPropertyValue\(['"]--custom-bg-image-opacity['"]\)/.test(drawBody) ||
+      !/naturalWidth/.test(drawBody) || !/background|cover|Math\.max\(W \/ iw, H \/ ih\)/.test(drawBody)) {
+    fail('custom-background image must be decoded, cover-fitted and alpha-blended to match the CSS backdrop');
+  }
+  if (!/wallpaper-engine-active/.test(drawBody)) {
+    fail('custom-background image draw must skip when Wallpaper Engine owns the backdrop, otherwise it paints under WE as a stale layer');
+  }
+  const fn = loopText.indexOf('function updateLiquidGlassBackdropMirror');
+  const fnEnd = loopText.indexOf('\n}', loopText.indexOf('_globalDirty = true', fn));
+  const fnBody = loopText.slice(fn, fnEnd);
+  const callAt = fnBody.indexOf('liquidGlassDrawCustomBgImage(');
+  const weAt = fnBody.indexOf('weMirrorReady');
+  if (callAt < 0 || weAt < 0 || callAt > weAt) {
+    fail('custom-background image must be drawn into the mirror before the WE mirror/video branch so overlays composite in CSS order');
+  }
+  /* WE 静态壁纸图同样必须进镜像：11-13 只补了视频镜像，图片从未画进合成。 */
+  if (!/wallpaper-engine-image/.test(fnBody) ||
+      !/naturalWidth/.test(fnBody.slice(fnBody.indexOf('wallpaper-engine-image')))) {
+    fail('LiquidGlass mirror must draw the WE static image (#wallpaper-engine-image); only the WE video mirror was wired in 2026-11-13');
+  }
+  const weImgAt = fnBody.indexOf('wallpaper-engine-image');
+  if (weImgAt < weAt || weImgAt > fnBody.indexOf('liquidGlassBgVideoEl')) {
+    fail('WE static image must composite after the WE video mirror but before the custom-bg video fallback');
+  }
+  if (!/wallpaper-engine-dwm-active/.test(fnBody.slice(Math.max(0, weImgAt - 600), weImgAt + 200))) {
+    fail('WE static image draw must skip DWM co-existence mode where the layer is hidden and the desktop wallpaper shows through');
+  }
+  /* 图片必须 CORS 模式加载，否则 drawImage 污染镜像 canvas，玻璃回读拿到黑。 */
+  const weFns = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-fx', '02-wallpaper-engine-fns.js'), 'utf8');
+  const imgBlock = weFns.slice(weFns.indexOf('image.onload = function () { wallpaperEngineLayerReady'),
+                               weFns.indexOf('image.src = wallpaperEngineMediaUrl'));
+  if (!/image\.crossOrigin\s*=\s*['"]anonymous['"]/.test(imgBlock)) {
+    fail('WE static image must set crossOrigin=anonymous before src, otherwise it taints the glass mirror canvas and glass refracts black');
+  }
+  console.log('[OK] liquid glass mirror composites both static custom background and WE image, cover-fitted and CORS-safe.');
+}
+
+function checkSmoothnessRegressionGuard() {
+  logStep('Smoothness regression guard (startup navigation + lyric pause + shader warmup)');
+  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
+  const guardStart = mainText.indexOf('async function mainPageUsableAfterNavigation(');
+  if (guardStart < 0) fail('mainPageUsableAfterNavigation is missing: a navigation timeout will reload a page that is already playing');
+  const guardBody = mainText.slice(guardStart, guardStart + 1800);
+  if (!/return probe\.ready === true;/.test(guardBody)) fail('startup usability check must only trust __mineradioCoreModulesReady');
+  if (/probe\.shell/.test(guardBody)) fail('startup usability check must not trust the static .desktop-shell class (an empty shell page would be accepted)');
+  const usableAt = mainText.indexOf("writeStartupState('navigation-timeout-but-usable'");
+  const retryAt = mainText.indexOf("writeStartupState('navigation-retry'");
+  if (usableAt < 0) fail('navigation-timeout-but-usable state is not recorded');
+  if (retryAt < 0 || usableAt > retryAt) fail('usability check must run before navigation-retry/stop()');
+
+  const lyricText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '14-stage-lyrics-rendering.js'), 'utf8');
+  if (!/var _genuinePause = !!\(audio && audio\.paused && !audio\.ended && lyricsLines\.length\)/.test(lyricText)) {
+    fail('pause hide must be gated on audio.paused && !audio.ended (not the outer !playing): a track switch briefly flips playing and would hide a visible track');
+  }
+  if (!/if \(_genuinePause && _pauseTrack && _pauseTrackData && _pauseTrackData\.trackPersistent\)/.test(lyricText)) {
+    fail('pause must hide a persistent lyric track instead of tearing it down');
+  }
+  if (!/stageLyrics\.currentIdx !== -1/.test(lyricText)) {
+    fail('pause hide must skip a freshly committed track (currentIdx === -1): hiding it makes "switch-while-paused" show a blank lyric');
+  }
+  if (!/stageLyrics\.pauseHiddenTrack = true;/.test(lyricText)) fail('pause-hidden track flag is not set');
+  if (!/if \(stageLyrics\.pauseHiddenTrack\) \{[\s\S]{0,160}visible = true/.test(lyricText)) {
+    fail('resume must restore the hidden lyric track visibility');
+  }
+  /* 切歌交接必须清暂停隐藏标志，否则标志跨轨泄漏。 */
+  const handoffAt = lyricText.indexOf('function handoffStageLyricsForNewTrack(');
+  if (handoffAt < 0) fail('handoffStageLyricsForNewTrack is missing');
+  const clearAt = lyricText.indexOf('function clearStageLyrics()');
+  const handoffBody = lyricText.slice(handoffAt, clearAt > handoffAt ? clearAt : handoffAt + 1200);
+  if (!/stageLyrics\.pauseHiddenTrack = false;/.test(handoffBody)) {
+    fail('track handoff must clear pauseHiddenTrack, otherwise the flag leaks across tracks');
+  }
+  const stateText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '03a-lyrics-state.js'), 'utf8');
+  if (!/pauseHiddenTrack:\s*false/.test(stateText)) fail('stageLyrics.pauseHiddenTrack default is missing');
+
+  const loopText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '11-main-loop.js'), 'utf8');
+  if (!/ensureLyricShaderWarmup\(\)/.test(loopText)) fail('main loop does not warm lyric shaders (programs will recompile after track disposal)');
+  const shaderText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '11-lyrics-shaders.js'), 'utf8');
+  if (!/function ensureLyricShaderWarmup\(\)/.test(shaderText)) fail('ensureLyricShaderWarmup is missing');
+
+  /* 同步整段建行必须有预算：整首歌 60 行遮罩画布挤一帧时实测 103–273ms。 */
+  const rowLayersText = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '12-lyrics-row-layers.js'), 'utf8');
+  const makeGroupAt = rowLayersText.indexOf('function makeLyricRowLayerGroup(');
+  if (makeGroupAt < 0) fail('makeLyricRowLayerGroup is missing');
+  const makeGroupBody = rowLayersText.slice(makeGroupAt, makeGroupAt + 2200);
+  if (/stepLyricRowLayerGroupBuild\(state, 1024, Infinity\)/.test(makeGroupBody)) {
+    fail('makeLyricRowLayerGroup must not drain all phases with an Infinity budget: it builds ~60 mask canvases in one frame (103–273ms)');
+  }
+  if (!/stepLyricRowLayerGroupBuild\(state, 1024, \d+\)/.test(makeGroupBody)) {
+    fail('makeLyricRowLayerGroup must pass a finite per-frame budget so the visible rows land this frame and the rest are filled in later');
+  }
+  console.log('[OK] Startup timeout keeps a usable page, pause hides instead of disposing the lyric track, lyric shaders stay warm, sync row builds are budgeted.');
+}
+
+
+/* 缓存目录配置必须落在稳定 userData：Electron 的 setPath('cache', X) 会把
+ * appData/userData 篡改成 X/<APP_NAME>（Windows 实测），若 cache-settings.json
+ * 仍从 app.getPath('userData') 读写，「更改目录」会写进 Chromium 缓存目录、
+ * 重启后弹回默认。 */
+function checkCacheSettingsStablePathGuard() {
+  logStep('Cache settings stable path guard');
+  const mainText = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');
+  const fnStart = mainText.indexOf('function cacheSettingsConfigPath()');
+  const fnEnd = mainText.indexOf('}', fnStart);
+  if (fnStart < 0 || fnEnd < 0) fail('cacheSettingsConfigPath() not found');
+  const fnBody = mainText.slice(fnStart, fnEnd);
+  /* 只看 return 语句本身（函数体里的注释会提到 getPath('userData')，不参与判定）。 */
+  const returnMatch = fnBody.match(/return[^;]*;/);
+  if (!returnMatch || /app\.getPath\(.userData.\)/.test(returnMatch[0])) {
+    fail("cacheSettingsConfigPath() must not resolve via app.getPath('userData') - it is corrupted after setPath('cache') and the setting silently reverts on restart");
+  }
+  if (fnBody.indexOf('_STABLE_USER_DATA') < 0) {
+    fail("cacheSettingsConfigPath() must resolve against _STABLE_USER_DATA captured before setPath('cache')");
+  }
+  const decl = mainText.indexOf('const _STABLE_USER_DATA');
+  const setPath = mainText.indexOf("app.setPath('cache'");
+  if (decl < 0 || setPath < 0 || decl > setPath) {
+    fail("_STABLE_USER_DATA must be captured before app.setPath('cache') runs");
+  }
+  if (mainText.indexOf('legacy') < 0 || mainText.indexOf('migrated legacy cache-settings') < 0) {
+    fail('readCacheSettings() must migrate the pre-fix cache-settings.json written into the corrupted userData');
+  }
+  /* 改目录必须迁移有价值的缓存（beatmaps/lyrics），且不迁移 Chromium 缓存。 */
+  if (mainText.indexOf('async function migrateCacheDirectory') < 0) {
+    fail('changing the cache directory must migrate the valuable cache (beatmaps/lyrics) instead of silently orphaning the old files');
+  }
+  const migrateFn = mainText.slice(mainText.indexOf('async function migrateCacheDirectory'), mainText.indexOf('function ensureCacheDirectories'));
+  if (migrateFn.indexOf('beatmapsPath') < 0 || migrateFn.indexOf('lyricsPath') < 0) {
+    fail('cache migration must cover beatmaps and lyrics');
+  }
+  if (migrateFn.indexOf('chromiumPath') >= 0) {
+    fail('cache migration must NOT copy the Chromium cache (it is disposable and would drag 200MB+ of junk along)');
+  }
+  if (migrateFn.indexOf('COPYFILE_EXCL') < 0) {
+    fail('cache migration must skip files that already exist in the target (COPYFILE_EXCL)');
+  }
+  const setSettingsHandler = mainText.slice(mainText.indexOf('mineradio-cache-set-settings'), mainText.indexOf('mineradio-hotkeys-configure-global'));
+  if (setSettingsHandler.indexOf('migrateCacheDirectory(') < 0) {
+    fail('set-settings must invoke migrateCacheDirectory when the root path changes');
+  }
+  console.log('[OK] cache-settings.json persists in the stable userData, with legacy migration and valuable-cache migration in place.');
+}
+
 module.exports = {
-  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard, checkOverlayTaskbarGuard
+  checkMainWindowChrome, checkBackgroundTransparencyControlsGuard, checkWallpaperEngineImportGuard, checkDesktopWallpaperModeGuard, checkDesktopWindowAdaptationGuard, checkLyricLayoutRangeGuard, checkPointerLockPermission, checkProgressSeekDragGuard, checkLyricBackfaceMaterialGuard, checkLyricScrollPerformanceGuard, checkPersistentCacheStorageGuard, checkLyricTranslationCompletenessGuard, checkLyricVerticalFloatToggleGuard, checkQishuiProviderGuard, checkPlaybackControlBadgesGuard, checkSearchGlassEntranceGuard, checkProviderEntitlementBoundaryGuard, checkQQVipStatusSyncGuard, checkPlaybackResumeRecoveryGuard, checkAudioOutputWorkflowPanelGuard, checkVolumeWheelStepGuard, checkKugouCloudlistIdentityGuard, checkNonCurrentAudioPrefetchGuard, checkSplashBootGuard, checkLoginProviderTabGuard, checkUserModalTabGuard, checkPlatformPanelStyleGuard, checkCoverFallbackGuard, checkPlaylistCoverMarkGuard, checkPlatformPanelPlaybackGuard, checkVisualGuideGuard, checkDesktopLyricsMotionGuard, checkMusicalProfileGuard, checkCuefieldAutoMixGuard, checkAlbumDetailGaplessGuard, checkInternalBetaPackagingGuard, checkSonicTopographyPresetGuard, checkLongPressReorderGuard, checkPlaylistPanelTriggerGuard, checkShuffleQueueOrderGuard, checkFxConsoleWorkspaceGuard, checkFirstLaunchDefaultsAndSplashGuard, checkOverlayTaskbarGuard, checkFoliaBackgroundLayerGuard, checkCacheSettingsStablePathGuard, checkLiquidGlassBackdropImageGuard, checkSmoothnessRegressionGuard
 };

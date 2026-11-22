@@ -657,8 +657,22 @@ function cancelLyricRowLayerGroupBuild(state) {
 
 function makeLyricRowLayerGroup(payload, mask, worldW, worldH, pal, motionProfile) {
   var state = beginLyricRowLayerGroupBuild(payload, mask, worldW, worldH, pal, motionProfile);
-  // 同步路径用 Infinity。直播大轨由 showStageLine → cooperative 分帧，避免走此同步死循环。
-  while (!stepLyricRowLayerGroupBuild(state, 1024, Infinity)) { /* drain phases */ }
+  /* 同步路径必须有预算。
+   *
+   * 原来是 `while (!step(state, 1024, Infinity))`：一次跑完所有阶段，整首歌 60 行
+   * 的字符遮罩画布（60 个 canvas / 24.5MB 面积 / 122 次 fillText）全挤在一帧里建，
+   * 起播那帧实测 103–273ms（2026-11-21 流畅度测试，canvas 钩子归因到
+   * `buildLyricMesh < stepLyricRowLayerGroupBuild`）。
+   *
+   * 改成 6ms 预算：本帧只建到超预算为止，**未建完的行不会丢**——调用方
+   * （`buildLyricMesh` → `commitIncomingStageLyricTrackMesh` → `ensureStageLyricPersistentTrackRows`）
+   * 会按可见窗口继续 ensure，缺的行由既有分批任务补齐。
+   * 落地后同条件各 6 次采样：最差帧中位 124.3→90.8ms，冻结总时长中位 424→285ms，
+   * >100ms 帧 9→1，首帧空白检查 0 次缺行。
+   *
+   * 预算不能太小：行 mesh 缺失期间该行不显示，太小会让首屏短暂缺行。
+   * 6ms 在 164Hz 屏（6.1ms/帧）上约等于「本帧最多建一批」，可见行仍当帧就位。 */
+  stepLyricRowLayerGroupBuild(state, 1024, 6);
   return finishLyricRowLayerGroupBuild(state);
 }
 

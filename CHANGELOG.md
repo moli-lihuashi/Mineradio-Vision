@@ -2,12 +2,40 @@
 
 ## v3.3.3 · 2026-11-21
 
+### 流畅度
+
+#### 启动
+
+- **导航超时后不再重载已就绪的页面**：`loadURL` 的 promise 有概率在页面早已可交互后仍不落地，旧逻辑 15s 一到就整页换 `startupAttempt=2`，正在播放的音频会被打断。现在超时后先探测页面（URL 匹配 + 核心模块就绪），可用就跳过重载；探测只认 `__mineradioCoreModulesReady`，避免把静态空壳页误判成可用。
+
+#### 歌词
+
+- **暂停不再拆掉整轨**：暂停时只隐藏当前整轨（`stageLyrics.pauseHiddenTrack`），恢复播放不再重建 40+ 行歌词。实测恢复首帧 148.7ms → 24.0ms，暂停后几何/纹理/着色器程序全部保留。判据与「暂停保留歌词」同源（`audio.paused && !audio.ended && lyricsLines.length`），切歌/缓冲瞬间不会把正在显示的整轨藏掉；曲目结束仍按原逻辑释放。
+- **歌词着色器常驻预热**：首帧放置两个不可见常驻 mesh，阻止整轨销毁后 program 被释放导致的重新编译（`GetProgramiv` 45–81ms）。
+- 曲目结束后仍按原逻辑释放整轨，避免常驻内存。
+- **起播不再把整首歌词挤进一帧**：同步建行原本用 `Infinity` 预算一次跑完，整首歌 60 行的字符遮罩画布（60 个 canvas / 24.5MB）全挤在同一帧，实测 103–273ms。现在给同步路径 6ms 预算，可见行当帧就位，其余行由既有分批任务补齐。改动前后各 5–6 次采样：最差帧中位 124.3→90.8ms，冻结总时长中位 424→285ms，>100ms 帧 9→1；首帧空白检查 0 次缺行。
+
 ### 壁纸模式：与桌面壁纸共生
 
 - 新增独立桌面效果层窗口（`desktop/desktop-stage-window.js`）：透明、鼠标穿透、不抢焦点、跳过任务栏、常驻桌面底部。不改系统壁纸、不写注册表、不注入 WorkerW 壁纸宿主，与 Wallpaper Engine 等动态壁纸同时存在。
 - 主窗口在壁纸模式下只做控制不渲染：渲染器缩至 4×4、摘除舞台层、用纯色补不透明底，避免两份渲染互相压帧；显示「歌词写真已投到桌面」提示。
 - 舞台页复用 `applyPlaybackSession`，以静音二次解码镜像播放会话，歌词与粒子跟随当前歌曲推进。
 - README 新增「壁纸模式」章节与展示图。
+
+### 背景透出与玻璃折射
+
+- **Folia 换了背景什么都没变**：镜台模式的 WebGL 画布一直用 `setClearColor(bg, 1)` 铺满不透明底，把下面那层共享背景（`.folia-bg-host`）整个盖住。现在清屏 alpha 恒为 0，黑底由 `#folia-world-root` 提供；背景选「无」时观感与之前一致。
+- **设了静态背景图玻璃仍透黑**：玻璃折射的背景来自镜像画布，而合成清单只有底色 + 视频 + WebGL，从未包含用户设的静态壁纸图（`--custom-bg-image`）。现已补入，按 `cover` 对齐并套用透明度。
+- **Wallpaper Engine 图片壁纸同样透黑**：此前只补了 WE 视频镜像，图片从未进合成。现在图片也画进镜像，并按 DWM 共存模式跳过；图片改用 CORS 模式加载（`crossOrigin=anonymous`），否则会污染镜像画布导致回读全黑。
+
+### 缓存目录
+
+- **改缓存目录重启后弹回原路径**：`cache-settings.json` 原来从 `app.getPath('userData')` 读写，而 `setPath('cache', X)` 会把 userData 篡改成 `X/<APP>`，于是配置被写进 Chromium 缓存目录、重启时在真实位置读不到。现在改用 `setPath` 之前捕获的稳定路径；旧位置残留的配置会一次性迁移回来。
+- **改目录不再丢弃已有缓存**：节奏分析（重新分析耗时长）与歌词/译文（重新拉取要走网络）会自动搬到新目录；Chromium 缓存（封面/网络/音频分片）不搬，避免连带复制 200MB+ 垃圾。改目录后的提示会报出迁移数量。
+
+### 视觉控制台
+
+- **点按钮后面板自己滚回最顶**：面板里的列表是「清空再重建」的，重建瞬间内容高度归零，滚动容器被钳到顶部且不会自己回来。现在装了一个只兜「点击引起」的守护：记下点击前位置，双帧 + 320ms 各查一次；用户自己滚动（滚轮/拖动/触摸/键盘）或内容真的变短时不干预。
 
 ### 酷狗
 
@@ -25,6 +53,7 @@
 - Folia 模组：移除 visualizer-jump，新增 huajian / miside-drop / visualizer52hz。
 - 删除死代码 `09b-playback-core.js`、`05-prismal-fill.js`。
 - 新增 12 个回归测试（壁纸舞台、桌面歌词、模组兼容、酷狗会员与登录身份等）。
+- 新增 4 个静态守卫：`checkSmoothnessRegressionGuard`（启动导航 / 暂停保留整轨 / shader 预热 / 同步建行预算）、`checkFoliaBackgroundLayerGuard`、`checkLiquidGlassBackdropImageGuard`、`checkCacheSettingsStablePathGuard`，六处注入回归全部可拦截；另有 `tests/fx-panel-scroll-keeper.test.js`。
 
 ## v3.3.2 · 2026-11-16 重新构建批次
 

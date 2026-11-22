@@ -2844,8 +2844,12 @@
     }
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    /* 壁纸效果层：清屏 alpha 0 —— 镜台的「黑底」就是这一行，场景里的卡片/尘埃照常画。 */
-    renderer.setClearColor(0x05070b, (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true) ? 0 : 1);
+    /* 清屏 alpha 恒为 0：背景壳层画在模式**下面**（.folia-bg-host z-index 0 →
+     * .folia-mode-host z-index 1），镜台的画布只有透明，用户选的背景才透得出来。
+     * 原来这里是 alpha 1（v3.3.1 起就是），整块画布把背景壳层完全盖住 ——
+     * 症状就是「换了背景什么都没变」。黑底由 #folia-world-root 的 #05070b 提供，
+     * 背景为「无背景」时与之前的观感一致；壁纸效果层同样走这条（本来就要求 alpha 0）。 */
+    renderer.setClearColor(0x05070b, 0);
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
@@ -3017,7 +3021,9 @@
     inst.damped.secondary.lerp(inst.themeTargets.secondary, colorK);
     inst.damped.bg.lerp(inst.themeTargets.bg, colorK);
     if (inst.scene.fog) inst.scene.fog.color.copy(inst.damped.bg);
-    inst.renderer.setClearColor(inst.damped.bg, (typeof window !== 'undefined' && window.__MINERADIO_STAGE_PAGE__ === true) ? 0 : 1);
+    /* 每帧清屏同样恒 alpha 0（理由见 create 里那一段）。这里的 RGB 只服务雾色，
+     * 不为背景提供底色 —— 底色是背景壳层 / #folia-world-root 的事。 */
+    inst.renderer.setClearColor(inst.damped.bg, 0);
 
     /* 音频包络（几何 / 辉光 / 尘埃用；镜头永不接音频） */
     var bands = ctx.audioBands || (ctx.audio && ctx.audio.bands) || {};

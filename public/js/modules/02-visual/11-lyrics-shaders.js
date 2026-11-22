@@ -151,3 +151,53 @@ function makeLyricShaderMaterialRowLayers(mask, pal, motionProfile) {
     transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
   });
 }
+
+/* 歌词 shader 常驻预热
+ *
+ * 为什么需要：three.js 在材质全部 dispose 后会释放对应 WebGLProgram。起播/切歌时
+ * 歌词整轨被销毁重建，暂停时整轨被清空 —— 下一次渲染就得重新 compile/link，
+ * 实测 `GLES2Implementation::GetProgramiv` 单次 45ms、整帧 95–210ms（2026-11-21
+ * 流畅度测试）。这里在首帧塞两个 0.001 尺寸的常驻 mesh（主歌词 shader + 可读层
+ * shader），让 program 的 usedTimes 永远 > 0，重建歌词时不再重编译。
+ *
+ * 视觉无副作用：mask 用 4×4 透明画布，主 shader 在 mask < 0.01 时 discard，
+ * 可读层 uOpacity=0；两个 mesh 都在原点、frustumCulled=false，只占 1 次 draw call。
+ */
+var lyricShaderWarmGroup = null;
+function ensureLyricShaderWarmup() {
+  if (lyricShaderWarmGroup) return true;
+  if (typeof THREE === 'undefined' || typeof scene === 'undefined' || !scene) return false;
+  if (typeof makeLyricShaderMaterial !== 'function' || typeof makeLyricBackfaceReadableMaterial !== 'function') return false;
+  try {
+    var canvas = document.createElement('canvas');
+    canvas.width = 4;
+    canvas.height = 4;
+    var tex = new THREE.CanvasTexture(canvas);
+    if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    var mask = { texture: tex, textMin: 0, textMax: 1, width: 4, height: 4, logicalFontSize: 8, logicalLineHeight: 8 };
+    var pal = (typeof effectiveLyricPalette === 'function')
+      ? effectiveLyricPalette()
+      : { primary: '#ffffff', highlight: '#ffffff', secondary: '#ffffff' };
+    var profile = (typeof lyricMotionProfile === 'function') ? lyricMotionProfile() : {};
+    var primaryMat = makeLyricShaderMaterial(mask, pal, profile);
+    var readableMat = makeLyricBackfaceReadableMaterial({ map: tex, opacity: 0 });
+    var geo = new THREE.PlaneGeometry(0.001, 0.001);
+    var group = new THREE.Group();
+    var primaryMesh = new THREE.Mesh(geo, primaryMat);
+    primaryMesh.frustumCulled = false;
+    primaryMesh.renderOrder = -1000;
+    var readableMesh = new THREE.Mesh(geo, readableMat);
+    readableMesh.frustumCulled = false;
+    readableMesh.renderOrder = -1000;
+    group.add(primaryMesh);
+    group.add(readableMesh);
+    group.position.set(0, 0, 0);
+    scene.add(group);
+    lyricShaderWarmGroup = group;
+    if (typeof window !== 'undefined') window.__mineradioLyricShaderWarm = group;
+    return true;
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[lyric-warm] shader warmup failed', err);
+    return false;
+  }
+}

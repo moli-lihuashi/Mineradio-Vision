@@ -782,6 +782,11 @@ function applyWallpaperEngineBackground(item, quiet) {
     } else {
       image.onload = function () { wallpaperEngineLayerReady('image', token); };
       image.onerror = function () { wallpaperEngineLayerFailed(item, kind, token); };
+      /* 必须 CORS 模式加载：静态壁纸图也要被玻璃镜像 drawImage。
+       * 未设 crossOrigin 的 mineradio-wallpaper:// 图会污染镜像 canvas，
+       * LiquidGlass 再回读就拿不到像素 → 玻璃透黑（同 video 的 11-13 修复）。
+       * 协议响应带 ACAO:*（wallpaper-engine-library.js）。 */
+      image.crossOrigin = 'anonymous';
       image.src = wallpaperEngineMediaUrl(item, kind === 'media' ? 'media' : 'preview');
     }
   }

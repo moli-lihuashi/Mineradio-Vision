@@ -666,8 +666,17 @@ function destroyTray() {
 }
 /* ===== 缓存目录可配置（保守策略：默认路径= userData，不改变现状）===== */
 function cacheSettingsConfigPath() {
-  return path.join(app.getPath('userData'), CACHE_SETTINGS_FILE);
+  /* 不能用 app.getPath('userData')：setPath('cache') 之后它被篡改成
+   * <cacheRoot>\chromium\<APP_NAME>（见下方 _REAL_APP_DATA 处的注释），
+   * set-settings 的写盘会落进 Chromium 缓存目录里，而重启时 readCacheSettings
+   * 在 setPath 之前从真实 userData 读 —— 读不到就回退默认。
+   * 症状：更改目录当场生效、重启弹回原路径（cache-settings.json 全盘找不到）。 */
+  return path.join(_STABLE_USER_DATA, CACHE_SETTINGS_FILE);
 }
+/* 必须在任何 setPath('cache') 之前捕获：Electron 的 setPath('cache', X) 会把
+ * appData 篡改成 X、userData 篡改成 X/<APP_NAME>（Windows 实测，见 3838 行注释）。 */
+const _REAL_APP_DATA = app.getPath('appData');
+const _STABLE_USER_DATA = path.join(_REAL_APP_DATA, APP_NAME);
 function defaultCacheRootPath() {
   return path.join(app.getPath('userData'), 'cache');
 }
@@ -701,9 +710,20 @@ function readCacheSettings() {
   try {
     const raw = fs.readFileSync(cacheSettingsConfigPath(), 'utf8');
     return normalizeCacheSettings(JSON.parse(raw));
-  } catch (_) {
-    return normalizeCacheSettings(null);
-  }
+  } catch (_) {}
+  /* 一次性迁移：修复前 set-settings 的写盘落进了 setPath('cache') 篡改出来的
+   * <默认cache>\chromium\<APP_NAME>\ 目录（重启后 readCacheSettings 永远读不到它，
+   * 路径就弹回默认）。把那里残留的配置搬回稳定位置，用户的最后一次选择不丢。 */
+  try {
+    const legacy = path.join(defaultCacheRootPath(), 'chromium', APP_NAME, CACHE_SETTINGS_FILE);
+    const legacySettings = normalizeCacheSettings(JSON.parse(fs.readFileSync(legacy, 'utf8')));
+    if (legacySettings.rootPath !== defaultCacheRootPath()) {
+      writeCacheSettings(legacySettings);
+      console.log('[CacheSettings] migrated legacy cache-settings from', legacy, '->', legacySettings.rootPath);
+      return legacySettings;
+    }
+  } catch (_) {}
+  return normalizeCacheSettings(null);
 }
 function writeCacheSettings(settings) {
   try {
@@ -716,6 +736,38 @@ function writeCacheSettings(settings) {
     return false;
   }
 }
+/* 改目录时把旧目录里「值得保留」的缓存搬进新目录：
+ *   - beatmaps（节奏分析）：重新分析耗时，最值得保留；
+ *   - lyrics（歌词/译文）：重新拉取要走网络，顺手搬；
+ *   - chromium（封面/网络/音频分片）：纯浏览器缓存，不搬——会连带 200MB+ 垃圾一起复制。
+ * 逐文件复制、目标已存在则跳过（不动新目录里可能已写的新文件），全程吞错不阻塞改目录。
+ * 返回 { copied, skipped, failed } 供前端提示。 */
+async function migrateCacheDirectory(fromSettings, toSettings) {
+  const result = { copied: 0, skipped: 0, failed: 0 };
+  const pairs = [
+    { from: fromSettings.beatmapsPath, to: toSettings.beatmapsPath },
+    { from: fromSettings.lyricsPath, to: toSettings.lyricsPath }
+  ];
+  for (const pair of pairs) {
+    let entries;
+    try { entries = await fs.promises.readdir(pair.from, { withFileTypes: true }); }
+    catch (_) { continue; }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const src = path.join(pair.from, entry.name);
+      const dst = path.join(pair.to, entry.name);
+      try {
+        await fs.promises.copyFile(src, dst, fs.constants.COPYFILE_EXCL);
+        result.copied += 1;
+      } catch (e) {
+        /* COPYFILE_EXCL：目标已存在 = 跳过；其它错误计入 failed。 */
+        result[e.code === 'EEXIST' ? 'skipped' : 'failed'] += 1;
+      }
+    }
+  }
+  return result;
+}
+
 function ensureCacheDirectories(settings) {
   const dirs = [settings.rootPath, settings.lyricsPath, settings.chromiumPath, settings.beatmapsPath, settings.updatesPath, settings.wallpaperPath, settings.nativePath];
   for (const dir of dirs) {
@@ -2736,11 +2788,22 @@ ipcMain.handle('mineradio-cache-set-settings', async (event, payload) => {
     // 校验目录可写
     try { fs.mkdirSync(next.rootPath, { recursive: true }); fs.accessSync(next.rootPath, fs.constants.W_OK); }
     catch (e) { return { ok: false, error: '目录不可写: ' + e.message }; }
+    const prev = cacheSettings || normalizeCacheSettings(null);
+    const changed = prev.rootPath !== next.rootPath;
     ensureCacheDirectories(next);
+    // 改目录时把旧目录里值得保留的缓存（节奏分析/歌词）搬过去；Chromium 缓存不搬。
+    const migration = (changed && prev.rootPath !== next.rootPath)
+      ? await migrateCacheDirectory(prev, next)
+      : { copied: 0, skipped: 0, failed: 0 };
+    if (migration.copied || migration.failed) {
+      console.log('[CacheSettings] migrated cache:', JSON.stringify(migration));
+    }
     const wroteOk = writeCacheSettings(next);
     console.log('[CacheSettings] write result:', wroteOk, 'config path:', cacheSettingsConfigPath());
     cacheSettings = next;
-    return cacheSettingsSnapshot();
+    const snapshot = await cacheSettingsSnapshot();
+    snapshot.migration = migration;
+    return snapshot;
   } catch (e) {
     console.error('[CacheSettings] set-settings error:', e);
     return { ok: false, error: e.message };
@@ -4025,6 +4088,38 @@ async function ensureLocalServerStarted() {
   return localServerStartPromise;
 }
 
+/* 导航超时后先判断「页面是不是其实已经能用了」。
+ *
+ * 为什么需要：win.loadURL() 的 promise 依赖 did-finish-load，实测有概率在页面
+ * 早已 load（loadEventEnd 4.5s、核心模块就绪）之后仍不落地。旧逻辑一到 15s 就
+ * stop() + 回填启动页 + 用 startupAttempt=2 重新导航，等于把已经开始的播放整条
+ * 打断（2026-11-21 流畅度测试：第 15.4s 正在播的音频被换页）。
+ * 这里只在「URL 仍是本次导航目标 + 核心模块已就绪」时认账，避免把 403/白页
+ * 当成成功而不重试。
+ */
+async function mainPageUsableAfterNavigation(win, targetUrl) {
+  try {
+    if (!win || win.isDestroyed() || !targetUrl) return false;
+    const current = String(win.webContents.getURL() || '');
+    if (!current || current.split('?')[0] !== String(targetUrl).split('?')[0]) return false;
+    const probe = await Promise.race([
+      win.webContents.executeJavaScript(
+        '(function(){ try { return { ready: !!window.__mineradioCoreModulesReady }; } catch (e) { return { ready: false }; } })()',
+        true,
+      ),
+      new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+    ]);
+    if (!probe) return false;
+    /* 只认 __mineradioCoreModulesReady。曾经加过「readyState complete + .desktop-shell」的
+     * 兜底，但 desktop-shell 是 index.html 的静态 class：把 index-loader.js 拿掉后页面
+     * 仍然是 complete + desktop-shell，兜底会把一个模块全没加载的壳页认成可用（实测
+     * 反向用例：启动卡在空壳却记 ready）。宁可多重试一次，也不要把壳页当成功。 */
+    return probe.ready === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function loadMainWindowWithRetry(win, extraQuery = '') {
   const port = mainServerPort || process.env.PORT || 3000;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -4050,8 +4145,18 @@ async function loadMainWindowWithRetry(win, extraQuery = '') {
       return targetUrl;
     } catch (error) {
       lastError = error;
+      console.warn(`[StartupWindow] navigation attempt ${attempt} promise rejected:`, error.message || error);
+      /* 重试前认账：页面已就绪就别换页。多等 1.5s 也比重载掉一次播放便宜。 */
+      if (await mainPageUsableAfterNavigation(win, targetUrl)) {
+        writeStartupState('navigation-timeout-but-usable', {
+          navigationAttempt: attempt,
+          usableAt: Date.now(),
+          note: 'loadURL promise 未落地，但页面已就绪，跳过重载',
+        });
+        console.warn('[StartupWindow] navigation promise timed out but page is usable; skip reload');
+        return targetUrl;
+      }
       writeStartupState('navigation-retry', { navigationAttempt: attempt, retryAt: Date.now(), lastNavigationError: String(error && error.message || error) });
-      console.warn(`[StartupWindow] navigation attempt ${attempt} failed:`, error.message || error);
       try { win.webContents.stop(); } catch (_) {}
       // stop() 会清掉当前帧，透明窗口立刻变白窗——回填启动页保住深色首屏
       try { win.loadFile(path.join(__dirname, 'startup.html')).catch(() => {}); } catch (_) {}
@@ -4675,10 +4780,9 @@ app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 // 缓存目录可配置：默认根目录 = userData/cache (不改变现有行为，仅提供配置能力)
 cacheSettings = ensureCacheDirectories(readCacheSettings());
-// 关键：必须在 setPath('cache') 之前保存真实 appData。
+// 关键：_REAL_APP_DATA 已在 cacheSettingsConfigPath() 附近（setPath 之前）捕获。
 // Electron 的 setPath('cache', X) 会把 app.getPath('appData') 也改成 X，导致 app.getPath('userData')
 // 变成 X/Mineradio（即 chromium 缓存目录）。cookie 写到那里会被 Chromium 清理，登录状态丢失。
-const _REAL_APP_DATA = app.getPath('appData');
 try { app.setPath('cache', cacheSettings.chromiumPath); } catch (_) {}
 try { process.env.MINERADIO_BEAT_CACHE_DIR = cacheSettings.beatmapsPath; } catch (_) {}
 try { process.env.MINERADIO_NATIVE_TEMP_DIR = cacheSettings.nativePath; } catch (_) {}

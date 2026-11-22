@@ -283,3 +283,50 @@ function relabelFxPanelControls() {
   setFxSliderLabel('fx-scatter', '离散感');
   setFxSliderLabel('fx-bgfade', '背景压暗');
 }
+
+/* 面板里的列表/选项组是「清空再重建」的（Folia 样式网格、自定义字体列表、
+ * 调参面板……）。重建那一瞬间内容高度归零，滚动容器会被浏览器钳到顶部；
+ * 高度恢复了，scrollTop 却回不去 —— 用户看到的就是「点一下按钮，面板自己滚回最顶」。
+ *
+ * 这里只兜「点击引起」的那一类：记下点击前的 scrollTop，双帧 + 320ms 各查一次；
+ * 如果内容仍够长（scrollHeight - clientHeight 放得下原位置）却被清到 0，就恢复。
+ * 用户主动滚回顶部（滚轮/拖动/键盘）在 250ms 内算意图，不干预；
+ * 内容真的变短（比如关掉桌面歌词那一组）时也不硬撑，交给浏览器钳。 */
+function bindFxPanelScrollKeeper() {
+  var panel = document.getElementById('fx-panel');
+  var sc = panel ? panel.querySelector('.fx-scroll') : null;
+  if (!panel || !sc || sc.__fxScrollKeeperBound) return false;
+  sc.__fxScrollKeeperBound = true;
+  var nowMs = function () {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  };
+  var userIntentAt = 0;
+  var noteIntent = function () { userIntentAt = nowMs(); };
+  ['wheel', 'pointerdown', 'touchstart', 'keydown'].forEach(function (name) {
+    sc.addEventListener(name, noteIntent, { passive: true, capture: true });
+  });
+  panel.addEventListener('click', function () {
+    var before = sc.scrollTop;
+    if (!(before > 24)) return;
+    var clickAt = nowMs();
+    /* 刚滚过就点（拖完滚动条顺手点一下）不算异常。 */
+    if (clickAt - userIntentAt < 250) return;
+    var restore = function () {
+      /* 点击之后用户自己滚了（滚轮/拖动/键盘）：那是他的意图，别再拉回去。
+       * 用时间戳比较而不是固定窗口 —— 兜底检查在 320ms，窗口一过期就会误伤。 */
+      if (userIntentAt > clickAt) return;
+      if (sc.scrollTop > 8) return;
+      /* 内容真的变短（放不下原位置）就不硬撑。 */
+      if (sc.scrollHeight - sc.clientHeight < before - 8) return;
+      sc.scrollTop = before;
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () { requestAnimationFrame(restore); });
+    } else {
+      setTimeout(restore, 32);
+    }
+    /* 分帧补节点的重建会晚一点才把高度还回来，再兜一次。 */
+    setTimeout(restore, 320);
+  }, true);
+  return true;
+}
