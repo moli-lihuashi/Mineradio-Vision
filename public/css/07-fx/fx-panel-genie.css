@@ -1,0 +1,24 @@
+/* =============================================================================
+ * fx 面板液态展开：只放「接管期」需要的样式
+ *
+ * #fx-panel 默认 right:-460px + .show 时 right:24px，靠位移滑入。
+ * 液态动画要按 transform 做三维展开，必须先把面板钉在最终位置并停掉原动画/过渡，
+ * 否则 transform 会以屏幕外的位置为基准，动效整个错位。
+ * ========================================================================== */
+
+#fx-panel.fx-genie-run {
+  right: 24px !important;
+  animation: none !important;
+  transition: none !important;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* 液滴图层：在面板之下（面板 18），按钮之上 */
+#fx-genie-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 17;
+  pointer-events: none;
+  display: none;
+}

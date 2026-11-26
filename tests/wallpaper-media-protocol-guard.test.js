@@ -193,7 +193,7 @@ test('壁纸媒体在窗口隐藏 / Folia 世界必须停解码与镜像上传�
     '主进程 minimize 事件必须下发窗口状态');
   assert.match(stateSrc, /updateDesktopRuntimeState[\s\S]{0,1500}wallpaperEngineSyncMediaRuntime\(\)/,
     '窗口状态变化（minimize/hide/show/restore）必须触发壁纸同步');
-  assert.match(foliaSrc, /foliaWorldPauseWallpaperVideos[\s\S]{0,600}wallpaperEngineSyncMediaRuntime\(\)/,
+  assert.match(foliaSrc, /foliaWorldPauseWallpaperVideos[\s\S]{0,1400}wallpaperEngineSyncMediaRuntime\(\)/,
     'Folia 进入时必须同步停止壁纸媒体');
   assert.match(foliaSrc, /foliaWorldResumeWallpaperVideos[\s\S]{0,900}wallpaperEngineSyncMediaRuntime\(\)/,
     'Folia 退出时必须唤醒镜像循环');
@@ -344,7 +344,9 @@ test('镜像必须是 WebGL + CPU 像素拷贝：视频帧直传与重绘 2D can
   // 对「texImage2D 直接上传视频元素」也返回黑（视频帧 GPU 资源回读不了）；
   // 静态 2D canvas 与「CPU 拷贝像素（drawImage→getImageData→9 参 texImage2D）」
   // 均正常 —— 粒子背景一直正常正是因为它是 WebGL。所以镜像必须走
-  // WebGL + 离屏 2D 中转的 CPU 像素上传；WebGL 不可用时回退 2D（壁纸可见优先）。
+  // WebGL + 离屏 2D 中转的 CPU 像素上传。
+  // WebGL 不可用 / 上下文丢失时，换全新 canvas 重试（旧 canvas 已被 webgl
+  // 占用，getContext('2d') 恒返回 null，退 2D 等于永久黑）。
   const fnsSrc = fs.readFileSync(path.join(ROOT, 'public/js/modules/06-fx/02-wallpaper-engine-fns.js'), 'utf8');
 
   assert.match(
@@ -366,19 +368,19 @@ test('镜像必须是 WebGL + CPU 像素拷贝：视频帧直传与重绘 2D can
   );
   assert.match(
     fnsSrc,
-    /m\.ctx2d = canvas\.getContext\('2d'\)/,
-    'WebGL 不可用时必须回退 2D 绘制（壁纸可见优先于玻璃可采样）',
+    /wallpaperEngineGlassMirrorRebuildCanvas/,
+    'WebGL 不可用 / 上下文丢失时必须换全新 canvas 重试，不能退 2D（webgl canvas 上取 2D context 恒返回 null，等于永久黑）',
   );
 
   // body 级显示开关（镜像挂在 body 层后的接线）
   assert.match(
     fnsSrc,
-    /wallpaperEngineGlassMirrorStart[\s\S]{0,600}classList\.add\('wallpaper-engine-video-ready'\)/,
+    /wallpaperEngineGlassMirrorStart[\s\S]{0,1600}classList\.add\('wallpaper-engine-video-ready'\)/,
     'Start 必须先开 body 级显示开关再读 rect，否则拿到 0×0 会把背存缩到 2×2',
   );
   assert.match(
     fnsSrc,
-    /wallpaperEngineGlassMirrorStop[\s\S]{0,600}classList\.remove\('wallpaper-engine-video-ready'\)/,
+    /wallpaperEngineGlassMirrorStop[\s\S]{0,900}classList\.remove\('wallpaper-engine-video-ready'\)/,
     'Stop 必须撤掉 body 级显示开关',
   );
 

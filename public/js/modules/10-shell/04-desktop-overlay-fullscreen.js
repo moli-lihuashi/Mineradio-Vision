@@ -1774,7 +1774,7 @@ var desktopWindowMinimizeTimer = 0;
 var desktopWindowRestoreTimer = 0;
 
 function desktopWindowReducedMotion() {
-  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  return prefersReducedMotionNow();
 }
 
 function clearDesktopWindowTransitionClasses() {

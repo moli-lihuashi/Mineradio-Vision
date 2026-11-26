@@ -172,9 +172,9 @@ function makeLyricBackfaceReadableMaterial(opts) {
     blending: opts.blending || THREE.NormalBlending
   });
   // 兼容旧路径（14-stage-lyrics-rendering tickMesh 等）对 mat.opacity / mat.color / mat.map 的直接读写。
-  // 本函数会覆盖 10-lyrics-mask-shaders.js 的同名实现，若缺少这些代理属性，
-  // legacy tick 里 data.glowMat.color.copy(...) 会每帧抛 TypeError 并中断 animate 主循环，
-  // 导致 renderer.render 永不执行（画面冻结、歌词粒子全部消失）。
+  // 2026-11-25：10-lyrics-mask-shaders.js 里的同名死副本已删除，本函数是唯一实现；
+  // 若缺少这些代理属性，legacy tick 里 data.glowMat.color.copy(...) 会每帧抛 TypeError
+  // 并中断 animate 主循环，导致 renderer.render 永不执行（画面冻结、歌词粒子全部消失）。
   Object.defineProperty(mat, 'opacity', {
     configurable: true,
     get: function () { return Number(mat.uniforms.uOpacity.value) || 0; },

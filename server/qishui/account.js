@@ -25,13 +25,34 @@ const {
   qishuiWebPlaylistCache,
   qishuiWebPlaylistCursorCache,
   qishuiWebRequestJson,
+  registerQishuiRuntimeCacheClearHook,
 } = require('./http');
 
 const {
   qishuiProfileFromMeData,
 } = require('./mapping');
 
+// 状态是「本地凭据文件 + cookie」的纯函数，但每次求值要读 token 文件（DPAPI 解密）
+// 并扫 4 个 OAuth 配置文件候选。路由一个响应里常调用 2-3 次（含错误分支），
+// 这里按 cookie 原文 + 1s TTL 缓存；token/cookie 写入路径会通过 clearQishuiRuntimeCaches 清空。
+const QISHUI_STATUS_CACHE_TTL_MS = 1000;
+let qishuiStatusCache = null; // { key, at, value }
+registerQishuiRuntimeCacheClearHook(() => { qishuiStatusCache = null; });
+
 function getQishuiStatus(cookieText) {
+  const cacheKey = String(cookieText || '');
+  const now = Date.now();
+  if (qishuiStatusCache
+    && qishuiStatusCache.key === cacheKey
+    && now - qishuiStatusCache.at < QISHUI_STATUS_CACHE_TTL_MS) {
+    return qishuiStatusCache.value;
+  }
+  const value = buildQishuiStatus(cacheKey);
+  qishuiStatusCache = { key: cacheKey, at: now, value };
+  return value;
+}
+
+function buildQishuiStatus(cookieText) {
   const tokenInfo = qishuiAccessTokenInfo();
   const tokenConfigured = !!tokenInfo.token;
   const cookie = normalizeQishuiCookieInput(cookieText);

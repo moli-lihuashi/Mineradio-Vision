@@ -93,8 +93,14 @@ function bindModalBackdropClose() {
   });
 }
 function onUserBtnClick() {
-  if (hasAnyPlatformLogin()) showUserModal();
-  else showLoginModal();
+  if (!hasAnyPlatformLogin()) { showLoginModal(); return; }
+  /* 2026-11-25：已登录时胶囊点开的是「听歌档案」——现在由 Folia 面板模组
+   * listening-archive（public/folia-panel-mods）渲染。
+   * 2026-11-26：账号信息弹窗下线（用户要求），账号管理改指「设置 → 音源」，
+   * 那里有逐平台退出与一键全退；showUserModal 保留但不再有入口。 */
+  if (typeof openFoliaHomeTab === 'function' && openFoliaHomeTab('archive') !== false) return;
+  if (typeof openSettingsPage === 'function') { openSettingsPage('sources'); return; }
+  showUserModal();
 }
 function platformMeta(provider) {
   if (provider === 'qq') return { key: 'qq', short: 'QQ', label: 'QQ 音乐', app: 'QQ 音乐 App', dot: 'qq' };
@@ -199,6 +205,10 @@ function renderTopAccountPill(provider) {
 async function showLoginModal(opts) {
   opts = opts || {};
   if (opts.provider) loginProvider = (opts.provider === 'qq' || opts.provider === 'kugou' || opts.provider === 'qishui' || opts.provider === 'spotify') ? opts.provider : 'netease';
+  /* 听歌档案是 body 直接子级（z 680），而登录页在 .desktop-window-shell 里 —— 那个壳有
+   * transform，自成层叠上下文，shell 内部的 z-index 提不出去（实测 690 仍被盖住）。
+   * 所以打开登录页先把档案收掉，比调 z-index 靠谱。 */
+  try { if (typeof foliaPanelClose === 'function') foliaPanelClose(); } catch (_) {}
   var modal = document.getElementById('login-modal');
   openGsapModal(modal);
   var drawer = document.getElementById('login-auth-drawer');

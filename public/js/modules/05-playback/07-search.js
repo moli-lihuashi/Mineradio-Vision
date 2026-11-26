@@ -9,7 +9,15 @@ var searchLastResultQuery = '';
  * 界面永远停在「正在搜索」；混合搜索全失败会误报「没有找到相关歌曲」；
  * 请求无取消，输入变化后慢平台的旧请求仍在飞；且永远只取第一页 12～18 首。 */
 var MUSIC_SEARCH_PAGE_SIZES = { qq: 12, netease: 18, qishui: 18, kugou: 18, spotify: 18 };
-var MUSIC_SEARCH_MIXED_PAGE_SIZES = { netease: 14, qq: 12 };
+var MUSIC_SEARCH_MIXED_PAGE_SIZES = { netease: 14, qq: 12, kugou: 12, qishui: 12, spotify: 10 };
+/* 混合搜索（All）默认只查网易云 + QQ；当前账号在别的平台时把那个平台加进来。
+ * 未登录时酷狗/汽水/Spotify 取址必失败，列出来只会得到一堆不可播结果，所以只对已登录平台开放。 */
+var MUSIC_SEARCH_MIXED_EXTRA_PROVIDERS = ['kugou', 'qishui', 'spotify'];
+/* 「优先平台上的同一首歌」的上浮分（判定见 searchPreferredBoostApplies）。
+ * 只在「确实匹配」时加；别改成整组相加——整组相加会让优先平台的同题翻唱顶掉别家的原唱。 */
+var MUSIC_SEARCH_PREFERRED_BOOST = 36;
+/* 后加平台的搜索超时：慢平台不能拖住整个 All 搜索（网易云/QQ 保持原样，无超时）。 */
+var MUSIC_SEARCH_EXTRA_PROVIDER_TIMEOUT_MS = 7000;
 var searchAbort = null;
 var searchPageState = null;
 var searchRetryContext = null;
@@ -116,6 +124,22 @@ function runSearchHistory(q) {
   doSearch(q);
   $input.focus();
 }
+/* All 标签的提示语：告诉用户这轮会查哪些平台、优先谁（登录平台变化后随下次更新刷新）。
+ * 只在 title 上写，不动标签文字与布局。此处由顶层 updateSearchModeTabs() 调用，
+ * 任何异常都会带走其后所有模块，所以整段兜住。 */
+function syncSearchModePriorityTitle() {
+  try {
+    var btn = document.getElementById('search-mode-song');
+    if (!btn) return;
+    var providers = musicSearchProvidersForMode('song');
+    var labels = providers.map(function(provider){
+      return typeof providerLabel === 'function' ? providerLabel(provider) : provider;
+    });
+    var preferred = searchPreferredProvider();
+    btn.title = '全部平台：' + labels.join(' + ') +
+      (preferred ? '（优先显示 ' + labels[providers.indexOf(preferred)] + ' 的结果）' : '');
+  } catch (_) {}
+}
 function updateSearchModeTabs() {
   /* 标签按钮由 index.html 声明，平台数量会随接入源增长（song / netease / qq / kugou / qishui / spotify / podcast）。
      这里统一遍历 #search-mode-tabs 的按钮、按 id 前缀派生模式名，避免像旧写法那样只硬编码四个：
@@ -138,6 +162,7 @@ function updateSearchModeTabs() {
             : (searchMode === 'qishui' ? '搜索汽水音乐...'
               : (searchMode === 'spotify' ? '搜索 Spotify...' : '搜索歌曲、歌手...')))));
   }
+  syncSearchModePriorityTitle();
   requestAnimationFrame(updateSearchPillGlassDisplacementMap);
 }
 function setSearchMode(mode) {
@@ -438,10 +463,6 @@ function controlSourceSearchUrl(provider, query) {
   if (provider === 'spotify') return '/api/spotify/search?keywords=' + encodeURIComponent(query) + '&limit=8';
   return '/api/search?keywords=' + encodeURIComponent(query) + '&limit=10';
 }
-function currentResumeSeconds(fallback) {
-  if (typeof audio !== 'undefined' && audio && isFinite(audio.currentTime) && audio.currentTime > 0) return audio.currentTime;
-  return (audio && audio.currentTime) || Math.max(0, Number(fallback) || 0);
-}
 function ensureControlSourceSwitcher() {
   var el = document.getElementById('control-source-switcher');
   if (el) return el;
@@ -727,12 +748,24 @@ function controlSourceIssueLabel(issue) {
   if (issue === 'artist_mismatch' || issue === 'artist_extra') return '非原唱版本';
   return '无正版音源';
 }
+/* 「播放需会话/授权」提示只在真的没登录时给。
+ * 已登录用户的搜索结果里这条是错的：`playable` 只是上游拿 privilege 估的，
+ * 不代表取不到直链（真判据是 /api/.../song/url + 换源兜底）。 */
+function searchProviderNeedsSessionNotice(song) {
+  var provider = songProviderKey(song);
+  if (provider !== 'qq' && provider !== 'kugou') return false;
+  if (song && song.playable) return false;
+  try {
+    return !(typeof hasPlatformLogin === 'function' && hasPlatformLogin(provider));
+  } catch (_) { return true; }
+}
 function searchResultMetaText(song) {
   var bits = [];
   if (song.artist) bits.push(song.artist);
   if (song.album) bits.push(song.album);
-  if (songProviderKey(song) === 'qq' && !song.playable) bits.push('QQ playback needs session');
-  if (songProviderKey(song) === 'kugou' && !song.playable) bits.push('Kugou playback needs session');
+  if (searchProviderNeedsSessionNotice(song)) {
+    bits.push(songProviderKey(song) === 'qq' ? 'QQ playback needs session' : 'Kugou playback needs session');
+  }
   if (songProviderKey(song) === 'qishui' && !song.playable) bits.push('汽水匹配源 · 播放将自动换源');
   return bits.join('  ·  ') || songSourceLabel(song);
 }
@@ -741,8 +774,9 @@ function searchResultMetaHtml(song, index) {
   var artist = String(song.artist || '').trim();
   var bits = [];
   if (song.album) bits.push(song.album);
-  if (songProviderKey(song) === 'qq' && !song.playable) bits.push('QQ 播放需会话/授权');
-  if (songProviderKey(song) === 'kugou' && !song.playable) bits.push('酷狗播放需会话/授权');
+  if (searchProviderNeedsSessionNotice(song)) {
+    bits.push(songProviderKey(song) === 'qq' ? 'QQ 播放需会话/授权' : '酷狗播放需会话/授权');
+  }
   if (songProviderKey(song) === 'qishui' && !song.playable) bits.push('汽水匹配源，播放会自动换源');
   var tail = bits.length ? (' · ' + escHtml(bits.join('  ·  '))) : '';
   if (!artist) return escHtml(searchResultMetaText(song));
@@ -846,7 +880,54 @@ function scoreSongSearchResult(song, q, sourceIndex) {
   score -= (sourceIndex || 0) * 0.75;
   return score;
 }
-function mergeSongSearchResults(neteaseSongs, qqSongs, limit, q) {
+/* 多平台合并排序。sources = 按平台参与顺序排好的原始列表数组
+ * （网易云 → QQ → 当前登录平台；同分时先入者在前，与旧行为一致）。
+ * 每个平台内部仍用它自己的名次做 sourceIndex 扣分，与旧实现逐位一致。 */
+function searchPrimaryArtistNorm(artist) {
+  var first = String(artist || '').split(/\s*\/\s*|\s*,\s*|\s*&\s*|\s+feat\.?\s+|\s+ft\.?\s+/i)[0];
+  return simpleSearchNorm(first);
+}
+function searchTrackSignature(song) {
+  var title = simpleSearchNorm(song && (song.name || song.title));
+  var artist = searchPrimaryArtistNorm(song && song.artist);
+  return (title && artist) ? { title: title, artist: artist } : null;
+}
+function searchArtistNamesOverlap(a, b) {
+  if (!a || !b) return false;
+  return a === b || a.indexOf(b) >= 0 || b.indexOf(a) >= 0;
+}
+/* 「优先平台」的上浮只在**这确实是同一首歌**时给：
+ *   1) 查询里点名了这位艺人（搜歌手：结果都是他的，优先用本平台那份）
+ *   2) 别的平台也有同题同艺人的版本（同一首歌，换成本平台听）
+ * 不做这个限制就是「优先平台的所有结果一起上浮」——2026-11-26 实测：登录酷狗搜「晴天」，
+ * 酷狗结果里排在最前的是同题翻唱（蓝心羽 / Jerry音乐站 / Missy），周杰伦原唱不在首位。 */
+function searchPreferredBoostApplies(song, q, otherArtistsByTitle) {
+  if (searchMentionsKnownArtist(q, song && song.artist)) return true;
+  var sig = searchTrackSignature(song);
+  if (!sig) return false;
+  var artists = otherArtistsByTitle && otherArtistsByTitle[sig.title];
+  if (!artists || !artists.length) return false;
+  for (var i = 0; i < artists.length; i++) {
+    if (searchArtistNamesOverlap(sig.artist, artists[i])) return true;
+  }
+  return false;
+}
+function mergeSongSearchResults(sources, limit, q) {
+  var groups = Array.isArray(sources) ? sources : [];
+  var preferred = searchPreferredProvider();
+  var otherArtistsByTitle = {};
+  if (preferred) {
+    /* 先收集「其他平台」的同题曲目歌手，供上浮判定用 */
+    groups.forEach(function(list){
+      (list || []).forEach(function(song){
+        if (!song || songProviderKey(song) === preferred) return;
+        var sig = searchTrackSignature(song);
+        if (!sig) return;
+        var bucket = otherArtistsByTitle[sig.title] || (otherArtistsByTitle[sig.title] = []);
+        bucket.push(sig.artist);
+      });
+    });
+  }
   var out = [];
   var seen = {};
   function push(song, sourceIndex) {
@@ -854,11 +935,15 @@ function mergeSongSearchResults(neteaseSongs, qqSongs, limit, q) {
     var key = songProviderKey(song) + ':' + (song.mid || song.id || (song.name + '|' + song.artist));
     if (seen[key]) return;
     seen[key] = true;
-    song._searchScore = scoreSongSearchResult(song, q, sourceIndex);
+    var score = scoreSongSearchResult(song, q, sourceIndex);
+    /* 登录平台上的同一首歌整体上浮：多个平台都有时，先用账号那家（会员/取址都通） */
+    if (preferred && songProviderKey(song) === preferred && searchPreferredBoostApplies(song, q, otherArtistsByTitle)) {
+      score += MUSIC_SEARCH_PREFERRED_BOOST;
+    }
+    song._searchScore = score;
     out.push(song);
   }
-  (neteaseSongs || []).forEach(function(song, i){ push(song, i); });
-  (qqSongs || []).forEach(function(song, i){ push(song, i); });
+  groups.forEach(function(list){ (list || []).forEach(push); });
   out.sort(function(a, b){ return (b._searchScore || 0) - (a._searchScore || 0); });
   return out.slice(0, limit);
 }
@@ -883,34 +968,58 @@ function appendUniqueSongs(existing, incoming) {
   });
   return added;
 }
-/* 参与某个搜索模式的全部平台。判定「到底」必须遍历这张完整名单，
- * 不能只看本轮成功返回的平台（失败的平台要保留重试机会）。 */
-function musicSearchProvidersForMode(mode) {
-  return mode === 'song' ? ['netease', 'qq'] : [mode];
+/* 当前账号所在平台（「登录对应的平台」）。
+ * 没登录 / 只有匿名态时返回 ''：此时既不改变平台集合也不改排序，
+ * 免得把「没登录」当成「优先网易云」而悄悄改掉默认结果。 */
+function searchPreferredProvider() {
+  var provider = '';
+  try {
+    if (typeof firstLoggedProvider === 'function') provider = String(firstLoggedProvider() || '');
+  } catch (_) {}
+  if (!provider) return '';
+  if (typeof normalizeMusicProviderKey === 'function') provider = normalizeMusicProviderKey(provider);
+  if (provider !== 'netease' && provider !== 'qq' && MUSIC_SEARCH_MIXED_EXTRA_PROVIDERS.indexOf(provider) < 0) return '';
+  var logged = false;
+  try { logged = typeof hasPlatformLogin === 'function' && !!hasPlatformLogin(provider); } catch (_) {}
+  return logged ? provider : '';
 }
-/* 按模式把累积的各平台原始结果合成展示列表（第 0 页行为与旧实现完全一致） */
+/* 参与某个搜索模式的全部平台。判定「到底」必须遍历这张完整名单，
+ * 不能只看本轮成功返回的平台（失败的平台要保留重试机会）。
+ * All 模式额外并入当前登录平台；顺序保持 网易云 → QQ → 优先平台，
+ * 这样「同分先入者在前」的旧行为不变（排序偏好靠上浮分表达，不靠组顺序）。 */
+function musicSearchProvidersForMode(mode) {
+  if (mode !== 'song') return [mode];
+  var providers = ['netease', 'qq'];
+  var preferred = searchPreferredProvider();
+  if (preferred && MUSIC_SEARCH_MIXED_EXTRA_PROVIDERS.indexOf(preferred) >= 0) providers.push(preferred);
+  return providers;
+}
+/* 按模式把累积的各平台原始结果合成展示列表（第 0 页行为与旧实现完全一致）。
+ * 平台集合取会话快照：登录态在搜索期间变化时，分页/渲染不能换一批平台。 */
 function musicSearchCombinedSongs(state) {
   if (state.mode === 'song') {
-    return mergeSongSearchResults(state.raw.netease || [], state.raw.qq || [],
-      (state.raw.netease || []).length + (state.raw.qq || []).length, state.q);
+    var providers = (state.providers && state.providers.length) ? state.providers : musicSearchProvidersForMode(state.mode);
+    var groups = providers.map(function(provider){ return state.raw[provider] || []; });
+    var total = groups.reduce(function(sum, list){ return sum + list.length; }, 0);
+    return mergeSongSearchResults(groups, total, state.q);
   }
   var raw = state.raw[state.mode] || [];
-  if (state.mode === 'qq') return mergeSongSearchResults([], raw, Math.max(18, raw.length), state.q);
-  if (state.mode === 'netease') return mergeSongSearchResults(raw, [], Math.max(18, raw.length), state.q);
+  if (state.mode === 'qq' || state.mode === 'netease') return mergeSongSearchResults([raw], Math.max(18, raw.length), state.q);
   return raw.slice(0, Math.max(18, raw.length));
 }
 async function fetchMusicSearchResults(q, mode, pageState, signal) {
   pageState = pageState || {};
   var offsets = pageState.offsets || {};
   var searchUrl = typeof searchProviderUrl === 'function' ? searchProviderUrl : null;
-  function fetchProvider(provider, limit) {
+  function fetchProvider(provider, limit, extraOpts) {
     var offset = offsets[provider] || 0;
     var url = searchUrl
       ? searchUrl(provider, q, limit, offset)
       : ((provider === 'netease' ? '/api/search' : '/api/' + provider + '/search') +
         '?keywords=' + encodeURIComponent(q) + '&limit=' + limit + '&offset=' + offset);
-    var reqOpts = signal ? { signal: signal } : undefined;
-    return apiJson(url, reqOpts).then(
+    var reqOpts = Object.assign({}, extraOpts || {});
+    if (signal) reqOpts.signal = signal;
+    return apiJson(url, Object.keys(reqOpts).length ? reqOpts : undefined).then(
       function (data) { return { provider: provider, songs: (data && data.songs) || [], limit: limit, offset: offset }; },
       function (err) {
         err = err || new Error('network error');
@@ -921,11 +1030,18 @@ async function fetchMusicSearchResults(q, mode, pageState, signal) {
     );
   }
   if (mode === 'song') {
-    /* 混合搜索：两平台各自成败分开记，不再让「QQ 挂了」静默吞掉 */
-    var settled = await Promise.allSettled([
-      fetchProvider('netease', MUSIC_SEARCH_MIXED_PAGE_SIZES.netease),
-      fetchProvider('qq', MUSIC_SEARCH_MIXED_PAGE_SIZES.qq)
-    ]);
+    /* 混合搜索：各平台成败分开记，不再让「QQ 挂了」静默吞掉。
+     * 平台集合取会话快照（当前登录平台会被加进来）；后加平台带超时，
+     * 慢平台不能把整个 All 搜索拖住。 */
+    var mixedProviders = (pageState.providers && pageState.providers.length)
+      ? pageState.providers
+      : musicSearchProvidersForMode('song');
+    var settled = await Promise.allSettled(mixedProviders.map(function (provider) {
+      var extraOpts = MUSIC_SEARCH_MIXED_EXTRA_PROVIDERS.indexOf(provider) >= 0
+        ? { timeoutMs: MUSIC_SEARCH_EXTRA_PROVIDER_TIMEOUT_MS }
+        : null;
+      return fetchProvider(provider, MUSIC_SEARCH_MIXED_PAGE_SIZES[provider] || 12, extraOpts);
+    }));
     var providerPages = {};
     var failures = [];
     settled.forEach(function (r) {
@@ -971,8 +1087,12 @@ function absorbMusicSearchPage(state, page) {
   /* 参与本模式的**全部**平台都要明确「没有更多」且没有失败才能判定到底。
      旧实现只遍历本轮成功返回的平台：网易云返回最后一页 + QQ 本轮失败时
      会被误判结束，QQ 的重试机会就这样丢了（2026-11-12 复核复现）。
-     失败平台 / 从未成功过的平台一律返回 false，保留「加载更多」重试入口。 */
-  state.exhausted = musicSearchProvidersForMode(state.mode).every(function (provider) {
+     失败平台 / 从未成功过的平台一律返回 false，保留「加载更多」重试入口。
+     名单优先用会话快照：登录平台后加入的平台必须在整段会话里保持一致。 */
+  var sessionProviders = (state.providers && state.providers.length)
+    ? state.providers
+    : musicSearchProvidersForMode(state.mode);
+  state.exhausted = sessionProviders.every(function (provider) {
     if (state.failures.indexOf(provider) >= 0) return false;
     return state.moreByProvider[provider] === false;
   });
@@ -1089,6 +1209,8 @@ async function doSearch(q, opts) {
     doPodcastSearch(q);
     return;
   }
+  /* 登录态可能刚变（登录后直接搜）：All 标签的提示语在这里顺手校正一次 */
+  syncSearchModePriorityTitle();
   /* 新搜索开始：取消在飞的旧请求（输入变化 / 连续搜索不再互相拖尾） */
   if (searchAbort) { try { searchAbort.abort(); } catch (_) {} }
   var controller = (typeof AbortController === 'function') ? new AbortController() : null;
@@ -1096,7 +1218,9 @@ async function doSearch(q, opts) {
   var requestSeq = ++searchRequestSeq;
   var mode = searchMode;
   searchRetryContext = { q: q, mode: mode };
-  searchPageState = { q: q, mode: mode, raw: {}, offsets: {}, songs: [], failures: [], exhausted: false, loading: true };
+  /* 平台集合在这里定死并快照进会话：一次搜索从第一页到「加载更多」都查同一批平台，
+   * 中途登录/退出不会让分页游标与渲染列表错位。 */
+  searchPageState = { q: q, mode: mode, raw: {}, offsets: {}, songs: [], failures: [], exhausted: false, loading: true, providers: musicSearchProvidersForMode(mode) };
   try {
     var page = await fetchMusicSearchResults(q, mode, searchPageState, controller ? controller.signal : null);
     if (requestSeq !== searchRequestSeq || $input.value.trim() !== q) return;

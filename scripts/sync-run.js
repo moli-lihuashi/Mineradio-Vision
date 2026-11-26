@@ -1,0 +1,138 @@
+'use strict';
+console.log('START');
+/**
+ * Sync latest source into the packaged app:
+ *   dist/Mineradio/resources/app            （默认目标，用户日常启动的就是它）
+ *
+ * 可选：第 1 个参数指定别的 app 目录，用来把并行存在的另一份打包树一起刷新，
+ * 例如 dist/win-unpacked/resources/app（electron-builder 的 unpacked 输出，
+ * 它与 dist/Mineradio 是两棵独立的树，只同步一棵会让「启动哪个 exe」决定看到新代码还是老代码）。
+ *   node scripts/sync-dist-app.js dist/win-unpacked/resources/app
+ */
+const fs = require('fs');
+const path = require('path');
+
+const root = path.resolve(__dirname, '..');
+const targetArg = process.argv[2];
+const app = targetArg
+  ? path.resolve(root, targetArg)
+  : path.join(root, 'dist', 'Mineradio', 'resources', 'app');
+
+function copyFile(src, dst) {
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  // 目标可能带 ReadOnly 属性（如 npm tarball 的权限位被上一次同步带进来），
+  // 直接覆盖只读文件会 EPERM。先清掉目标只读位再拷。
+  try {
+    if (fs.existsSync(dst)) {
+      const st = fs.statSync(dst);
+      if (!(st.mode & 0o200)) fs.chmodSync(dst, st.mode | 0o200);
+    }
+  } catch (_) {}
+  fs.copyFileSync(src, dst);
+}
+
+function copyTree(srcDir, dstDir, filter) {
+  if (!fs.existsSync(srcDir)) return 0;
+  let n = 0;
+  const walk = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const name of fs.readdirSync(from)) {
+      const s = path.join(from, name);
+      const d = path.join(to, name);
+      const st = fs.statSync(s);
+      if (st.isDirectory()) {
+        if (filter && !filter(s, true)) continue;
+        walk(s, d);
+      } else {
+        if (filter && !filter(s, false)) continue;
+        copyFile(s, d);
+        n++;
+      }
+    }
+  };
+  walk(srcDir, dstDir);
+  return n;
+}
+
+if (!fs.existsSync(app)) {
+  console.error('Missing packaged app:', app);
+  console.error('Build once with: npm run build:win:dir');
+  process.exit(1);
+}
+
+let files = 0;
+
+// Full public tree (modules, css, assets)
+files += copyTree(path.join(root, 'public'), path.join(app, 'public'), (p) => {
+  const base = path.basename(p);
+  if (/^index\.html\.(bak|modified)$/i.test(base)) return false;
+  if (base === '.DS_Store') return false;
+  return true;
+});
+
+// Desktop main / preload
+files += copyTree(path.join(root, 'desktop'), path.join(app, 'desktop'));
+
+// Root runtime files used by package.json "files"
+const rootFiles = [
+  'server.js',
+  'dj-analyzer.js',
+  'kugou-api.js',
+  'spotify-api.js',
+  'qishui-api.js',
+  'qq-vip-api.js',
+  'qishui-auth-v6.js',
+  'qishui-qr-login.js',
+  'package.json',
+];
+for (const rel of rootFiles) {
+  const src = path.join(root, rel);
+  if (!fs.existsSync(src)) continue;
+  copyFile(src, path.join(app, rel));
+  files++;
+}
+
+// 音频解密模块（package.json files 已纳入 qishui-audio-decryptor/**/*）
+const decryptorSrc = path.join(root, 'qishui-audio-decryptor');
+if (fs.existsSync(decryptorSrc)) files += copyTree(decryptorSrc, path.join(app, 'qishui-audio-decryptor'));
+
+// Optional trees if present in pack / source
+// cuefield-next = 上游 19 模块的 v2 过渡引擎，由 server/routes/update.js 惰性 require（engine:'v2'），漏同步会让该分支恒回落 v1。
+for (const dir of ['server', 'cuefield', 'cuefield-next', 'build', 'qishui-auth-v6']) {
+  const src = path.join(root, dir);
+  const dst = path.join(app, dir);
+  if (fs.existsSync(src)) files += copyTree(src, dst);
+}
+
+// Native JS entry (binary .node left as-is from pack)
+const nativeIdx = path.join(root, 'native', 'mineradio-bpm', 'index.js');
+if (fs.existsSync(nativeIdx)) {
+  copyFile(nativeIdx, path.join(app, 'native', 'mineradio-bpm', 'index.js'));
+  files++;
+}
+
+/* app.asar 优先级高于 app/ 目录：如果只更新 app/ 却留着旧 asar，Electron 会继续加载
+ * 旧代码，症状就是「改了完全没反应」（与 build-freshness 想抓的是同一类坑）。
+ * 这里在同步完成后主动清掉残留 asar；需要 asar 形态时重跑 scripts/pack-app-asar.js。 */
+try {
+  const asarPath = path.join(path.dirname(app), 'app.asar');
+  /* 验证 asar 期间如果反复跑本脚本，会把刚打好的包清掉（用户看到的就是「怎么还是散的」）。
+   * 设 MINERADIO_SYNC_KEEP_ASAR=1 可保留，但要注意此时 app/ 比 asar 新，Electron 仍读 asar。 */
+  if (fs.existsSync(asarPath) && process.env.MINERADIO_SYNC_KEEP_ASAR !== '1') {
+    fs.rmSync(asarPath, { force: true });
+    const unpacked = asarPath + '.unpacked';
+    if (fs.existsSync(unpacked)) fs.rmSync(unpacked, { recursive: true, force: true });
+    console.log('[sync-dist] removed stale app.asar (app/ 已更新，asar 会遮蔽它；需要 asar 请重跑 pack-app-asar)');
+  } else if (fs.existsSync(asarPath)) {
+    console.log('[sync-dist] kept app.asar by MINERADIO_SYNC_KEEP_ASAR=1 —— 注意它会遮蔽本次同步的新代码');
+  }
+} catch (err) {
+  console.warn('[sync-dist] failed to clear stale app.asar:', err && err.message || err);
+}
+
+console.log('synced', files, 'files ->', app);
+if (targetArg) {
+  console.log('note: 这是额外目标；默认目标仍是 dist/Mineradio/resources/app');
+} else {
+  console.log('run:', path.join(root, 'dist', 'Mineradio', 'Mineradio.exe'));
+}

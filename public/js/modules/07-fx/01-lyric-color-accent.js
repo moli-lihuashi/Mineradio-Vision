@@ -111,6 +111,26 @@ function setVisualIconColor(color, silent) {
 function resetVisualIconColor() {
   setVisualIconColor(fxDefaults.visualIconColor || '#7fd8ff');
 }
+var customBgAlbumRetryTimer = 0;
+/* 首次应用背景时封面往往还没加载完（currentCoverSource / #thumb-cover / 队列都拿不到），
+ * --custom-bg-image 会一直是空；WE 层一旦被摘掉露出的就是纯底色 + 舞台歌词。
+ * 这里在有界次数内轮询等封面就绪，就绪后重跑一次 applyCustomBackground。 */
+function scheduleCustomBackgroundAlbumRetry() {
+  if (customBgAlbumRetryTimer) return;
+  var tries = 0;
+  customBgAlbumRetryTimer = setTimeout(function attempt() {
+    tries += 1;
+    var src = '';
+    try { src = customBackgroundAlbumCoverSource(); } catch (_) { }
+    if (src) {
+      customBgAlbumRetryTimer = 0;
+      try { applyCustomBackground(); } catch (_) { }
+      return;
+    }
+    if (tries >= 8) { customBgAlbumRetryTimer = 0; return; }
+    customBgAlbumRetryTimer = setTimeout(attempt, 400);
+  }, 300);
+}
 function applyCustomBackground() {
   if (typeof markAppPerf === 'function') markAppPerf('custom-bg-start');
   /* 桌面效果层不画任何内置背景（#custom-bg 在 wallpaper-stage.css 里整层隐藏），
@@ -146,8 +166,19 @@ function applyCustomBackground() {
   document.body.classList.toggle('custom-background-album-cover', albumMode);
   document.body.classList.toggle('custom-background-video', hasVideo);
   if (layer) {
-    layer.style.setProperty('--custom-bg-image', image ? 'url("' + cssImageUrl(image) + '")' : 'none');
-    layer.style.setProperty('--custom-bg-image-opacity', image ? opacity.toFixed(3) : '0');
+    /* 封面模式（custom-background-album-cover）的图源来自 currentCoverSource / #thumb-cover /
+     * 播放队列三层兜底。返回 home、退出 Folia 世界的那一瞬间，封面可能正在重新加载，
+     * 三层同时取不到 → 这里若把 --custom-bg-image 写成 none，壁纸会直接消失，
+     * 而且要等下一次切歌才会恢复（用户实测：反复返回 home 后内置壁纸被杀掉、重启才恢复）。
+     * 空源时保留上一张，等封面就绪后的下一次调用再更新。 */
+    var keepAlbumArt = albumMode && !image;
+    if (!keepAlbumArt) {
+      layer.style.setProperty('--custom-bg-image', image ? 'url("' + cssImageUrl(image) + '")' : 'none');
+      layer.style.setProperty('--custom-bg-image-opacity', image ? opacity.toFixed(3) : '0');
+    } else if (!layer.style.getPropertyValue('--custom-bg-image')) {
+      // 首次就取不到源：此时层里连旧图都没有，必须等封面就绪后补一次
+      scheduleCustomBackgroundAlbumRetry();
+    }
     layer.style.setProperty('--custom-bg-video-opacity', hasVideo ? opacity.toFixed(3) : '0');
     layer.style.setProperty('--custom-bg-overlay-opacity', media ? '0.18' : '0');
   }
@@ -699,3 +730,20 @@ function setLyricHighlightCustom(color, silent) {
   pushDesktopLyricsState(true);
   if (!silent) showToast('高亮颜色: ' + fx.lyricHighlightColor.toUpperCase());
 }
+
+/* 封面就绪是 --custom-bg-image 唯一可靠的更新时机。
+ * 原来只有「改设置 / 切预设 / 返回 home」才会重跑 applyCustomBackground，
+ * 普通播放一首歌并不会 —— 于是变量一直是空，WE 壁纸层一旦被摘掉，
+ * 露出的就是纯底色 + 舞台歌词（用户实测「反复返回 home 后壁纸被杀掉」）。
+ * 用捕获阶段监听所有 img 的 load，按 id 认 #thumb-cover，不依赖元素此刻是否已挂载。 */
+(function watchThumbCoverForAlbumBackground() {
+  document.addEventListener('load', function (event) {
+    var target = event && event.target;
+    if (!target || target.id !== 'thumb-cover') return;
+    try {
+      if (typeof customBackgroundUsesAlbumCover === 'function' && customBackgroundUsesAlbumCover()) {
+        applyCustomBackground();
+      }
+    } catch (_) { }
+  }, true);
+})();

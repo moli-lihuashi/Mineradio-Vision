@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.3.4">
+<html lang="zh-CN" data-app-version="3.3.5">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -74,6 +74,8 @@
 <script src="vendor/music-tempo.min.js"></script>
 <script src="vendor/gsap.min.js"></script>
 <script src="vendor/morphicons/morphicons.global.js" defer></script>
+<!-- Dissolve ThinkingOrb（MIT, Rayan Selmi）：AI 总结生成中的状态粒子球 -->
+<script src="vendor/dissolve/thinking-orb.js" defer></script>
 <script src="vendor/liquidglass/index.js"></script>
 <script src="js/modules/00-state/00-core-stores.js"></script>
 <script src="js/modules/01-api/00-mineradio-api.js"></script>
@@ -113,6 +115,7 @@ try {
 <link rel="stylesheet" href="css/05-playback/netease-features.css?v=1.0.0">
 <link rel="stylesheet" href="css/08-account/account.css?v=3.0.3-spotify">
 <link rel="stylesheet" href="css/07-fx/fx-panel.css?v=3.0.2-fpsgroups">
+<link rel="stylesheet" href="css/07-fx/fx-panel-genie.css?v=1.0.0">
 <link rel="stylesheet" href="css/12-folia/folia-world.css?v=0.1.0-skeleton">
 <link rel="stylesheet" href="css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
 <link rel="stylesheet" href="css/06-fx/glass.css?v=3.0.0-modular">
@@ -135,6 +138,7 @@ try {
 <link rel="stylesheet" href="css/10-shell/skin-page.css?v=1.0.0-skin">
 <!-- 十段均衡器的竖向推子与预设卡片（覆盖 shell.css 里那排纯文字小按钮） -->
 <link rel="stylesheet" href="css/10-shell/eq-rack.css?v=1.0.0-eqrack">
+<link rel="stylesheet" href="css/10-shell/folia-panel.css?v=1.0.0-fp">
 </head>
 <body>
 <div id="wallpaper-engine-layer" aria-hidden="true">
@@ -361,7 +365,6 @@ try {
         </div>
       </div>
     </div>
-
     <div class="home-rail">
       <div class="listening-today-card" id="listening-today-card">
         <div class="lt-head">
@@ -548,55 +551,150 @@ try {
         <svg viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>
       </button>
     </header>
-    <nav class="settings-tabs" id="settings-tabs" role="tablist">
-      <button type="button" class="settings-tab active" data-settings-tab="general" role="tab">常规</button>
-      <button type="button" class="settings-tab" data-settings-tab="playback" role="tab">播放</button>
-      <button type="button" class="settings-tab" data-settings-tab="audio" role="tab">音频</button>
-      <button type="button" class="settings-tab" data-settings-tab="desktop-lyrics" role="tab">桌面歌词</button>
-      <button type="button" class="settings-tab" data-settings-tab="performance" role="tab">性能</button>
-      <button type="button" class="settings-tab" data-settings-tab="storage" role="tab">存储</button>
-      <button type="button" class="settings-tab" data-settings-tab="about" role="tab">关于</button>
+    <!-- 左侧分组导航（Folia 的 side list）：一行一个分区，图标 + 名称，分组标题只做分隔。
+         按钮仍带 data-settings-tab，31-settings-page.js 的点击委托与 tab 切换逻辑不变。 -->
+    <nav class="settings-tabs" id="settings-tabs" role="navigation" aria-label="设置分区">
+      <div class="settings-nav-group">界面</div>
+      <button type="button" class="settings-tab active" data-settings-tab="general">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg>
+        <span>通用</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="performance">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4.2-4.2"/><circle cx="12" cy="16" r="1.6"/></svg>
+        <span>性能</span>
+      </button>
+      <div class="settings-nav-group">音乐</div>
+      <button type="button" class="settings-tab" data-settings-tab="playback">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M10.2 8.6l5.4 3.4-5.4 3.4z"/></svg>
+        <span>播放</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="audio">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l4 3.4V6.6L7 10H4z"/><path d="M15.4 9.2a4 4 0 0 1 0 5.6"/><path d="M18 6.8a7.4 7.4 0 0 1 0 10.4"/></svg>
+        <span>音频</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="desktop-lyrics">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16"/><path d="M4 12h11"/><path d="M4 17.5h7.5"/></svg>
+        <span>歌词</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="sources">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3.6v5.4"/><path d="M15 3.6v5.4"/><rect x="5.6" y="9" width="12.8" height="5.6" rx="2.8"/><path d="M12 14.6v5.8"/></svg>
+        <span>音源</span>
+      </button>
+      <div class="settings-nav-group">应用</div>
+      <button type="button" class="settings-tab" data-settings-tab="interaction">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.6" y="6" width="18.8" height="12" rx="2.4"/><path d="M6.4 10h1"/><path d="M9.8 10h1"/><path d="M13.2 10h1"/><path d="M16.6 10h1"/><path d="M6.4 13.6h11.2"/></svg>
+        <span>交互</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="ai">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l1.9 4.6 4.9.4-3.7 3.2 1.1 4.8L12 13.7 7.8 16.2l1.1-4.8L5.2 8.2l4.9-.4z"/><path d="M18.5 16.4l.8 1.9 2 .2-1.5 1.3.4 2-1.7-1-1.7 1 .4-2-1.5-1.3 2-.2z"/></svg>
+        <span>AI</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="storage">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8V6"/><path d="M5 12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8"/></svg>
+        <span>存储</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="about">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.4"/><circle cx="12" cy="8.2" r="1" fill="currentColor" stroke="none"/></svg>
+        <span>关于</span>
+      </button>
     </nav>
     <div class="settings-body" id="settings-body">
 
       <section class="settings-page active" data-settings-page="general">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">通用</h3>
+          <p class="settings-page-sub">启动方式、窗口行为、休息提醒，以及账号与外观入口。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">启动</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle" id="t-startupAutoplay" onclick="toggleStartupAutoplay()" title="打开播放器后自动接着上次暂停的那首、那个进度继续播"><span>启动时自动播放</span><span class="dot"></span></div>
+            <div class="fx-toggle" id="t-startupFastSkip" onclick="toggleStartupFastSkip()" title="跳过启动动画与预热等待，先把界面放出来再补渲染"><span>秒启动（跳过启动动画）</span><span class="dot"></span></div>
+            <div class="fx-section-label">继续播放位置</div>
+            <div class="fx-seg" id="startup-resume-mode-seg" role="group" aria-label="继续播放位置" title="启动恢复上次播放时，从暂停处接着播还是从曲首开始">
+              <button type="button" data-startup-resume-mode="resume" class="active">按上次进度</button>
+              <button type="button" data-startup-resume-mode="beginning">从头开始</button>
+            </div>
+          </div>
+          <div class="settings-group-note">「启动时自动播放」只影响启动与恢复；切壁纸模式时的一次性续播走自己的通道，不会替你打开这个开关。</div>
+        </div>
         <div class="settings-group">
           <div class="settings-group-title">窗口</div>
           <div class="settings-group-body">
-      <div class="fx-section-label">最小化窗口</div>
-      <div class="fx-seg" id="close-behavior-seg" title="点击最小化按钮时的行为；右上角关闭按钮始终完全退出播放器（含全部后台进程）">
-        <button data-close-behavior="exit">最小化到任务栏</button>
-        <button data-close-behavior="tray">后台托盘</button>
-      </div>
+            <div class="fx-section-label">外观</div>
+            <div class="fx-seg" id="theme-seg" role="group" aria-label="外观主题" title="深色是默认；「跟随系统」会读 Windows 的应用配色">
+              <button data-theme-pref="dark" class="active" aria-pressed="true">深色</button>
+              <button data-theme-pref="light" aria-pressed="false">浅色</button>
+              <button data-theme-pref="system" aria-pressed="false">跟随系统</button>
+            </div>
+            <div class="fx-hint-note">浅色只影响设置页、皮肤面板、弹窗、提示条与三条杠菜单；主界面（首页 / 控制条 / 播放列表 / 视觉控制台）是玻璃材质，保持深色。</div>
+            <div class="fx-section-label">最小化按钮</div>
+            <div class="fx-seg" id="close-behavior-seg" role="group" aria-label="最小化按钮行为" title="点击最小化按钮时的行为">
+              <button data-close-behavior="exit">最小化到任务栏</button>
+              <button data-close-behavior="tray">后台托盘</button>
+            </div>
+            <div class="fx-section-label">关闭按钮</div>
+            <div class="fx-seg" id="close-action-seg" role="group" aria-label="关闭按钮行为" title="右上角关闭按钮 / Alt+F4 / 任务栏关闭 的行为">
+              <button data-close-action="exit" class="active" aria-pressed="true">完全退出</button>
+              <button data-close-action="tray" aria-pressed="false">隐藏到托盘</button>
+            </div>
+            <div class="fx-section-label">界面缩放</div>
+            <div class="fx-seg" id="ui-zoom-seg" role="group" aria-label="界面缩放" title="只缩放播放器主界面（文字与控件按比例放大），窗口大小不变">
+              <button data-ui-zoom="0.9" aria-pressed="false">90%</button>
+              <button data-ui-zoom="1" class="active" aria-pressed="true">100%</button>
+              <button data-ui-zoom="1.1" aria-pressed="false">110%</button>
+              <button data-ui-zoom="1.2" aria-pressed="false">120%</button>
+            </div>
           </div>
+          <div class="settings-group-note">关闭按钮默认「完全退出」，会连后台进程一起收掉；选「隐藏到托盘」时窗口只是藏起来、播放继续，要真正结束请用托盘菜单或三条杠菜单里的「退出 Mineradio」。界面缩放只作用于主窗，桌面歌词与悬浮小组件各有自己的字号设置。</div>
         </div>
         <div class="settings-group">
           <div class="settings-group-title">休息提醒</div>
           <div class="settings-group-body">
-      <div class="fx-section-label">休息提醒</div>
-      <div class="fx-toggle-grid">
-        <div class="fx-toggle on" id="t-breakReminderEnabled" onclick="toggleBreakReminderEnabled()" title="连续聆听累计到间隔后，整屏浮出一层休息提示；暂停满 10 分钟视为已经休息，计数归零"><span>久听休息提醒</span><span class="dot"></span></div>
-      </div>
-      <div class="fx-seg break-reminder-interval-seg" id="break-reminder-interval-seg" role="group" aria-label="休息提醒间隔" title="连续聆听多久后提醒一次">
-        <button type="button" data-break-reminder-interval="30" onclick="setBreakReminderInterval(30)">30 分</button>
-        <button type="button" data-break-reminder-interval="45" onclick="setBreakReminderInterval(45)">45 分</button>
-        <button type="button" data-break-reminder-interval="60" class="active" onclick="setBreakReminderInterval(60)">60 分</button>
-        <button type="button" data-break-reminder-interval="90" onclick="setBreakReminderInterval(90)">90 分</button>
-      </div>
-      <div class="break-reminder-panel-row">
-        <button class="fx-mini-btn ghost" type="button" onclick="previewBreakReminder()">预览提示</button>
-      </div>
-  <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
+            <div class="fx-toggle on" id="t-breakReminderEnabled" onclick="toggleBreakReminderEnabled()" title="连续聆听累计到间隔后，整屏浮出一层休息提示；暂停满 10 分钟视为已经休息，计数归零"><span>久听休息提醒</span><span class="dot"></span></div>
+            <div class="fx-section-label">提醒间隔</div>
+            <div class="fx-seg break-reminder-interval-seg" id="break-reminder-interval-seg" role="group" aria-label="休息提醒间隔" title="连续聆听多久后提醒一次">
+              <button type="button" data-break-reminder-interval="30" onclick="setBreakReminderInterval(30)">30 分</button>
+              <button type="button" data-break-reminder-interval="45" onclick="setBreakReminderInterval(45)">45 分</button>
+              <button type="button" data-break-reminder-interval="60" class="active" onclick="setBreakReminderInterval(60)">60 分</button>
+              <button type="button" data-break-reminder-interval="90" onclick="setBreakReminderInterval(90)">90 分</button>
+            </div>
+            <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
+            <div class="break-reminder-panel-row">
+              <button class="fx-mini-btn ghost" type="button" onclick="previewBreakReminder()">预览提示</button>
+            </div>
           </div>
           <div class="settings-group-note">连续聆听累计到间隔后整屏浮出提示；暂停满 10 分钟视为已休息，计数归零。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">账号与外观</div>
+          <div class="settings-group-body">
+            <div class="st-link-row" onclick="openSettingsPage('sources')" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">账号与登录</div>
+                <div class="st-link-hint">各平台登录状态与会话在「音源」页管理，可逐个退出或一键全退</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="st-link-row" onclick="openSkinPage('heart')" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">皮肤与外观</div>
+                <div class="st-link-hint">红心动效、收藏演出、桌面宠物、控制条频谱、挂件与液态玻璃</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="settings-page" data-settings-page="playback">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">播放</h3>
+          <p class="settings-page-sub">切歌过渡、淡入淡出、变速与播放行为。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">淡入淡出</div>
           <div class="settings-group-body">
-  <div class="quick-menu-section-title">淡入淡出</div>
   <div class="fade-control-row">
     <label for="fade-in-slider">淡入</label>
     <input id="fade-in-slider" type="range" min="0" max="3" step="0.05" value="0.46" aria-label="音乐淡入秒数">
@@ -609,6 +707,14 @@ try {
   </div>
           </div>
           <div class="settings-group-note">切歌时按这里的时长做音频淡变；数值越大越柔和，0 为硬切。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">播放行为</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle" id="t-preventSleep" onclick="togglePreventSleep()" title="播放期间阻止系统关闭显示器、进入睡眠；暂停或停止后自动解除"><span>播放时阻止系统休眠</span><span class="dot"></span></div>
+            <div class="fx-toggle" id="t-shuffleNoRepeat" onclick="toggleShuffleNoRepeat()" title="随机播放时按轮次抽取：一轮内每首歌只播一次，整轮播完才重新洗牌；不在随机模式下不生效"><span>随机播放不重复</span><span class="dot"></span></div>
+          </div>
+          <div class="settings-group-note">防休眠只在真正出声时生效（暂停、切歌间隙不占用）。「随机播放不重复」只在播放模式切到随机时生效：一轮内每首只播一次，播完一轮才重新洗牌。</div>
         </div>
         <div class="settings-group">
           <div class="settings-group-title">歌曲过渡</div>
@@ -773,6 +879,10 @@ try {
       </section>
 
       <section class="settings-page" data-settings-page="audio">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">音频</h3>
+          <p class="settings-page-sub">十段均衡、响度对齐与输出设备。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">均衡器与响度</div>
           <div class="settings-group-body">
@@ -820,12 +930,14 @@ try {
       </section>
 
       <section class="settings-page" data-settings-page="desktop-lyrics">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">歌词</h3>
+          <p class="settings-page-sub">全局时间校准，以及独立桌面歌词窗口的字号、行数、动效与帧率。主开关在三条杠菜单，或按 Alt+L。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">桌面歌词窗口</div>
-          <div class="settings-group-note" style="margin:-2px 0 12px">这些参数作用于独立的桌面歌词窗口；主开关在三条杠菜单顶部的「桌面歌词」，或直接按 Alt+L。</div>
           <div class="settings-group-body">
       <div class="fx-dl-settings" id="fx-desktop-lyrics-settings">
-        <div class="fx-section-label">桌面歌词</div>
         <div class="fx-slider"><label>桌面歌词大小</label><input id="fx-desktoplyricssize" type="range" min="0.45" max="1.55" step="0.01"><output></output></div>
         <div class="fx-slider"><label>桌面歌词透明</label><input id="fx-desktoplyricsopacity" type="range" min="0.28" max="1" step="0.01"><output></output></div>
         <div class="fx-section-label">桌面歌词行数</div>
@@ -874,9 +986,66 @@ try {
       </div>
           </div>
         </div>
+        <div class="settings-group">
+          <div class="settings-group-title">歌词源</div>
+          <div class="settings-group-body">
+            <div class="fx-section-label">时间粒度</div>
+            <div class="fx-seg" id="lyric-granularity-seg" role="group" aria-label="歌词时间粒度" title="自动：有逐字歌词就用逐字（扫光跟着字走）；强制逐行：忽略逐字时间轴，按整行切">
+              <button data-lyric-granularity="auto" class="active" aria-pressed="true">自动（优先逐字）</button>
+              <button data-lyric-granularity="line" aria-pressed="false">强制逐行</button>
+            </div>
+            <div class="fx-toggle on" id="t-lyricTranslationVisible" onclick="toggleLyricTranslationVisible()" title="关闭后只显示原文，译文行不再合并进歌词；舞台、桌面歌词与小组件同时生效"><span>显示歌词译文</span><span class="dot"></span></div>
+          </div>
+          <div class="settings-group-note">有些平台的逐字时间轴会把整句挤在同一个时间点，看起来像「不跟着唱」；这种情况切「强制逐行」更稳。没有逐行歌词的曲子会自动退回逐字，不会被这个开关弄成空白。「显示歌词译文」关掉后只保留原文行，舞台、桌面歌词与小组件同时生效。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">时间校准</div>
+          <div class="settings-group-body">
+            <div class="fx-slider">
+              <label for="global-lyric-offset-range">全局歌词偏移</label>
+              <input id="global-lyric-offset-range" type="range" min="-3" max="3" step="0.1" value="0" oninput="setGlobalLyricTimingOffset(this.value)">
+              <output id="global-lyric-offset-value">0.0s</output>
+            </div>
+            <div class="break-reminder-panel-row">
+              <button class="fx-mini-btn ghost" type="button" id="global-lyric-offset-reset" onclick="resetGlobalLyricTimingOffset()">归零</button>
+            </div>
+          </div>
+          <div class="settings-group-note">对所有歌曲叠加：正值让歌词提前显示，负值让歌词延后。桌面歌词上的逐曲校准仍单独生效，两者相加。</div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="sources">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">音源</h3>
+          <p class="settings-page-sub">五个平台的登录状态与账号操作。列表由登录态实时渲染，不缓存旧状态。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">平台账号</div>
+          <div class="settings-group-body">
+            <div id="sources-list" class="st-src-list" role="list"></div>
+          </div>
+          <div class="settings-group-note">未登录时只有网易云可以匿名取址播放；酷狗 / QQ / 汽水 / Spotify 的歌曲需要先登录，否则只能看到歌名、点了会回落。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">全部账号</div>
+          <div class="settings-group-body">
+            <div class="st-link-row" id="sources-logout-all" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">退出全部登录</div>
+                <div class="st-link-hint">逐个退出已登录的平台，清掉会话与本地凭据；歌单与播放记录不受影响</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
+          <div class="settings-group-note">单平台的「退出」只清那一家；「退出全部」会把当前已登录的平台依次退掉（没登录的自动跳过）。</div>
+        </div>
       </section>
 
       <section class="settings-page" data-settings-page="performance">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">性能</h3>
+          <p class="settings-page-sub">渲染策略、帧率上限、GPU 节流与内存压缩。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">渲染策略</div>
           <div class="settings-group-body">
@@ -910,7 +1079,7 @@ try {
         <button data-gpu-throttle="on">开启</button>
         <button data-gpu-throttle="off">关闭</button>
       </div>
-      <div class="fx-sub" id="gpu-throttle-reason" style="opacity:.62;margin:4px 0 8px">状态：待命</div>
+      <div class="fx-sub" id="gpu-throttle-reason">状态：待命</div>
       <div class="fx-toggle-grid">
         <div class="fx-toggle" id="t-liveBackgroundKeep" onclick="toggleFx('liveBackgroundKeep')" title="开启后后台或最小化时保持视觉渲染，不进入低占用暂停"><span>直播后台保持</span><span class="dot"></span></div>
       </div>
@@ -925,7 +1094,7 @@ try {
           <div class="settings-group-title">运行状态</div>
           <div class="settings-group-body">
       <div class="fx-section-label">性能仪表盘</div>
-      <div class="fx-sub" id="perf-dashboard-body" style="opacity:.72;margin:4px 0 8px;line-height:1.8">FPS --</div>
+      <div class="fx-sub" id="perf-dashboard-body">FPS --</div>
           </div>
         </div>
         <div class="settings-group">
@@ -940,6 +1109,7 @@ try {
         <div class="fx-toggle" id="t-memoryAutoSystemTrim" onclick="toggleFx('memoryAutoSystemTrim')" title="按阈值和间隔启用系统级 Mem Reduct；默认不自动弹管理员权限"><span>系统级定时释放</span><span class="dot"></span></div>
         <div class="fx-toggle" id="t-memorySystemAutoElevate" onclick="toggleFx('memorySystemAutoElevate')" title="完整释放工作集/修改页/待机页可能需要 UAC；关闭时只尝试当前权限可完成的部分"><span>需要时请求管理员</span><span class="dot"></span></div>
       </div>
+      <div class="fx-section-label">系统释放范围</div>
       <div class="fx-seg memory-mask-seg" id="memory-mask-seg" title="Mem Reduct 系统释放范围">
         <button data-memory-mask="workingSet" class="active">工作集</button>
         <button data-memory-mask="modifiedList" class="active">修改页</button>
@@ -953,14 +1123,108 @@ try {
         <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(false)">系统释放</button>
         <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(true)">提权释放</button>
           </div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">动效</div>
+          <div class="settings-group-body">
+            <div class="fx-section-label">减少动效</div>
+            <div class="fx-seg" id="motion-reduce-seg" role="group" aria-label="减少动效" title="把界面过渡与动效收紧到接近即时；舞台粒子与歌词动效也按同一判据降级">
+              <button data-motion-reduce="auto" class="active" aria-pressed="true">跟随系统</button>
+              <button data-motion-reduce="reduce" aria-pressed="false">减少动效</button>
+            </div>
+          </div>
+          <div class="settings-group-note">「跟随系统」= 系统里开了「减弱动态效果」就自动降级；「减少动效」= 不管系统怎么设都降级。桌面歌词窗口与悬浮小组件是独立窗口，按各自的设置走。</div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="interaction">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">交互</h3>
+          <p class="settings-page-sub">键位与操作方式。局内热键只在播放器窗口内生效，全局热键向系统注册。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">热键</div>
+          <div class="settings-group-body">
+            <div class="st-link-row" id="open-hotkey-settings" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">打开热键设置</div>
+                <div class="st-link-hint">播放 / 上一首 / 下一首 / 音量 / 全屏 / 桌面歌词，各有局内与全局两套键位</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
+          <div class="settings-group-note">全局热键会向系统注册；被其他软件占用时会在编辑面板里标红。录入时按 Backspace / Delete 清空，Esc 取消。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">当前键位</div>
+          <div class="settings-group-body">
+            <div class="st-hk-row st-hk-head" aria-hidden="true">
+              <span class="st-hk-name">动作</span><span class="st-hk-key">局内</span><span class="st-hk-key">全局</span>
+            </div>
+            <div id="hotkey-overview" class="st-hk-list"></div>
+          </div>
+          <div class="settings-group-note">这里只是只读预览；改键请点上面的「打开热键设置」。保存后面板会自动刷新。</div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="ai">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">AI</h3>
+          <p class="settings-page-sub">云端大模型配置。AI 歌单与 AI 补译文共用这一份；不配置也能用本地智能推荐。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">服务配置</div>
+          <div class="settings-group-body">
+            <div class="st-field">
+              <span class="st-field-label">状态</span>
+              <span class="st-field-value" id="ai-settings-status">读取中…</span>
+            </div>
+            <div class="st-field">
+              <label class="st-field-label" for="ai-settings-baseurl">服务地址</label>
+              <input class="st-input" id="ai-settings-baseurl" type="text" placeholder="https://…/v1" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="st-field">
+              <label class="st-field-label" for="ai-settings-model">模型 ID</label>
+              <input class="st-input" id="ai-settings-model" type="text" placeholder="gpt-4o-mini / ep-2024…" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="st-field">
+              <label class="st-field-label" for="ai-settings-apikey">API Key</label>
+              <input class="st-input" id="ai-settings-apikey" type="password" placeholder="留空则不修改已保存的 Key" autocomplete="off">
+            </div>
+            <div class="st-actions">
+              <button class="fx-mini-btn ghost" type="button" id="ai-settings-preset-deepseek" title="填入 DeepSeek 官方地址与 DeepSeek-V4.1-Flash 模型名；不会改动已保存的 Key，也不会自动保存">填入 DeepSeek</button>
+              <button class="fx-mini-btn" type="button" id="ai-settings-save">保存配置</button>
+              <button class="fx-mini-btn ghost" type="button" id="ai-settings-test">测试连接</button>
+              <button class="fx-mini-btn ghost" type="button" id="ai-settings-clear">清除密钥</button>
+            </div>
+          </div>
+          <div class="settings-group-note">只接受 HTTPS（本机回环地址可用 HTTP，供本地 ollama 之类）；内网、云元数据与带账号密码的地址会被拒绝。Key 用 DPAPI 加密存储，接口不回传明文。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">功能</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle" id="t-aiLyricTranslateSettings" onclick="toggleAiLyricTranslate()" title="歌词缺译文时用已配置的 LLM 逐行翻译；未配置 Key 时不会触发"><span>AI 补译文</span><span class="dot"></span></div>
+            <div class="st-link-row" id="ai-settings-open-playlist" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">打开 AI 歌单</div>
+                <div class="st-link-hint">用一句话描述场景或心情，生成歌单并批量入队</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
+          <div class="settings-group-note">「AI 补译文」与视觉控制台里那个开关是同一个状态，改哪边都一样。<strong>开启后，播放到缺译文的外文歌会自动发一次翻译请求</strong>（每首最多一次、结果缓存在进程内，会消耗你的 API 额度）；关掉即完全不发请求。</div>
         </div>
       </section>
 
       <section class="settings-page" data-settings-page="storage">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">存储</h3>
+          <p class="settings-page-sub">缓存目录与各类占用的位置、大小。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">缓存目录</div>
           <div class="settings-group-body">
-      <div class="fx-section-label">缓存目录</div>
       <div class="cache-storage-panel" id="cache-storage-panel">
         <div class="cache-storage-head"><span>统一缓存目录</span><span id="cache-storage-total">读取中...</span></div>
         <code class="cache-storage-path" id="cache-storage-root">桌面版启动后读取</code>
@@ -984,9 +1248,41 @@ try {
       </div>
           </div>
         </div>
+        <div class="settings-group">
+          <div class="settings-group-title">设置备份</div>
+          <div class="settings-group-body">
+            <div class="st-link-row" id="settings-backup-export" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">导出设置</div>
+                <div class="st-link-hint">外观、歌词、音频、热键与各项开关，存成一个 JSON 文件</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="st-link-row" id="settings-backup-import" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">导入设置</div>
+                <div class="st-link-hint">从备份恢复；只覆盖备份里有的项，其余保持不动</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="st-link-row" id="settings-backup-restart" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">重启播放器</div>
+                <div class="st-link-hint">导入后重启一次，全部设置才会完全生效</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="settings-group-note" id="settings-backup-status">尚未导出或导入。</div>
+          </div>
+          <div class="settings-group-note">备份里不含登录凭据、歌单与本地文件、缓存、听歌统计与搜索历史；导入时也只写备份里存在的设置项，不会清空其它内容。</div>
+        </div>
       </section>
 
       <section class="settings-page" data-settings-page="about">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">关于</h3>
+          <p class="settings-page-sub">版本、构建溯源与数据存放说明。</p>
+        </header>
         <div class="settings-group">
           <div class="settings-group-title">版本与更新</div>
           <div class="settings-group-body">
@@ -1001,9 +1297,17 @@ try {
           <div class="settings-group-note">版本与 GitHub Release 正文的「构建自 commit」应完全一致；不一致说明手里的安装包不是那次构建。</div>
         </div>
         <div class="settings-group">
+          <div class="settings-group-title">更新</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle on" id="t-updateCheckOnStart" onclick="toggleUpdateCheckOnStart()" title="播放器启动约 9 秒后向更新接口查询一次最新版本"><span>启动时检查更新</span><span class="dot"></span></div>
+            <div class="fx-toggle" id="t-updateAutoDownload" onclick="toggleUpdateAutoDownload()" title="发现新版本后自动把安装包（或增量补丁）下到本地，安装仍需要你点「立即更新」确认"><span>发现新版本后自动下载</span><span class="dot"></span></div>
+          </div>
+          <div class="settings-group-note">自动下载只负责把包装到本地，不会替你安装或重启；关闭「启动时检查更新」后，三条杠菜单里的「检查更新」仍然可以手动查。</div>
+        </div>
+        <div class="settings-group">
           <div class="settings-group-title">数据</div>
           <div class="settings-group-body">
-            <div class="settings-group-note" style="margin-top:0">账号、歌单与播放记录保存在本机；缓存可在「存储」页迁移。</div>
+            <div class="settings-group-note">账号、歌单与播放记录保存在本机；缓存可在「存储」页迁移。</div>
           </div>
         </div>
       </section>
@@ -1037,18 +1341,20 @@ try {
       <button type="button" class="skin-tab" data-skin-tab="pet" role="tab">桌面宠物</button>
       <button type="button" class="skin-tab" data-skin-tab="spectrum" role="tab">控制条频谱</button>
       <button type="button" class="skin-tab" data-skin-tab="widget" role="tab">挂件</button>
-      <button type="button" class="skin-tab" data-skin-tab="glass" role="tab">玻璃</button>
     </nav>
     <div class="skin-body" id="skin-body">
       <section class="skin-page active" data-skin-page="heart">
+        <h3 class="skin-section-title">红心</h3>
         <div class="skin-page-note">点亮红心时的呈现方式：点一格立即生效，并在格子里就地放一遍。</div>
         <div class="heart-fx-grid" id="skin-heart-fx-grid"></div>
       </section>
       <section class="skin-page" data-skin-page="scene">
+        <h3 class="skin-section-title">收藏演出</h3>
         <div class="skin-page-note">点亮红心时，整屏演一场；三档可单独关闭。</div>
         <div class="scene-fx-grid" id="skin-scene-fx-grid"></div>
       </section>
       <section class="skin-page" data-skin-page="pet">
+        <h3 class="skin-section-title">桌面宠物</h3>
         <div class="skin-page-note">首页卡片的同伴，点一格立即换；也可以用自己的照片生成，或用下面 Petdex 宠物库里的。</div>
         <div class="pet-skin-grid" id="skin-pet-grid"></div>
         <div class="pet-skin-actions">
@@ -1059,10 +1365,12 @@ try {
         <div class="skin-pet-dex-slot" id="skin-pet-dex-slot"></div>
       </section>
       <section class="skin-page" data-skin-page="spectrum">
+        <h3 class="skin-section-title">控制条频谱</h3>
         <div class="skin-page-note">贴在控制条底沿，随音乐起伏；四格是「三套样式 + 关闭」。</div>
         <div class="bar-spectrum-grid" id="skin-bar-spectrum-grid"></div>
       </section>
       <section class="skin-page" data-skin-page="widget">
+        <h3 class="skin-section-title">挂件</h3>
         <div class="skin-widget-card">
           <div class="skin-widget-main">
             <div class="skin-widget-title">桌面悬浮小组件</div>
@@ -1081,54 +1389,7 @@ try {
         </div>
       </section>
 
-      <section class="skin-page" data-skin-page="glass">
-        <!-- 实时玻璃预览（2026-11-23）：调参数时面板挡着 Home 卡片，看不到效果。
-             这块用同一个 applyLiquidGlassProfile 算出的参数渲染样品，滚到下面滑块时靠 sticky 常驻顶部。 -->
-        <div class="skin-glass-preview" id="skin-glass-preview">
-          <div class="skin-glass-stage">
-            <!-- 背景用开屏界面的复刻：浅蓝底 + 手写体字标 + 中心光晕。
-                 选它而不是抽象色块，是因为浅色底最能看出玻璃的染色、边缘高光与折射。 -->
-            <div class="skin-glass-splash" aria-hidden="true">
-              <div class="skin-glass-splash-glow"></div>
-              <div class="skin-glass-splash-word">Mineradio</div>
-              <div class="skin-glass-splash-sub">private visual radio</div>
-              <div class="skin-glass-splash-bar"><i></i></div>
-            </div>
-            <div class="skin-glass-sample" id="skin-glass-sample">
-              <span>液态玻璃</span>
-            </div>
-          </div>
-          <div class="skin-glass-meta" id="skin-glass-meta">—</div>
-        </div>
-        <div class="skin-page-note">下面这些同时作用于 Home 卡片、控制台、面板等所有玻璃表面；Folia 世界只吃「玻璃模糊 / 磨砂饱和 / 亮度调节」三项。</div>
-        <div class="fx-slider"><label>控制台玻璃色差</label><input id="fx-glassaberration" type="range" min="0" max="140" step="1"><output></output></div>
-        <div class="fx-section-label">液态玻璃</div>
-        <div class="fx-slider"><label>玻璃模糊</label><input id="fx-liquidglassblur" type="range" min="0" max="1" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>亮度调节</label><input id="fx-liquidglassbrightness" type="range" min="-0.5" max="0.5" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>磨砂饱和</label><input id="fx-liquidglasssaturation" type="range" min="0" max="1" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>折射强度</label><input id="fx-liquidglassrefraction" type="range" min="0" max="2" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>边缘色散</label><input id="fx-liquidglassaberration" type="range" min="0" max="0.5" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>边缘高光</label><input id="fx-liquidglasshighlight" type="range" min="0" max="1" step="0.01"><output></output></div>
-        <div class="fx-slider"><label>玻璃厚度</label><input id="fx-liquidglassbevel" type="range" min="0" max="60" step="1"><output></output></div>
-        <div class="fx-fold" id="fx-liquidglass-advanced-fold">
-          <div class="fx-fold-head" onclick="document.getElementById('fx-liquidglass-advanced-fold').classList.toggle('open')">
-            <span class="fx-fold-title"><strong>液态玻璃高级参数</strong></span><span class="arrow">▶</span>
-          </div>
-          <div class="fx-fold-body">
-            <div class="fx-slider"><label>镜面高光</label><input id="fx-liquidglassspecular" type="range" min="0" max="1" step="0.01"><output></output></div>
-            <div class="fx-slider"><label>边缘菲涅尔</label><input id="fx-liquidglassfresnel" type="range" min="0" max="2" step="0.05"><output></output></div>
-            <div class="fx-slider"><label>投影浓度</label><input id="fx-liquidglassshadow" type="range" min="0" max="1" step="0.01"><output></output></div>
-            <div class="fx-slider"><label>投影扩散</label><input id="fx-liquidglassshadowspread" type="range" min="0" max="60" step="1"><output></output></div>
-            <div class="fx-slider"><label>主题染色</label><input id="fx-liquidglasstint" type="range" min="0" max="1" step="0.01"><output></output></div>
-            <div class="fx-slider"><label>微畸变</label><input id="fx-liquidglassdistortion" type="range" min="0" max="1" step="0.01"><output></output></div>
-            <div class="fx-slider"><label>双界面折射</label><input id="fx-liquidglassbevelmode" type="range" min="0" max="1" step="1"><output></output></div>
-          </div>
-        </div>
-        <div class="fx-folia-glass-hint" id="fx-folia-glass-hint" hidden>
-          Folia 世界用的是 CSS 玻璃：只有「玻璃模糊 / 磨砂饱和 / 亮度调节」生效，折射、色散、菲涅尔、双界面折射在这个模式下不参与渲染。
-        </div>
-
-      </section>
+      
     </div>
   </div>
 </div>
@@ -1153,6 +1414,38 @@ try {
     <div id="fx-console-search-results" class="fx-console-popover fx-console-search-results" hidden></div>
   </div>
 
+  <!-- 液态玻璃参数（2026-11-25 从皮肤面板「玻璃」页搬回）：
+       由 05b 的 organizeFxPanel 整块塞进「外观」页尾部，不参与按流向分配到预设页。 -->
+  <div class="fx-liquidglass-block" id="fx-liquidglass-block">
+    
+    <div class="fx-glass-scope-note">下面这些同时作用于 Home 卡片、控制台、面板等所有玻璃表面；Folia 世界只吃「玻璃模糊 / 磨砂饱和 / 亮度调节」三项。</div>
+    <div class="fx-slider"><label>控制台玻璃色差</label><input id="fx-glassaberration" type="range" min="0" max="140" step="1"><output></output></div>
+    <div class="fx-section-label">液态玻璃</div>
+    <div class="fx-slider"><label>玻璃模糊</label><input id="fx-liquidglassblur" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>亮度调节</label><input id="fx-liquidglassbrightness" type="range" min="-0.5" max="0.5" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>磨砂饱和</label><input id="fx-liquidglasssaturation" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>折射强度</label><input id="fx-liquidglassrefraction" type="range" min="0" max="2" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>边缘色散</label><input id="fx-liquidglassaberration" type="range" min="0" max="0.5" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>边缘高光</label><input id="fx-liquidglasshighlight" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>玻璃厚度</label><input id="fx-liquidglassbevel" type="range" min="0" max="60" step="1"><output></output></div>
+    <div class="fx-fold" id="fx-liquidglass-advanced-fold">
+    <div class="fx-fold-head" onclick="document.getElementById('fx-liquidglass-advanced-fold').classList.toggle('open')">
+    <span class="fx-fold-title"><strong>液态玻璃高级参数</strong></span><span class="arrow">▶</span>
+    </div>
+    <div class="fx-fold-body">
+    <div class="fx-slider"><label>镜面高光</label><input id="fx-liquidglassspecular" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>边缘菲涅尔</label><input id="fx-liquidglassfresnel" type="range" min="0" max="2" step="0.05"><output></output></div>
+    <div class="fx-slider"><label>投影浓度</label><input id="fx-liquidglassshadow" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>投影扩散</label><input id="fx-liquidglassshadowspread" type="range" min="0" max="60" step="1"><output></output></div>
+    <div class="fx-slider"><label>主题染色</label><input id="fx-liquidglasstint" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>微畸变</label><input id="fx-liquidglassdistortion" type="range" min="0" max="1" step="0.01"><output></output></div>
+    <div class="fx-slider"><label>双界面折射</label><input id="fx-liquidglassbevelmode" type="range" min="0" max="1" step="1"><output></output></div>
+    </div>
+    </div>
+    <div class="fx-folia-glass-hint" id="fx-folia-glass-hint" hidden>
+    Folia 世界用的是 CSS 玻璃：只有「玻璃模糊 / 磨砂饱和 / 亮度调节」生效，折射、色散、菲涅尔、双界面折射在这个模式下不参与渲染。
+    </div>
+  </div>
   <div class="fx-section-label">视觉预设</div>
   <div class="preset-grid" id="preset-grid"></div>
 
@@ -1161,9 +1454,13 @@ try {
       <span class="fx-fold-title"><strong>Folia 世界</strong><small>独立歌词世界</small></span><span class="arrow">▶</span>
     </div>
     <div class="fx-fold-body">
-      <!-- 2026-11-23：入口开关按用户要求删掉，改成「tab 即世界」——
-           切到这一页就进入 Folia，切走就回原世界（见 05b 的 setFxPanelTab）。 -->
-      <div class="fx-folia-hint" id="fx-folia-hint">画面已交给 Folia：原有预设、3D 歌词与镜头暂停，音频与歌词仍在跑。</div>
+      <div class="fx-folia-switch-row">
+        <span class="fx-folia-switch-label">开启 Folia 世界</span>
+        <button class="fx-folia-switch" id="fx-folia-world-toggle" type="button" aria-pressed="false" onclick="foliaWorldToggle()" title="开启后画面交给 Folia，原有预设与 3D 歌词暂停">
+          <span class="fx-folia-switch-knob"></span>
+        </button>
+      </div>
+      <div class="fx-folia-hint" id="fx-folia-hint">开启后，画面交给 Folia，原有预设与 3D 歌词暂停。</div>
       <div class="fx-folia-error" id="fx-folia-error" hidden></div>
       <div class="fx-folia-lists" id="fx-folia-lists" hidden>
         <div class="fx-section-label">歌词样式</div>
@@ -2526,6 +2823,62 @@ try {
     </button>
   </div>
 </div>
+
+<!-- 听歌档案（Folia 面板模组）：账号胶囊已登录时点开这里。
+     内容由 public/folia-panel-mods/listening-archive/client.mjs 渲染 —— 模组自带
+     页头（Folia 档案 / 听歌排行 / 听歌时长），所以外壳不再放标题，只留关闭与账号入口。
+     必须在 #empty-home 之外：那个 section 默认 visibility:hidden（home.css:2），
+     放在里面会让整个面板继承 hidden —— DOM 有尺寸、屏幕上一片空白。 -->
+<div id="folia-panel" class="folia-panel" aria-hidden="true" role="dialog" aria-label="听歌档案">
+  <div class="fp-box">
+    <!-- 累计聆听时长卡：模组只有日/周/月/年四个维度，没有「全部范围 + 累计 + 日均」。
+         这张卡完全在外壳里，靠 archive.query 分窗口累加算，不碰模组渲染。 -->
+    <div class="fp-summary" id="folia-panel-summary">
+      <div class="fp-sum-top">
+        <div class="fp-sum-ranges" role="group" aria-label="统计范围">
+          <button type="button" data-fp-range="all" class="active">全部</button>
+          <button type="button" data-fp-range="365">近 1 年</button>
+          <button type="button" data-fp-range="90">90 天</button>
+          <button type="button" data-fp-range="30">30 天</button>
+          <button type="button" data-fp-range="7">7 天</button>
+        </div>
+        <div class="fp-sum-dates" id="folia-panel-sum-dates"></div>
+      </div>
+      <div class="fp-sum-bottom">
+        <div class="fp-sum-total-wrap">
+          <span class="fp-sum-label">累计聆听时长</span>
+          <span class="fp-sum-total" id="folia-panel-sum-total">—</span>
+          <span class="fp-sum-daily" id="folia-panel-sum-daily"></span>
+        </div>
+        <div class="fp-sum-trend" id="folia-panel-sum-trend">
+          <svg viewBox="0 0 240 52" preserveAspectRatio="none" aria-hidden="true">
+            <path class="fp-trend-area" d=""></path>
+            <path class="fp-trend-line" d=""></path>
+          </svg>
+          <span class="fp-sum-trend-cap">近 30 天</span>
+        </div>
+        <div class="fp-sum-side">
+          <p class="fp-sum-slogan">耳机是人类的避难所，音乐是心脏的起搏器。<br>Mineradio 与您相伴每一天。</p>
+          <button type="button" class="fp-sum-ai" data-fp-ai>AI 月度总结</button>
+        </div>
+      </div>
+    </div>
+    <div class="fp-ai" id="folia-panel-ai" hidden>
+      <div class="fp-ai-card">
+        <div class="fp-ai-head">
+          <span class="fp-ai-title">AI 月度总结 · 近 30 天</span>
+          <button type="button" class="fp-ai-close" data-fp-ai-close>收起</button>
+        </div>
+        <div class="fp-ai-body" id="folia-panel-ai-body"></div>
+      </div>
+    </div>
+    <div class="fp-body" id="folia-panel-body"></div>
+    <footer class="fp-foot">
+      <button type="button" class="fp-foot-btn" data-fp-close>关闭</button>
+    </footer>
+  </div>
+</div>
+<div id="folia-panel-stage" class="folia-panel-stage" aria-hidden="true"></div>
 
 </body>
 </html>

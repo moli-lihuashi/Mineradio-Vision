@@ -290,6 +290,9 @@ var wallpaperEngineGlassMirror = {
   video: null, canvas: null, token: 0, rafId: 0, lastRaf: 0, boxKey: '',
   gl: null, program: null, buffer: null, texture: null, uUVScale: null, uUVOffset: null,
   mid: null, midCtx: null, ctx2d: null, mode: '', uploadPending: false, useGetDataFallback: false,
+  contextLostAt: 0, rebuildPending: false, rebuildBackoff: 0, lastRebuildAt: 0,
+  snapshot: null, snapshotCtx: null,
+  stableFrames: 0, lastLossAt: 0, videoFallbackActive: false,
 };
 
 // ===== 壁纸媒体的运行许可 =====
@@ -313,11 +316,34 @@ function wallpaperEngineMediaShouldRun() {
 
 function wallpaperEngineGlassMirrorElement() {
   var m = wallpaperEngineGlassMirror;
-  if (m.canvas) return m.canvas;
+  if (m.canvas && m.canvas.isConnected) return m.canvas;
   var canvas = document.getElementById('wallpaper-engine-glass-mirror');
   if (!canvas) return null;
   m.canvas = canvas;
   return canvas;
+}
+
+/* WebGL 上下文丢失后，旧 canvas 的上下文句柄已死，而且这个 canvas 再取
+ * getContext('2d') 也会返回 null（一个 canvas 只能属于一种上下文）。继续在
+ * 它上面重建只会得到「webgl 又丢 → 2d 兜底也 null → 永久黑」。
+ * 所以这里用全新 canvas 原样顶替：复制 id/class/style/位置，插回同一父节点，
+ * 再让 Start 走一遍干净的 getContext。 */
+function wallpaperEngineGlassMirrorRebuildCanvas() {
+  var m = wallpaperEngineGlassMirror;
+  var old = m.canvas || document.getElementById('wallpaper-engine-glass-mirror');
+  if (!old) return null;
+  var next = document.createElement('canvas');
+  next.id = old.id;
+  next.className = old.className;
+  next.setAttribute('aria-hidden', 'true');
+  var cs = old.style;
+  if (cs) next.setAttribute('style', cs.cssText || '');
+  if (old.parentNode) old.parentNode.replaceChild(next, old);
+  else document.body.appendChild(next);
+  m.canvas = next;
+  // 旧 canvas 上的上下文钩子随元素一起作废，新 canvas 需要重新挂
+  next.__weGlassMirrorContextHooks = false;
+  return next;
 }
 
 function wallpaperEngineGlassMirrorInitGl(canvas) {
@@ -383,6 +409,11 @@ function wallpaperEngineGlassMirrorStop() {
   m.boxKey = '';
   m.uploadPending = false;
   m.useGetDataFallback = false;
+  m.contextLostAt = 0;
+  m.rebuildPending = false;
+  m.rebuildBackoff = 0;
+  m.stableFrames = 0;
+  m.videoFallbackActive = false;
   try { document.body.classList.remove('wallpaper-engine-video-ready'); } catch (e4) { }
   if (m.gl && m.canvas) {
     try {
@@ -396,6 +427,49 @@ function wallpaperEngineGlassMirrorStop() {
   }
 }
 
+/* 上下文恢复后，WebGL 资源（program/texture/buffer）随旧上下文一起失效。
+ * canvas.getContext 返回的仍是同一个 context 对象，但里面的资源句柄已不可用；
+ * 不清掉就会在 restore 后继续用死资源 drawArrays —— 画布依然是黑的。 */
+function wallpaperEngineGlassMirrorInvalidateGlObjects() {
+  var m = wallpaperEngineGlassMirror;
+  m.gl = null;
+  m.program = null;
+  m.buffer = null;
+  m.texture = null;
+  m.uUVScale = null;
+  m.uUVOffset = null;
+  m.mid = null;
+  m.midCtx = null;
+  m.mode = '';
+}
+
+/* 上下文丢失期间把真视频临时顶上去当可见背景（镜像是可见壁纸层，它一黑整屏黑）。
+ * 恢复出第一帧后必须立刻藏回 video，否则视频留在渲染树里会污染玻璃回读链。 */
+function wallpaperEngineGlassMirrorSetVideoFallback(active) {
+  var m = wallpaperEngineGlassMirror;
+  if (!m.video) return;
+  m.videoFallbackActive = !!active;
+  try {
+    if (active) {
+      if (m.video.style.display === 'none') m.video.style.display = '';
+    } else if (m.video.style.display !== 'none') {
+      m.video.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
+/* 连续成功帧计数：只有稳定画够 5 帧、且距上次丢失超过 500ms，才撤掉视频兜底。
+ * 压力没消退时新上下文常常只活一帧，过早撤掉会让用户正好看到那一下黑。 */
+function wallpaperEngineGlassMirrorNoteStableFrame() {
+  var m = wallpaperEngineGlassMirror;
+  m.stableFrames = (m.stableFrames || 0) + 1;
+  if (!m.videoFallbackActive) return;
+  var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (m.stableFrames >= 5 && now - (m.lastLossAt || 0) > 500) {
+    wallpaperEngineGlassMirrorSetVideoFallback(false);
+  }
+}
+
 function wallpaperEngineGlassMirrorStart(video, token) {
   var m = wallpaperEngineGlassMirror;
   var canvas = wallpaperEngineGlassMirrorElement();
@@ -403,6 +477,30 @@ function wallpaperEngineGlassMirrorStart(video, token) {
   wallpaperEngineGlassMirrorStop();
   m.video = video;
   m.token = token;
+  // WebGL 上下文丢失恢复：快速反复进出 Home / 高负载时，Chromium 会回收这个
+  // 上下文（实测 15ms 间隔连点 Home，第 11 次 glLost=true）。丢上下文后 paint
+  // 还在排帧，但 drawArrays 全部无效——画布凝固成黑帧，看起来就是「壁纸被杀掉」。
+  // lost 里必须 preventDefault，Chromium 才会在资源释放后派发 restored；
+  // restored / 超时兜底时换一个全新 canvas 重建，避免在坏 canvas 上反复取上下文。
+  if (!canvas.__weGlassMirrorContextHooks) {
+    canvas.__weGlassMirrorContextHooks = true;
+    canvas.addEventListener('webglcontextlost', function (event) {
+      try { event.preventDefault(); } catch (_) {}
+      m.contextLostAt = performance.now();
+      // 关键：#wallpaper-engine-glass-mirror 本身就是「可见的全屏壁纸层」
+      //（视频一直被 display:none，桌面背景靠这张镜像画布显示）。上下文一丢，
+      // 镜像画布变纯黑 → 整屏壁纸直接黑掉。这时把真正在解码播放的视频元素
+      // 临时显示出来接管背景，恢复后再藏回去 —— 视频是活的，不是冻结帧。
+      try { if (m.video) wallpaperEngineGlassMirrorSetVideoFallback(true); } catch (_) {}
+    }, false);
+    canvas.addEventListener('webglcontextrestored', function () {
+      m.contextLostAt = 0;
+      // 上下文已恢复但资源句柄已死：标记待重建，由 paint 在主线程不忙的
+      // 下一帧再换 canvas 重建。连点 Home 期间 restored 会高频触发，若这里
+      // 同步重建，新上下文马上又被回收，陷入「丢→建→丢」循环拉长黑屏。
+      m.rebuildPending = true;
+    }, false);
+  }
   // 关键一：视频必须移出渲染树。留在树里（哪怕 visibility:hidden / opacity:0）
   // 玻璃的背景回读就还是黑的 —— 只有 display:none 才能让回读链干净。
   try { video.style.display = 'none'; } catch (e0) { }
@@ -413,17 +511,38 @@ function wallpaperEngineGlassMirrorStart(video, token) {
   // canvas 尺寸变化会重置上下文状态，所以先定尺寸再取上下文。
   var rect = canvas.getBoundingClientRect();
   var scale = Math.min(1, 1600 / Math.max(rect.width, 1));
-  var bw = Math.max(2, Math.round(rect.width * scale));
-  var bh = Math.max(2, Math.round(rect.height * scale));
+  var bw = Math.max(2, Math.floor(rect.width * scale));
+  var bh = Math.max(2, Math.floor(rect.height * scale));
   if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
   m.boxKey = bw + 'x' + bh;
   // 注意：不能用裸 getContext('webgl') 探测——首次调用不带属性会固定上下文，
   // 之后带 preserveDrawingBuffer 的属性会被忽略，回读必需的该属性就丢了。
   var gl = m.gl || wallpaperEngineGlassMirrorInitGl(canvas);
   if (!gl) {
-    canvas.width = bw; canvas.height = bh;
-    m.ctx2d = canvas.getContext('2d');
-    m.mode = '2d';
+    // webgl 拿不到（上下文刚丢 / 驱动繁忙）：换一个全新 canvas 重试一次。
+    // 不能在这里退 2d —— 视频帧的玻璃回读只有 WebGL 能做（2d 连续重绘会黑），
+    // 而且同一个 webgl canvas 上 getContext('2d') 只会返回 null，等于永久黑。
+    var retry = wallpaperEngineGlassMirrorRebuildCanvas();
+    gl = retry ? wallpaperEngineGlassMirrorInitGl(retry) : null;
+    if (gl) {
+      var r2 = retry.getBoundingClientRect();
+      var s2 = Math.min(1, 1600 / Math.max(r2.width, 1));
+      var bw2 = Math.max(2, Math.floor(r2.width * s2));
+      var bh2 = Math.max(2, Math.floor(r2.height * s2));
+      if (retry.width !== bw2 || retry.height !== bh2) { retry.width = bw2; retry.height = bh2; }
+      m.boxKey = bw2 + 'x' + bh2;
+      m.mid = document.createElement('canvas');
+      m.mid.width = bw2; m.mid.height = bh2;
+      m.midCtx = m.mid.getContext('2d');
+      gl.uniform2f(m.uUVScale, 1, 1);
+      gl.uniform2f(m.uUVOffset, 0, 0);
+    } else {
+      /* 彻底拿不到 webgl：保留空画布，继续走下面的 paint 循环。
+       * 这里绝不能 return —— return 发生在定义 paint 之前，旧循环在调用处返回后
+       * 也不再排帧，整个镜像循环就此停摆：视频兜底不执行、退避重建不重试，
+       * 画面一直黑到别的事件碰巧唤醒。保持循环才能由 paint 的退避逻辑继续重试。 */
+      m.mode = 'webgl';
+    }
   } else {
     // CPU 拷贝中转画布：视频帧先 drawImage 到这里，getImageData 后以原始像素
     // texImage2D 上传（视频元素直接上传的 GPU 纹理回读不了，见顶部实验矩阵）
@@ -453,23 +572,63 @@ function wallpaperEngineGlassMirrorStart(video, token) {
       m.lastRaf = 0;
       return;
     }
+    /* 上下文丢失恢复：丢上下文后 paint 还在排帧但 drawArrays 全部无效，画布
+     * 凝固成黑帧。恢复要「退避」而不是立即重建 —— 连点 Home 期间 GPU 合成器
+     * 压力持续存在，任何新建的 WebGL 上下文都会马上再被回收，立即重建只会
+     * 陷入「丢→建→丢」循环、拉长黑屏。退避间隔指数递增，等压力回落再重建。 */
+    /* 上下文丢失判定必须包含「m.gl 为 null」：重建时 InvalidateGlObjects 会清空
+     * m.gl，若只判 m.gl.isContextLost()，gl 为 null 时整段被跳过 —— 视频兜底不执行、
+     * 退避重建也不跑，画面就一直黑着。 */
+    if (m.mode === 'webgl' && (!m.gl || m.gl.isContextLost())) {
+      if (!m.contextLostAt) m.contextLostAt = performance.now();
+      m.lastLossAt = performance.now();
+      m.stableFrames = 0;
+      // 丢失期间必须让视频持续顶着：不要因为「重建后成功画了一帧」就撤掉 ——
+      // 压力没消退时新上下文往往只活一帧又被回收，撤掉就立刻露黑。稳定判据见成功路径。
+      if (!m.videoFallbackActive) wallpaperEngineGlassMirrorSetVideoFallback(true);
+    } else if (m.rebuildPending) {
+      m.rebuildPending = false;
+      m.contextLostAt = 0;
+      wallpaperEngineGlassMirrorInvalidateGlObjects();
+      wallpaperEngineGlassMirrorRebuildCanvas();
+      wallpaperEngineGlassMirrorStart(m.video, token);
+      return;
+    } else if (m.contextLostAt) {
+      // 上下文已丢但 restored 还没来：退避重建兜底（restored 丢失时也能自愈）
+      var lostMs = performance.now() - m.contextLostAt;
+      var backoffMs = 800 * Math.pow(2, m.rebuildBackoff);
+      if (lostMs > backoffMs) {
+        m.rebuildBackoff = Math.min(m.rebuildBackoff + 1, 4);
+        m.contextLostAt = 0;
+        wallpaperEngineGlassMirrorInvalidateGlObjects();
+        wallpaperEngineGlassMirrorRebuildCanvas();
+        wallpaperEngineGlassMirrorStart(m.video, token);
+        return;
+      }
+    }
+    // 成功渲染过一帧且退避计数非零：逐步回落退避（上下文稳定了）
+    if (!m.gl || !m.gl.isContextLost()) {
+      if (m.rebuildBackoff && m.lastRebuildAt && performance.now() - m.lastRebuildAt > 4000) {
+        m.rebuildBackoff = 0;
+      }
+    }
     var rectNow = canvas.getBoundingClientRect();
     if (rectNow.width >= 2 && rectNow.height >= 2) {
       var scaleNow = Math.min(1, 1600 / Math.max(rectNow.width, 1));
-      var bwNow = Math.max(2, Math.round(rectNow.width * scaleNow));
-      var bhNow = Math.max(2, Math.round(rectNow.height * scaleNow));
+      // 用 floor 消除连点动画期的亚像素抖动：round 会在 1282.4/1282.6 边界来回
+      // 横跳，导致 boxKey 反复变化 → 反复重建 → 反复丢上下文。
+      var bwNow = Math.max(2, Math.floor(rectNow.width * scaleNow));
+      var bhNow = Math.max(2, Math.floor(rectNow.height * scaleNow));
       var boxKeyNow = bwNow + 'x' + bhNow;
       if (boxKeyNow !== m.boxKey) {
-        canvas.width = bwNow; canvas.height = bhNow; m.boxKey = boxKeyNow;
-        if (m.mode === 'webgl' && m.gl) {
-          // 尺寸变化会重置 GL 状态：重绑 program/纹理/attrib
-          m.gl.useProgram(m.program);
-          m.gl.bindTexture(m.gl.TEXTURE_2D, m.texture);
-          m.gl.bindBuffer(m.gl.ARRAY_BUFFER, m.buffer);
-          var aPos = m.gl.getAttribLocation(m.program, 'aPos');
-          m.gl.enableVertexAttribArray(aPos);
-          m.gl.vertexAttribPointer(aPos, 2, m.gl.FLOAT, false, 0, 0);
-        }
+        /* 尺寸变化时原地 canvas.width=... 会立刻销毁本 canvas 的 WebGL 上下文
+         * （HTML 规范）。真正的窗口尺寸变化很罕见，这里换全新 canvas 重建一次，
+         * 与上下文恢复共用同一套逻辑，且重建后 return 等下一帧再判定，避免
+         * 同帧内二次重建造成死循环。 */
+        wallpaperEngineGlassMirrorInvalidateGlObjects();
+        wallpaperEngineGlassMirrorRebuildCanvas();
+        wallpaperEngineGlassMirrorStart(m.video, token);
+        return;
       }
       var vw = video.videoWidth, vh = video.videoHeight;
       if (vw && vh) {
@@ -482,6 +641,18 @@ function wallpaperEngineGlassMirrorStart(video, token) {
             m.midCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
           } else {
             m.midCtx.drawImage(video, (canvas.width - dwCover) / 2, (canvas.height - dhCover) / 2, dwCover, dhCover);
+          }
+          // 顺带把这一帧同步到「最后有效帧快照」：一个画好就不再动的静态 2D canvas。
+          // 上下文丢失期间主循环退回采样它（静态 2D canvas 能被玻璃回读，实验矩阵
+          // 定案），玻璃折射的是上一帧壁纸而非黑帧，黑屏彻底消失。
+          if (!m.snapshot || m.snapshot.width !== canvas.width || m.snapshot.height !== canvas.height) {
+            m.snapshot = document.createElement('canvas');
+            m.snapshot.width = canvas.width;
+            m.snapshot.height = canvas.height;
+            m.snapshotCtx = m.snapshot.getContext('2d');
+          }
+          if (m.snapshotCtx) {
+            try { m.snapshotCtx.drawImage(m.mid, 0, 0); } catch (_) {}
           }
           m.gl.viewport(0, 0, canvas.width, canvas.height);
           m.gl.useProgram(m.program);
@@ -503,6 +674,8 @@ function wallpaperEngineGlassMirrorStart(video, token) {
                 self.gl.texImage2D(self.gl.TEXTURE_2D, 0, self.gl.RGBA, self.gl.RGBA, self.gl.UNSIGNED_BYTE, bitmap);
                 bitmap.close();
                 self.gl.drawArrays(self.gl.TRIANGLE_STRIP, 0, 4);
+                // 镜像已画出新帧：连续稳定够久才撤掉临时顶上的视频
+                wallpaperEngineGlassMirrorNoteStableFrame();
               }).catch(function () {
                 self.uploadPending = false;
                 self.useGetDataFallback = true;
@@ -517,14 +690,7 @@ function wallpaperEngineGlassMirrorStart(video, token) {
                 m.gl.RGBA, m.gl.UNSIGNED_BYTE, new Uint8Array(pixels.data.buffer));
             } catch (eUp) { }
             m.gl.drawArrays(m.gl.TRIANGLE_STRIP, 0, 4);
-          }
-        } else if (m.ctx2d) {
-          if (isFill) {
-            m.ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
-          } else {
-            var s = Math.max(canvas.width / vw, canvas.height / vh);
-            var dw = vw * s, dh = vh * s;
-            m.ctx2d.drawImage(video, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+            wallpaperEngineGlassMirrorNoteStableFrame();
           }
         }
       }
@@ -542,6 +708,8 @@ function wallpaperEngineGlassMirrorStart(video, token) {
   }
   paint();
   m.paint = paint;
+  // 记录本次重建时间，供退避计数回落判断
+  m.lastRebuildAt = performance.now();
 }
 
 // 恢复事件（窗口 show/restore、visibilitychange、Folia exit）主动唤醒镜像循环：
@@ -557,6 +725,16 @@ function wallpaperEngineGlassMirrorKick() {
   m.lastRaf = 0;
   if (typeof m.paint === 'function') m.paint();
 }
+// 暴露给性能降级恢复（03-liquidglass-perf.js）与探针：主线程过载把镜像画布
+// 停更成黑帧后，需要一个显式入口强制刷一帧，否则黑帧凝固到重启。
+try { window.wallpaperEngineGlassMirrorKick = wallpaperEngineGlassMirrorKick; } catch (_) {}
+// 最后有效帧快照：镜像画布上下文丢失（黑帧）时，主循环退回采样它，避免玻璃透黑。
+try { window.wallpaperEngineGlassMirrorSnapshot = function () { return wallpaperEngineGlassMirror.snapshot || null; }; } catch (_) {}
+// 镜像画布当前是否处于上下文丢失（黑帧）状态：主循环据此决定采镜像还是采快照。
+try { window.wallpaperEngineGlassMirrorLost = function () {
+  var m = wallpaperEngineGlassMirror;
+  return !!(m.mode === 'webgl' && m.gl && m.gl.isContextLost());
+}; } catch (_) {}
 
 // 统一同步入口：窗口状态 / 页面可见性 / Folia 切换都走这里。
 // 不该运行时暂停视频解码；恢复时按当前选择拉起播放并唤醒镜像。
@@ -572,7 +750,25 @@ function wallpaperEngineSyncMediaRuntime() {
   }
   if (video.paused && document.body.classList.contains('wallpaper-engine-active')) {
     var item = wallpaperEngineProjectById(wallpaperEngineSelection.id);
-    requestWallpaperEngineVideoPlayback(video, item, 'media', wallpaperEngineLayerToken, false, 0);
+    /* 可见性恢复 / Folia 退出会集中触发续播。已有可解码媒体时不必再次进入
+     * 完整的「取消旧重试 → play Promise → 失败分类 → 有限重试 / 层失败回退」链路；
+     * 直接续播可减少快速往返时互相打断的窗口，失败仍回退到统一请求入口。
+     * 注意：requestWallpaperEngineVideoPlayback 本身不会重设 src 或递增 layerToken。 */
+    var hasReadyMedia = !!(video.getAttribute('src') && video.readyState >= 2);
+    if (hasReadyMedia) {
+      try {
+        var resumePromise = video.play();
+        if (resumePromise && resumePromise.catch) {
+          resumePromise.catch(function () {
+            requestWallpaperEngineVideoPlayback(video, item, 'media', wallpaperEngineLayerToken, false, 0);
+          });
+        }
+      } catch (_) {
+        requestWallpaperEngineVideoPlayback(video, item, 'media', wallpaperEngineLayerToken, false, 0);
+      }
+    } else {
+      requestWallpaperEngineVideoPlayback(video, item, 'media', wallpaperEngineLayerToken, false, 0);
+    }
   }
   wallpaperEngineGlassMirrorKick();
 }
@@ -780,14 +976,28 @@ function applyWallpaperEngineBackground(item, quiet) {
       video.src = wallpaperEngineMediaUrl(item, 'media');
       video.load();
     } else {
-      image.onload = function () { wallpaperEngineLayerReady('image', token); };
-      image.onerror = function () { wallpaperEngineLayerFailed(item, kind, token); };
-      /* 必须 CORS 模式加载：静态壁纸图也要被玻璃镜像 drawImage。
-       * 未设 crossOrigin 的 mineradio-wallpaper:// 图会污染镜像 canvas，
-       * LiquidGlass 再回读就拿不到像素 → 玻璃透黑（同 video 的 11-13 修复）。
-       * 协议响应带 ACAO:*（wallpaper-engine-library.js）。 */
-      image.crossOrigin = 'anonymous';
-      image.src = wallpaperEngineMediaUrl(item, kind === 'media' ? 'media' : 'preview');
+      /* 先离线解码，成功后才把 URL 交给可见 <img>。失败时永远不碰可见图：
+       * 否则 Chromium 会在壁纸层里画一块白色破图占位，Home 的玻璃把它糊开，
+       * 整块 hero 发白（2026-11-25 实测复现）。旧壁纸帧在此期间保持不动。 */
+      var imageUrl = wallpaperEngineMediaUrl(item, kind === 'media' ? 'media' : 'preview');
+      var probeImage = new Image();
+      probeImage.crossOrigin = 'anonymous';
+      probeImage.onload = function () {
+        if (token !== wallpaperEngineLayerToken || !wallpaperEngineSelection.active || wallpaperEngineSelection.id !== item.id) return;
+        image.onload = function () { wallpaperEngineLayerReady('image', token); };
+        image.onerror = function () { wallpaperEngineLayerFailed(item, kind, token); };
+        /* 必须 CORS 模式加载：静态壁纸图也要被玻璃镜像 drawImage。
+         * 未设 crossOrigin 的 mineradio-wallpaper:// 图会污染镜像 canvas，
+         * LiquidGlass 再回读就拿不到像素 → 玻璃透黑（同 video 的 11-13 修复）。
+         * 协议响应带 ACAO:*（wallpaper-engine-library.js）。 */
+        image.crossOrigin = 'anonymous';
+        image.src = imageUrl;
+      };
+      probeImage.onerror = function () {
+        if (token !== wallpaperEngineLayerToken) return;
+        wallpaperEngineLayerFailed(item, kind, token);
+      };
+      probeImage.src = imageUrl;
     }
   }
 

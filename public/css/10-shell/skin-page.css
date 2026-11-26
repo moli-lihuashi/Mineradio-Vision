@@ -41,7 +41,7 @@ body.skin-popover-open .skin-shell{transform:none}
 .skin-close{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;
   border:1px solid var(--panel-line,rgba(255,255,255,.085));border-radius:var(--panel-radius-sm,9px);background:transparent;
   color:var(--panel-ink-2,rgba(255,255,255,.60));cursor:pointer;transition:background .16s,color .16s,border-color .16s}
-.skin-close:hover{background:rgba(255,255,255,.06);border-color:var(--panel-line-strong,rgba(255,255,255,.16));
+.skin-close:hover{background:var(--st-fill);border-color:var(--panel-line-strong,rgba(255,255,255,.16));
   color:var(--panel-ink,rgba(255,255,255,.94))}
 .skin-close svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 
@@ -58,8 +58,8 @@ body.skin-popover-open .skin-shell{transform:none}
 
 .skin-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 28px 40px}
 .skin-body::-webkit-scrollbar{width:8px}
-.skin-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.13);border-radius:999px;border:2px solid transparent;background-clip:content-box}
-.skin-body:hover::-webkit-scrollbar-thumb{background:rgba(255,255,255,.24);background-clip:content-box}
+.skin-body::-webkit-scrollbar-thumb{background:var(--st-scroll);border-radius:999px;border:2px solid transparent;background-clip:content-box}
+.skin-body:hover::-webkit-scrollbar-thumb{background:var(--st-scrollHover);background-clip:content-box}
 
 .skin-page{display:none}
 .skin-page.active{display:block}
@@ -96,7 +96,7 @@ body.skin-popover-open .skin-shell{transform:none}
 
 /* ---------- 挂件页 ---------- */
 .skin-widget-card{display:flex;align-items:center;gap:20px;padding:18px 20px;border-radius:12px;
-  border:1px solid var(--panel-line,rgba(255,255,255,.085));background:rgba(255,255,255,.025);margin-bottom:16px}
+  border:1px solid var(--st-line);background:var(--st-card);margin-bottom:16px}
 .skin-widget-main{flex:1 1 auto;min-width:0}
 .skin-widget-title{font-size:13.5px;font-weight:640;color:var(--panel-ink,rgba(255,255,255,.94));letter-spacing:.2px}
 .skin-widget-sub{margin-top:6px;font-size:11px;color:var(--panel-ink-3,rgba(255,255,255,.34));
@@ -124,9 +124,7 @@ body.skin-popover-open .skin-shell{transform:none}
   background:transparent;text-align:center;padding:0 24px;line-height:1.7}
 .skin-widget-frame-loading[hidden]{display:none}
 
-/* ---------- 玻璃页：搬过来的 .fx-slider 需要一点上下呼吸 ---------- */
-#skin-popover .skin-page[data-skin-page="glass"] .fx-slider{max-width:760px}
-#skin-popover .skin-page[data-skin-page="glass"] .fx-fold{max-width:760px}
+/* Folia 玻璃提示：玻璃页已搬回 FX 面板，这条留给皮肤面板里其它引用它的地方 */
 #skin-popover .fx-folia-glass-hint{max-width:760px}
 
 /* 皮肤页的分段选中态：用面板自己的陶土色（Claude 那套暖调），不用主界面的青。
@@ -149,70 +147,6 @@ body.skin-popover-open .skin-shell{transform:none}
   .skin-widget-card{flex-direction:column;align-items:flex-start}
 }
 
-/* ---------- 玻璃页：实时预览 ---------- */
-/* sticky 常驻顶部：往下拖滑块时仍能看见样品。
-   面板底色必须不透明，否则下面的内容会从样品后面透出来。 */
-.skin-glass-preview{position:sticky;top:-6px;z-index:3;margin:0 0 16px;
-  padding:12px 12px 10px;border-radius:12px;
-  background:var(--panel-bg,#121211);border:1px solid var(--panel-line,rgba(255,255,255,.085))}
-
-.skin-glass-stage{position:relative;height:158px;border-radius:10px;overflow:hidden;isolation:isolate}
-
-/* 开屏界面的复刻：浅蓝底 + 中心光晕 + 手写体字标 + 一条细进度条。
-   用浅色而不是抽象色块，是因为玻璃的染色、边缘高光、折射在浅底上才看得出来。 */
-.skin-glass-splash{position:absolute;inset:0;background:#eef4fc;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;overflow:hidden;
-  /* 字标居中；玻璃砖从字的中间压上去，一半字在外面、一半在玻璃下 */
-  padding-right:0}
-.skin-glass-splash-glow{position:absolute;width:260px;height:260px;border-radius:50%;
-  background:radial-gradient(circle,rgba(120,180,255,.62) 0%,transparent 68%);filter:blur(18px)}
-.skin-glass-splash-word{position:relative;font-family:'Caveat',cursive;font-size:46px;font-weight:600;
-  line-height:1;color:#1a3a6e;text-shadow:0 0 18px rgba(80,140,220,.35),0 0 36px rgba(120,180,255,.25)}
-.skin-glass-splash-sub{position:relative;font-family:var(--panel-mono,ui-monospace,monospace);
-  font-size:8.5px;letter-spacing:2.2px;text-transform:uppercase;color:rgba(26,58,110,.48)}
-.skin-glass-splash-bar{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);
-  width:96px;height:2px;border-radius:2px;background:rgba(26,58,110,.14);overflow:hidden}
-.skin-glass-splash-bar i{display:block;width:62%;height:100%;border-radius:2px;
-  background:linear-gradient(90deg,rgba(26,58,110,.5),rgba(80,140,220,.85))}
-
-/* 样品：一块浮在开屏画面上的玻璃砖。
-   模糊/饱和/亮度由 JS 写 backdrop-filter；折射、色散、高光、厚度、染色、投影走 CSS 变量。 */
-.skin-glass-sample{position:absolute;left:50%;right:7%;top:30px;bottom:30px;
-  display:flex;align-items:center;justify-content:center;
-  border-radius:calc(14px + var(--pv-bevel,10px) * .5);
-  /* 浅背景上单靠白边立不住：外面压一圈暗描边 + 投影，里面再补一道高光，边界才清楚 */
-  border:1px solid rgba(20,44,86,calc(.16 + var(--pv-shadow,0.42) * .18));
-  /* 自身叠加要够淡，否则会把玻璃后面的字洗掉、只剩一团雾 */
-  background:linear-gradient(152deg,
-    rgba(255,255,255,calc(.09 + var(--pv-highlight,0.12) * .34)) 0%,
-    rgba(255,255,255,.02) 46%,
-    rgba(210,228,255,calc(.03 + var(--pv-tint,0) * .18)) 100%);
-  box-shadow:
-    0 calc(10px + var(--pv-shadow,0.42) * 16px) calc(20px + var(--pv-shadowspread,22) * 1.1px)
-      rgba(16,40,80,calc(.22 + var(--pv-shadow,0.42) * .42)),
-    inset 0 0 0 1px rgba(255,255,255,calc(.34 + var(--pv-highlight,0.12) * .8)),
-    inset 0 1.5px 0 rgba(255,255,255,calc(.70 + var(--pv-highlight,0.12) * .4)),
-    inset 0 -2px 0 rgba(16,40,80,.20),
-    /* 左右两条色散边：强度跟「边缘色散」走 */
-    inset 3px 0 0 rgba(255,72,110,calc(var(--pv-aberration,0) * 1.5)),
-    inset -3px 0 0 rgba(58,120,255,calc(var(--pv-aberration,0) * 1.5));
-  overflow:hidden}
-/* 折射：内侧一道被推歪的亮带 */
-.skin-glass-sample::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
-  background:linear-gradient(112deg,
-    rgba(255,255,255,.55) 0%, transparent 26%, transparent 64%, rgba(180,214,255,.42) 100%);
-  opacity:calc(.10 + var(--pv-refraction,0.18) * 1.5)}
-.skin-glass-sample span{position:relative;z-index:1;
-  font-family:var(--panel-mono,ui-monospace,monospace);font-size:10.5px;letter-spacing:1.4px;
-  color:rgba(22,44,82,.72);text-transform:uppercase}
-
-.skin-glass-meta{margin-top:9px;font-family:var(--panel-mono,ui-monospace,monospace);font-size:10px;
-  color:var(--panel-ink-3,rgba(255,255,255,.34));font-variant-numeric:tabular-nums;letter-spacing:.2px}
-
-/* 面板关掉时把 filter 摘干净：backdrop-filter 会让合成器持续采样它背后的内容，
-   视觉上已经不可见却还在耗 GPU —— 用户明确要求关窗后不得残留渲染。 */
-body:not(.skin-popover-open) .skin-glass-preview{display:none}
-
 /* ---------- 宠物页：Petdex 宠物库内嵌 ---------- */
 /* 它本来是首页上的全屏浮层（fixed + 遮罩 + 浅色卡片），点「从 Petdex 导入」时
    被皮肤面板整个盖住。现在整块移进这一页，样式改写成面板里的一段深色区块。 */
@@ -230,7 +164,7 @@ body:not(.skin-popover-open) .skin-glass-preview{display:none}
 #skin-popover .home-pet-dex-head button{
   border-color:var(--panel-line,rgba(255,255,255,.085));
   background:rgba(255,255,255,.04);color:var(--panel-ink-2,rgba(255,255,255,.60))}
-#skin-popover .home-pet-dex-head button:hover{background:rgba(255,255,255,.09);color:#fff}
+#skin-popover .home-pet-dex-head button:hover{background:var(--st-fill2);color:var(--st-t1)}
 
 #skin-popover .home-pet-dex-hint,
 #skin-popover .home-pet-dex-note,
@@ -247,15 +181,133 @@ body:not(.skin-popover-open) .skin-glass-preview{display:none}
 
 #skin-popover .home-pet-dex-import input{
   border-color:var(--panel-line,rgba(255,255,255,.085));
-  background:rgba(255,255,255,.04);color:var(--panel-ink,rgba(255,255,255,.94))}
+  background:var(--st-well);color:var(--st-t1)}
 #skin-popover .home-pet-dex-import input::placeholder{color:var(--panel-ink-3,rgba(255,255,255,.34))}
 #skin-popover .home-pet-dex-import button{
   border-color:var(--panel-line,rgba(255,255,255,.085));
   background:rgba(255,255,255,.06);color:var(--panel-ink-2,rgba(255,255,255,.60))}
-#skin-popover .home-pet-dex-import button:hover{background:rgba(255,255,255,.11);color:#fff}
+#skin-popover .home-pet-dex-import button:hover{background:var(--st-fill2);color:var(--st-t1)}
 
 #skin-popover .home-pet-dex-item{
-  border-color:rgba(255,255,255,.07);background:rgba(255,255,255,.02)}
-#skin-popover .home-pet-dex-item:hover{background:rgba(255,255,255,.045)}
+  border-color:var(--st-line);background:transparent}
+#skin-popover .home-pet-dex-item:hover{background:var(--st-fill)}
 #skin-popover .home-pet-dex-name{color:var(--panel-ink,rgba(255,255,255,.94))}
 #skin-popover .home-pet-dex-status{color:var(--panel-ink-2,rgba(255,255,255,.60))}
+
+/* ==================================================================
+ * 2026-11-25：皮肤与外观面板改用 Folia 语言（与设置页同一套）
+ *  · 两栏：左侧分组导航 + 右侧内容（原来是顶部横向 tab）
+ *  · 卡片：--st-card 底 / 1px --st-line 描边 / 12px 圆角
+ *  · 选中：--st-fill2 抬起 + --st-accent 内描边（不再用粉/蓝各自的发光）
+ *  · 令牌来自 settings-page.css 的 :is(#settings-modal,#skin-popover)
+ * ================================================================== */
+
+#skin-popover .skin-shell{
+  display:grid;grid-template-columns:196px minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:'head head' 'nav body';
+  background:var(--st-win);border:1px solid var(--st-line);border-radius:16px;
+}
+#skin-popover .skin-head{grid-area:head;align-items:center;padding:18px 22px 13px;
+  border-bottom:1px solid var(--st-line);background:transparent}
+#skin-popover .skin-kicker{color:var(--st-t3)}
+#skin-popover .skin-title{font-size:17px;font-weight:640;letter-spacing:.2px;color:var(--st-t1)}
+#skin-popover .skin-close{border-color:var(--st-line);background:transparent;color:var(--st-t2);border-radius:9px}
+#skin-popover .skin-close:hover{background:var(--st-fill);border-color:var(--st-line2);color:var(--st-t1)}
+
+#skin-popover .skin-tabs{grid-area:nav;flex-direction:column;align-items:stretch;gap:2px;
+  padding:10px 10px 16px;background:var(--st-side);border-right:1px solid var(--st-line);
+  border-bottom:0;overflow:visible}
+#skin-popover .skin-tab{padding:9px 12px;border-radius:9px;text-align:left;font-size:12.5px;
+  font-weight:400;color:var(--st-t2);transition:background var(--st-dur),color var(--st-dur)}
+#skin-popover .skin-tab:hover{background:var(--st-fill);color:var(--st-t1)}
+#skin-popover .skin-tab.active{background:var(--st-fill2);color:var(--st-t1);font-weight:600}
+#skin-popover .skin-tab.active::after{content:none}
+
+#skin-popover .skin-body{grid-area:body;padding:18px 22px 32px;background:transparent}
+#skin-popover .skin-page-note{font-size:11.5px;line-height:1.7;color:var(--st-t3);margin:0 0 14px}
+#skin-popover .skin-page-note + .skin-page-note{margin-top:-6px}
+
+/* ---- 卡片：四类格子统一成同一张卡 ---- */
+#skin-popover .heart-fx-tile,
+#skin-popover .scene-fx-tile,
+#skin-popover .bar-spectrum-tile,
+#skin-popover .pet-skin-tile{
+  border:1px solid var(--st-line)!important;background:var(--st-card)!important;
+  border-radius:12px!important;color:var(--st-t2)!important;box-shadow:none!important;
+}
+#skin-popover .heart-fx-tile:hover,
+#skin-popover .scene-fx-tile:hover,
+#skin-popover .bar-spectrum-tile:hover,
+#skin-popover .pet-skin-tile:hover{
+  border-color:var(--st-line2)!important;background:var(--st-raise)!important;color:var(--st-t1)!important;
+}
+#skin-popover .heart-fx-tile.active,
+#skin-popover .scene-fx-tile.active,
+#skin-popover .bar-spectrum-tile.active,
+#skin-popover .pet-skin-tile.active{
+  border-color:var(--st-line2)!important;background:var(--st-fill2)!important;color:var(--st-t1)!important;
+  box-shadow:inset 0 0 0 1px var(--st-accent)!important;
+}
+#skin-popover .hfx-name,
+#skin-popover .scene-fx-tile b,
+#skin-popover .bar-spectrum-tile b,
+#skin-popover .pet-skin-tile b{color:var(--st-t1);font-weight:560}
+#skin-popover .hfx-sub,
+#skin-popover .scene-fx-tile small,
+#skin-popover .bar-spectrum-tile small,
+#skin-popover .pet-skin-tile small{color:var(--st-t3)}
+#skin-popover .heart-fx-tile.active .hfx-sub,
+#skin-popover .scene-fx-tile.active small,
+#skin-popover .bar-spectrum-tile.active small{color:var(--st-t2)}
+
+/* ---- 挂件页 ---- */
+#skin-popover .skin-widget-card{border:1px solid var(--st-line);background:var(--st-card);
+  border-radius:12px;padding:16px 18px}
+#skin-popover .skin-widget-title{color:var(--st-t1);font-size:13.5px;font-weight:600}
+#skin-popover .skin-widget-sub{color:var(--st-t3)}
+#skin-popover .skin-widget-sub.on{color:var(--st-accent)}
+#skin-popover .skin-btn-primary,
+#skin-popover .skin-btn-ghost,
+#skin-popover .pet-skin-action{
+  height:32px;border-radius:9px;border:1px solid var(--st-line);background:var(--st-fill);
+  color:var(--st-t1);font-size:12px;font-weight:560;padding:0 14px;
+}
+#skin-popover .skin-btn-primary:hover,
+#skin-popover .skin-btn-ghost:hover,
+#skin-popover .pet-skin-action:hover{background:var(--st-fill2);border-color:var(--st-line2)}
+#skin-popover .pet-skin-note{color:var(--st-t3);font-size:11px}
+#skin-popover .skin-widget-frame-wrap{border:1px solid var(--st-line);border-radius:12px;overflow:hidden}
+#skin-popover .skin-widget-frame-loading{color:var(--st-t3);font-size:11.5px}
+
+/* 窄窗口：导航回到顶部横条（与设置页同一策略） */
+@media (max-width:820px){
+  #skin-popover .skin-shell{
+    grid-template-columns:1fr;grid-template-rows:auto auto minmax(0,1fr);
+    grid-template-areas:'head' 'nav' 'body';
+  }
+  #skin-popover .skin-tabs{flex-direction:row;overflow-x:auto;border-right:0;
+    border-bottom:1px solid var(--st-line);padding:0 12px}
+  #skin-popover .skin-tab{border-radius:0;padding:10px 12px 12px;white-space:nowrap}
+  #skin-popover .skin-tab.active{background:transparent}
+  #skin-popover .skin-tab.active::after{content:'';position:absolute;left:10px;right:10px;
+    bottom:0;height:2px;background:var(--st-accent);border-radius:2px}
+}
+
+/* 宠物页的「用照片生成」在 .pet-skin-actions 里是 flex 子项，基类写了 flex:1
+ * 会把按钮拉成整行通栏；这里收回成和设置页一致的尺寸。 */
+#skin-popover .pet-skin-action{flex:0 0 auto;width:auto}
+
+/* ==================================================================
+ * 2026-11-25：五个分页合并成一条长页（左导航 = 锚点导航 + 滚动定位）
+ *  · .skin-page 全部常显，不再靠 .active 控制显隐
+ *  · 段与段之间用 1px 细线 + 大间距分开，段首有小标题
+ * ================================================================== */
+#skin-popover .skin-body{scroll-behavior:smooth}
+#skin-popover .skin-page{display:block}
+#skin-popover .skin-page + .skin-page{margin-top:30px}
+#skin-popover .skin-page + .skin-page::before{content:'';display:block;height:1px;
+  background:var(--st-line);margin:0 0 26px}
+#skin-popover .skin-section-title{margin:0 0 6px;font-size:14px;font-weight:600;
+  letter-spacing:.2px;color:var(--st-t1)}
+#skin-popover .skin-page-note{margin:0 0 14px}

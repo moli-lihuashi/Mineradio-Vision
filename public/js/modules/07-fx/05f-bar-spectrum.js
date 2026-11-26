@@ -43,6 +43,15 @@ var barSpectrumFloatData = null;
 var barSpectrumShown = false;
 var barSpectrumIdleFrames = 0;
 var barSpectrumLastRead = 0;
+/* 每帧都要用的 DOM / 画布 / 主题引用：查询一次后缓存，
+ * 只在节点被移除（isConnected=false）时重新获取。 */
+var barSpectrumBarEl = null;
+var barSpectrumCanvasEl = null;
+var barSpectrumCtx = null;
+var barSpectrumSize = { w: 0, h: 0 };
+var barSpectrumSizeObserver = null;
+var barSpectrumSizeObservedCanvas = null;
+var barSpectrumThemeCache = Object.create(null);
 
 /* 白名单写在函数体内：本文件在延迟波，被单测用 vm 切片真跑时不能依赖文件级常量 */
 function barSpectrumNormalize(value, fallback) {
@@ -60,7 +69,11 @@ function barSpectrumMode() {
 }
 
 function barSpectrumActive() {
-  var bar = document.getElementById('bottom-bar');
+  var bar = barSpectrumBarEl;
+  if (!bar || !bar.isConnected) {
+    bar = document.getElementById('bottom-bar');
+    barSpectrumBarEl = bar;
+  }
   if (!bar) return false;
   /* 只要控制条可见就画：CSS 玻璃（backdrop-filter）与 LiquidGlass 都要生效。
      频谱是控制条内的独立子层，两种玻璃下都排在玻璃之上、控件之下。 */
@@ -68,9 +81,18 @@ function barSpectrumActive() {
 }
 
 function barSpectrumCanvas() {
-  var el = document.getElementById('bar-spectrum-canvas');
-  if (el) return el;
-  var bar = document.getElementById('bottom-bar');
+  var el = barSpectrumCanvasEl;
+  if (el && el.isConnected) return el;
+  el = document.getElementById('bar-spectrum-canvas');
+  if (el) {
+    barSpectrumCanvasEl = el;
+    return el;
+  }
+  var bar = barSpectrumBarEl;
+  if (!bar || !bar.isConnected) {
+    bar = document.getElementById('bottom-bar');
+    barSpectrumBarEl = bar;
+  }
   if (!bar) return null;
   el = document.createElement('canvas');
   el.id = 'bar-spectrum-canvas';
@@ -81,13 +103,52 @@ function barSpectrumCanvas() {
   var shell = bar.querySelector(':scope > .lg-glass-shell');
   if (shell && shell.nextSibling) bar.insertBefore(el, shell.nextSibling);
   else bar.insertBefore(el, bar.firstChild);
+  barSpectrumCanvasEl = el;
   return el;
+}
+
+function barSpectrumContext(cv) {
+  if (!cv) return null;
+  if (barSpectrumCtx && barSpectrumCtx.canvas === cv) return barSpectrumCtx;
+  barSpectrumCtx = cv.getContext('2d');
+  return barSpectrumCtx;
+}
+
+/* 尺寸缓存：用 ResizeObserver 代替每帧 getBoundingClientRect（强制布局）。
+ * 首帧 / 不支持 ResizeObserver / 尺寸为 0 时退回一次同步测量。 */
+function barSpectrumMeasure(cv) {
+  if (typeof ResizeObserver === 'function') {
+    if (!barSpectrumSizeObserver) {
+      barSpectrumSizeObserver = new ResizeObserver(function (entries) {
+        var entry = entries && entries[entries.length - 1];
+        var box = entry && entry.contentRect;
+        if (box) {
+          barSpectrumSize.w = box.width;
+          barSpectrumSize.h = box.height;
+        }
+      });
+      barSpectrumSizeObserver.observe(cv);
+      barSpectrumSizeObservedCanvas = cv;
+    } else if (barSpectrumSizeObservedCanvas !== cv) {
+      try { barSpectrumSizeObserver.disconnect(); } catch (_e) {}
+      barSpectrumSizeObserver.observe(cv);
+      barSpectrumSizeObservedCanvas = cv;
+      barSpectrumSize.w = 0;
+      barSpectrumSize.h = 0;
+    }
+  }
+  if (!barSpectrumSizeObserver || (barSpectrumSize.w < 2 && barSpectrumSize.h < 2)) {
+    var rect = cv.getBoundingClientRect();
+    barSpectrumSize.w = rect.width;
+    barSpectrumSize.h = rect.height;
+  }
+  return barSpectrumSize;
 }
 
 function barSpectrumClear() {
   var cv = barSpectrumCanvas();
   if (cv) {
-    var cx = cv.getContext('2d');
+    var cx = barSpectrumContext(cv);
     if (cx) cx.clearRect(0, 0, cv.width, cv.height);
   }
   document.body.classList.remove('bar-spectrum-on');
@@ -219,12 +280,16 @@ function barSpectrumIdleDecay() {
  * 三套共用 KG 手法：固定包络 × 实时能量小幅调制、贴底细柱、水平渐变。
  * ================================================================== */
 function barSpectrumKgTheme(mode) {
+  /* 主题对象（含两个闭包）每帧重建没有意义：按 mode 缓存，三套共三个实例。 */
+  var cached = barSpectrumThemeCache[mode];
+  if (cached) return cached;
   var g = function (x, mu, s) { var d = (x - mu) / s; return Math.exp(-0.5 * d * d); };
   var sm = function (a, b, x) {
     var u = Math.max(0, Math.min(1, (x - a) / (b - a)));
     return u * u * (3 - 2 * u);
   };
-  if (mode === 'pulse') return {
+  var theme;
+  if (mode === 'pulse') theme = {
     /* rhythm.2x.avif 柱体本色：暖白 -> 灰白 */
     bar: [[0, '#d8cdbb'], [0.3, '#f2ece0'], [0.62, '#bcb6a9'], [1, '#8a8880']],
     gap: 3.0, barW: 1.4, amp: 0.46, particles: 0,
@@ -233,7 +298,7 @@ function barSpectrumKgTheme(mode) {
         + 1.0 * g(x, 0.55, 0.078) + 0.44 * g(x, 0.71, 0.070);
     }
   };
-  if (mode === 'ribbon') return {
+  else if (mode === 'ribbon') theme = {
     /* beat.2x.avif 柱体本色：粉白 -> 冷灰白 */
     bar: [[0, '#b2a4a6'], [0.4, '#efe2e2'], [0.68, '#dcd6de'], [1, '#929a9e']],
     gap: 8.0, barW: 2.6, amp: 0.44, particles: 14,
@@ -243,7 +308,7 @@ function barSpectrumKgTheme(mode) {
       return 0.10 + 0.54 * flow * sm(0.02, 0.12, x) * (1 - sm(0.88, 0.99, x));
     }
   };
-  return {
+  else theme = {
     /* wave.2x.avif 柱体本色：青白 -> 灰白 */
     bar: [[0, '#a9c3bb'], [0.3, '#e6f2ea'], [0.58, '#bfdcd0'], [0.8, '#c9cfcb'], [1, '#aeb6b4']],
     gap: 7.0, barW: 2.2, amp: 0.46, particles: 0,
@@ -251,6 +316,8 @@ function barSpectrumKgTheme(mode) {
       return 0.02 + 1.0 * g(x, 0.43, 0.25) * sm(0.02, 0.18, x) * (1 - sm(0.78, 0.98, x));
     }
   };
+  barSpectrumThemeCache[mode] = theme;
+  return theme;
 }
 
 function barSpectrumKgGradient(ctx, stops, w) {
@@ -276,7 +343,14 @@ function barSpectrumKgParticles(ctx, w, h, theme, t) {
 }
 
 function barSpectrumKgBars(ctx, w, cy, maxA, theme) {
-  ctx.fillStyle = barSpectrumKgGradient(ctx, theme.bar, w);
+  /* 渐变只跟宽度和配色有关，缓存到主题上；宽度变化（窗口缩放）才重建。 */
+  var grad = theme._grad;
+  if (!grad || theme._gradW !== w) {
+    grad = barSpectrumKgGradient(ctx, theme.bar, w);
+    theme._grad = grad;
+    theme._gradW = w;
+  }
+  ctx.fillStyle = grad;
   ctx.globalAlpha = 0.86;
   var cols = Math.max(64, Math.floor(w / theme.gap));
   for (var j = 0; j < cols; j++) {
@@ -335,15 +409,15 @@ function barSpectrumTick(now) {
   barSpectrumIdleFrames = 0;
   var cv = barSpectrumCanvas();
   if (!cv) return;
-  var rect = cv.getBoundingClientRect();
-  var w = rect.width, h = rect.height;
+  var size = barSpectrumMeasure(cv);
+  var w = size.w, h = size.h;
   if (w < 2 || h < 2) return;
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr);
     cv.height = Math.round(h * dpr);
   }
-  var ctx = cv.getContext('2d');
+  var ctx = barSpectrumContext(cv);
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   /* frequencyData 由主循环约 30fps 刷新；60fps 重复读同一帧会让平滑变成两倍速，

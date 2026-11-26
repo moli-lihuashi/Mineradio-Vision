@@ -11,7 +11,7 @@
 //  视觉控制台因此只剩画面预设与歌词。
 // ====================================================================
 
-var SKIN_TABS = ['heart', 'scene', 'pet', 'spectrum', 'widget', 'glass'];
+var SKIN_TABS = ['heart', 'scene', 'pet', 'spectrum', 'widget'];
 var skinPageTab = 'heart';
 
 function skinPopoverEl() {
@@ -38,39 +38,87 @@ function positionSkinPopover() {
   pop.style.bottom = '';
 }
 
-function setSkinPageTab(tab, keepScroll) {
-  var next = SKIN_TABS.indexOf(tab) >= 0 ? tab : 'heart';
-  skinPageTab = next;
+var skinSpyBound = false;
+var skinSpySuppressUntil = 0;
+
+function skinBodyEl() {
+  return document.getElementById('skin-body');
+}
+
+function skinPageSection(tab) {
+  var body = skinBodyEl();
+  if (!body) return null;
+  return body.querySelector('.skin-page[data-skin-page="' + tab + '"]');
+}
+
+/* 只改左导航的选中态，不触发滚动/加载 —— 滚动高亮和点击跳转都复用它 */
+function applySkinTabActive(tab) {
+  if (!tab) return;
+  skinPageTab = tab;
   var tabs = document.querySelectorAll('#skin-tabs [data-skin-tab]');
   for (var i = 0; i < tabs.length; i++) {
-    var on = tabs[i].getAttribute('data-skin-tab') === next;
+    var on = tabs[i].getAttribute('data-skin-tab') === tab;
     tabs[i].classList.toggle('active', on);
     tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
   }
-  var pages = document.querySelectorAll('#skin-popover .skin-page');
-  for (var j = 0; j < pages.length; j++) {
-    pages[j].classList.toggle('active', pages[j].getAttribute('data-skin-page') === next);
-  }
-  if (!keepScroll) {
-    var body = document.getElementById('skin-body');
-    if (body) body.scrollTop = 0;
-  }
-  // 切到玻璃页时重新量一次滑块填充（隐藏页 clientWidth 为 0，算出来是空的）
-  if (next === 'glass' && window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncFills === 'function') {
-    try { window.MineradioPrismalChrome.syncFills(); } catch (_) { }
-  }
-  // 导入按钮已删：进宠物页就把宠物库展开，离开时收回
-  if (next === 'pet') openSkinPetDex();
-  else closeSkinPetDex();
-  if (next === 'glass') syncSkinGlassPreview();
-  if (next === 'widget') {
-    refreshSkinWidgetStatus();
-    // 首次进入才向主进程要快照；之后靠 onSettingsState 的回推刷新
-    if (typeof mountInlineWidgetFrame === 'function') mountInlineWidgetFrame();
+}
+
+/* 把某一段滚到 .skin-body 顶部。
+ * 必须自己算偏移：scrollIntoView 会连外层窗口一起滚（fixed 面板里会整页跳）。 */
+function scrollSkinBodyToSection(tab, instant) {
+  var body = skinBodyEl();
+  var section = skinPageSection(tab);
+  if (!body || !section) return;
+  var top = section.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+  // 跳转后 ~700ms 内先屏蔽滚动高亮，否则平滑滚动途中会一节一节地闪
+  skinSpySuppressUntil = Date.now() + 700;
+  var target = Math.max(0, top - 8);
+  try {
+    if (instant) body.scrollTop = target;
+    else body.scrollTo({ top: target, behavior: 'smooth' });
+  } catch (_) {
+    body.scrollTop = target;
   }
 }
 
-/* 挂件页的状态行：直接问主进程窗口是否可见 */
+/* 滚动高亮：以「距容器顶部 96px」为判定线，取最后一个越过它的分段 */
+function syncSkinTabFromScroll() {
+  var body = skinBodyEl();
+  if (!body) return;
+  var sections = body.querySelectorAll('.skin-page');
+  if (!sections.length) return;
+  var line = body.scrollTop + 96;
+  var current = sections[0];
+  for (var i = 0; i < sections.length; i++) {
+    var top = sections[i].getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+    if (top <= line) current = sections[i];
+  }
+  if (body.scrollTop + body.clientHeight >= body.scrollHeight - 4) {
+    current = sections[sections.length - 1];
+  }
+  var tab = current.getAttribute('data-skin-page');
+  if (tab && tab !== skinPageTab) applySkinTabActive(tab);
+}
+
+function bindSkinScrollSpy() {
+  var body = skinBodyEl();
+  if (!body || skinSpyBound) return;
+  skinSpyBound = true;
+  body.addEventListener('scroll', function () {
+    if (Date.now() < skinSpySuppressUntil) return;
+    syncSkinTabFromScroll();
+  }, { passive: true });
+}
+
+/* 兼容旧调用：切某一段 = 高亮 + 滚过去；keepScroll=true 表示「只高亮不滚」（打开面板时用） */
+function setSkinPageTab(tab, keepScroll) {
+  var next = SKIN_TABS.indexOf(tab) >= 0 ? tab : 'heart';
+  applySkinTabActive(next);
+  if (!keepScroll) scrollSkinBodyToSection(next);
+  // 导入按钮已删：宠物库在面板打开时就已经展开（见 toggleSkinPopover）
+  if (next === 'pet' && typeof openSkinPetDex === 'function') openSkinPetDex();
+}
+
 function refreshSkinWidgetStatus() {
   var el = document.getElementById('skin-widget-status');
   if (!el) return;
@@ -111,7 +159,15 @@ function toggleSkinPopover(e) {
   if (typeof closePlayerQuickMenu === 'function') closePlayerQuickMenu();
   if (typeof closeSettingsPage === 'function') closeSettingsPage();
   positionSkinPopover();
-  setSkinPageTab(skinPageTab, true);
+  bindSkinScrollSpy();
+  /* 合并成长页后所有分段同时可见：宠物库、小组件状态与 iframe 都要在打开时就位，
+   * 不能等到「切到那一页」才加载，否则滚到那一节会看到空白。 */
+  if (typeof openSkinPetDex === 'function') openSkinPetDex();
+  refreshSkinWidgetStatus();
+  if (typeof mountInlineWidgetFrame === 'function') mountInlineWidgetFrame();
+  applySkinTabActive(SKIN_TABS.indexOf(skinPageTab) >= 0 ? skinPageTab : 'heart');
+  var body = skinBodyEl();
+  if (body) body.scrollTop = 0;
   /* 6 格由 05d 渲染：打开时才渲染，省一次 boot 期 DOM 操作；
      已渲染过就只同步选中态，不重建（重建会打断正在播的预览）。 */
   if (typeof syncHeartFxGrid === 'function') syncHeartFxGrid();
@@ -119,100 +175,9 @@ function toggleSkinPopover(e) {
   if (typeof syncHeartSceneGrid === 'function') syncHeartSceneGrid();
   /* 控制条频谱四格由 05f 渲染（同在延迟波、排在本文件之后），同样 typeof 兜住 */
   if (typeof syncBarSpectrumGrid === 'function') syncBarSpectrumGrid();
-  if (skinPageTab === 'widget') {
-    refreshSkinWidgetStatus();
-    if (typeof mountInlineWidgetFrame === 'function') mountInlineWidgetFrame();
-  }
 }
 
 /* 从别处直达某个分页（三条杠的「小组件样式」等）：没开就先开，再切页。 */
-/* 玻璃页的实时预览：调参数时面板挡着 Home 卡片，用户看不到自己在改什么。
- * 这里用与 applyHomeLiquidGlassConfig 完全相同的换算（blurAmount→px、saturation→倍数、
- * brightness→亮度）把样品画出来，折射 / 色散 / 高光 / 厚度 / 染色 / 投影走 CSS 变量。
- * 纯 2D + backdrop-filter：不建 WebGL 上下文，也没有 requestAnimationFrame。 */
-function syncSkinGlassPreview() {
-  var sample = document.getElementById('skin-glass-sample');
-  if (!sample) return;
-  var cfg = null;
-  try {
-    if (typeof getLiquidGlassConfigFromFx === 'function' && typeof applyLiquidGlassProfile === 'function') {
-      cfg = applyLiquidGlassProfile(getLiquidGlassConfigFromFx(), 'home');
-    }
-  } catch (_) { }
-  if (!cfg) return;
-  var num = function (v, fallback) { return isFinite(Number(v)) ? Number(v) : fallback; };
-  var blur = num(cfg.blurAmount, 0.7);
-  var sat = num(cfg.saturation, 0.34);
-  var bri = num(cfg.brightness, 0.04);
-  // 预览舞台只有 150px 高，直接用面板尺度的 px 会把背景糊平；按 .45 缩一档，既看得出模糊又不丢结构
-  var blurPx = Math.round((6 + blur * 24) * 0.45);
-  var satMul = (1 + sat * 2).toFixed(2);
-  var briMul = (0.94 + bri).toFixed(2);
-  var filter = 'blur(' + blurPx + 'px) saturate(' + satMul + ') brightness(' + briMul + ')';
-  sample.style.setProperty('backdrop-filter', filter);
-  sample.style.setProperty('-webkit-backdrop-filter', filter);
-  // 必须带 px：CSS 里是 calc(14px + var(--pv-bevel) * .5)，长度加无单位数字是非法表达式，整条 border-radius 会被丢掉
-  sample.style.setProperty('--pv-bevel', num(cfg.zRadius, 10) + 'px');
-  sample.style.setProperty('--pv-highlight', String(num(cfg.edgeHighlight, 0.12)));
-  sample.style.setProperty('--pv-tint', String(num(cfg.tintStrength, 0)));
-  sample.style.setProperty('--pv-shadow', String(num(cfg.shadowOpacity, 0.42)));
-  sample.style.setProperty('--pv-shadowspread', String(num(cfg.shadowSpread, 22)));
-  sample.style.setProperty('--pv-aberration', String(num(cfg.chromAberration, 0)));
-  sample.style.setProperty('--pv-refraction', String(num(cfg.refraction, 0.18)));
-  var meta = document.getElementById('skin-glass-meta');
-  if (meta) {
-    meta.textContent = '模糊 ' + blurPx + 'px · 饱和 ' + satMul + ' · 亮度 ' + briMul +
-      ' · 折射 ' + num(cfg.refraction, 0.18).toFixed(2) +
-      ' · 色散 ' + num(cfg.chromAberration, 0).toFixed(2);
-  }
-}
-
-/* 面板关掉就把 backdrop-filter 摘掉：合成器不会再采样背后的内容。
- * 元素本身还有 display:none 兜底，这里是第二层保险。 */
-function stopSkinGlassPreview() {
-  var sample = document.getElementById('skin-glass-sample');
-  if (!sample) return;
-  sample.style.removeProperty('backdrop-filter');
-  sample.style.removeProperty('-webkit-backdrop-filter');
-}
-
-/* Petdex 宠物库原来是首页上的一个全屏浮层（#home-pet-dex，fixed + 遮罩），
- * 从皮肤面板宠物页点「从 Petdex 导入」时它被面板盖住，看不见。
- * 这里把那个浮层整块移进面板的槽位，样式由 .in-skin-panel 改写成内嵌块；
- * 关闭面板/切走时连同原来的位置一起还原（它的监听都绑在元素自己身上，move 不会丢）。 */
-var skinPetDexHome = null;
-
-function openSkinPetDex() {
-  var deck = document.getElementById('home-pet-dex');
-  var slot = document.getElementById('skin-pet-dex-slot');
-  if (!deck || !slot) return false;
-  if (!skinPetDexHome) skinPetDexHome = { parent: deck.parentNode, next: deck.nextSibling };
-  if (deck.parentNode !== slot) slot.appendChild(deck);
-  deck.classList.add('in-skin-panel');
-  deck.hidden = false;
-  if (typeof HomePetPetdex !== 'undefined' && HomePetPetdex && typeof HomePetPetdex.openPanel === 'function') {
-    try { HomePetPetdex.openPanel(); } catch (_) { }
-  }
-  return true;
-}
-
-function closeSkinPetDex() {
-  var deck = document.getElementById('home-pet-dex');
-  if (!deck || !deck.classList.contains('in-skin-panel')) return;
-  if (typeof HomePetPetdex !== 'undefined' && HomePetPetdex && typeof HomePetPetdex.closePanel === 'function') {
-    try { HomePetPetdex.closePanel(); } catch (_) { }
-  }
-  deck.classList.remove('in-skin-panel');
-  if (skinPetDexHome && skinPetDexHome.parent) {
-    if (skinPetDexHome.next && skinPetDexHome.next.parentNode === skinPetDexHome.parent) {
-      skinPetDexHome.parent.insertBefore(deck, skinPetDexHome.next);
-    } else {
-      skinPetDexHome.parent.appendChild(deck);
-    }
-  }
-  skinPetDexHome = null;
-}
-
 function openSkinPage(tab) {
   if (!document.body.classList.contains('skin-popover-open')) {
     toggleSkinPopover();
@@ -224,10 +189,8 @@ function closeSkinPopover() {
   if (!document.body.classList.contains('skin-popover-open')) return;
   document.body.classList.remove('skin-popover-open');
   syncSkinPopoverTriggers(false);
-  // 关窗之后不能再留 GPU 采样
-  stopSkinGlassPreview();
-  // Petdex 浮层搬回首页原位
-  closeSkinPetDex();
+  // Petdex 浮层搬回首页原位（这个函数在仓库里已不存在，typeof 兜住，别再抛 ReferenceError）
+  if (typeof closeSkinPetDex === 'function') closeSkinPetDex();
 }
 
 function closeSkinPopoverUnless(target) {
@@ -248,13 +211,6 @@ function bindSkinPopover() {
     if (e.key === 'Escape') closeSkinPopover();
   });
   /* 玻璃页的参数滑块：拖动时实时重画预览（委托到面板根节点） */
-  var popRoot = skinPopoverEl();
-  if (popRoot) popRoot.addEventListener('input', function (e) {
-    var t = e.target;
-    if (!t || !t.id) return;
-    if (t.id.indexOf('fx-liquidglass') !== 0 && t.id !== 'fx-glassaberration') return;
-    syncSkinGlassPreview();
-  });
   var tabs = document.getElementById('skin-tabs');
   if (tabs && !tabs._skinTabsBound) {
     tabs._skinTabsBound = true;
@@ -266,9 +222,8 @@ function bindSkinPopover() {
   }
   window.addEventListener('resize', function () {
     if (!document.body.classList.contains('skin-popover-open')) return;
-    if (skinPageTab === 'glass' && window.MineradioPrismalChrome && typeof window.MineradioPrismalChrome.syncFills === 'function') {
-      try { window.MineradioPrismalChrome.syncFills(); } catch (_) { }
-    }
+    // 尺寸变化后各段位置全变了，重算一次当前高亮
+    if (Date.now() >= skinSpySuppressUntil) syncSkinTabFromScroll();
   });
 }
 

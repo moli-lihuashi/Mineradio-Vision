@@ -127,14 +127,19 @@ function refreshFoliaWorldUi() {
     toggle.setAttribute('aria-pressed', active ? 'true' : 'false');
     toggle.classList.toggle('is-on', active);
   }
+  /* 2026-11-23：列表不再跟着世界开关隐藏 —— 先让人看见有哪些样式，
+   * 未开启时整块置灰、禁止点击（.is-locked），而不是整段消失。 */
   var lists = document.getElementById('fx-folia-lists');
-  if (lists) lists.hidden = !active;
+  if (lists) lists.hidden = false;
+  var modeGrid = document.getElementById('fx-folia-mode-grid');
+  if (modeGrid) modeGrid.classList.toggle('is-locked', !active);
+  var bgGrid = document.getElementById('fx-folia-bg-grid');
+  if (bgGrid) bgGrid.classList.toggle('is-locked', !active);
   var hint = document.getElementById('fx-folia-hint');
   if (hint) {
-    /* 2026-11-23 起没有入口开关了：切到这一页就是进入，切走就是退出。 */
     hint.textContent = active
       ? '画面已交给 Folia：原有预设、3D 歌词与镜头暂停；音频与歌词仍在跑。'
-      : '切到这一页即进入 Folia；切回其他页就回到原世界。';
+      : '开启后画面交给 Folia；下面的样式可以先看，开启后才能点选。';
   }
   var error = document.getElementById('fx-folia-error');
   if (error) {
@@ -144,9 +149,10 @@ function refreshFoliaWorldUi() {
   }
   var presetGrid = document.getElementById('preset-grid');
   if (presetGrid) presetGrid.classList.toggle('folia-locked', active);
+  /* 网格无论开没开都要建出来：未开启只是置灰禁用，不是空着。 */
+  foliaWorldBuildModeGrid();
+  foliaWorldBuildBackgroundGrid();
   if (active) {
-    foliaWorldBuildModeGrid();
-    foliaWorldBuildBackgroundGrid();
     if (typeof foliaBuildTuningPanel === 'function') {
       try { foliaBuildTuningPanel(); } catch (err) { console.error('[FoliaWorld] tuning panel failed', err); }
     }

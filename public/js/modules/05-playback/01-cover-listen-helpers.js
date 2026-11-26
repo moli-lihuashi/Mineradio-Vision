@@ -82,7 +82,14 @@ function setHomeArt(id, url, size) {
   var el = document.getElementById(id);
   if (!el) return;
   var src = url ? coverUrlWithSize(url, size || 260) : '';
-  el.style.backgroundImage = src ? 'url("' + cssImageUrl(src) + '")' : '';
+  var bgValue = src ? 'url("' + cssImageUrl(src) + '")' : '';
+  /* 节流：封面 url 没变时跳过 —— 快速反复切换 Home 会反复调用 renderHomeDiscover，
+   * 每次都对同一张封面重写 backgroundImage + markChanged('homeCard')，这是连点时
+   * 主线程过载、进而回收 WE 镜像 WebGL 上下文的直接来源之一（实测 15ms 连点复现
+   * 黑底 + 舞台歌词）。值没变就什么都不做，对正确性零影响。 */
+  if (el._homeArtBg === bgValue) return;
+  el._homeArtBg = bgValue;
+  el.style.backgroundImage = bgValue;
   el.classList.toggle('has-cover', !!src);
   var skipSkeleton = id === 'home-continue-art' && (!!src || !!(readPlaybackSession() && readPlaybackSession().song));
   el.classList.toggle('home-skeleton', !src && homeDiscoverState.loading && !skipSkeleton);
@@ -93,12 +100,6 @@ function setHomeArt(id, url, size) {
       try { window._liquidGlassMgr.markChanged('homeCard'); } catch (_) {}
     }, 120);
   }
-}
-function compactHomeCount(n) {
-  n = Number(n) || 0;
-  if (n >= 100000000) return (n / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
-  if (n >= 10000) return Math.round(n / 10000) + '万';
-  return n ? String(n) : '';
 }
 function loadListenStatsState() {
   try {

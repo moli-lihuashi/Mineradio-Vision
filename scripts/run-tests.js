@@ -18,26 +18,16 @@ const path = require('node:path');
 const mode = process.argv[2] || 'all';
 const cwd = path.resolve(__dirname, '..');
 
-// 酷狗修改版：以下测试引用旧版模块路径（如 05-playback/02-listen-stats.js、
-// 04-shelf/01-manager-core.js 等），酷狗版拆分粒度不同导致路径不存在。
-// 与 quick-check 的 KUGOU_SKIP_CHECKS 同类，待后续按酷狗版结构适配后解绑。
-const KUGOU_SKIP_TESTS = new Set([
-  'platform-account-sync-guard.test.js',     // ENOENT 05-playback/02-listen-stats.js
-  'playback-audio-graph-recovery.test.js',   // 期望 audioGraphHealthy，酷狗版并入 09-queue-playback-core
-  // playback-source-fallback-transaction.test.js — P2 已适配 09b/09d/11，已解绑
-  // qq-vip-entitlement.test.js — 2026-11-05 复核：单独运行 1/1 通过，已解绑
-  'search-frontend-pagination.test.js',      // 期望 emptySearchHistoryState/searchProviderCanSearch 等，酷狗版未拆出
-  'ui-default-theme-shelf-layer.test.js',    // ENOENT 00-state/04-fx-defaults.js + 04-shelf/01-manager-core.js
-  'home-hero-mp4-platform-recommend.test.js', // 期望 home-platform-recommend-mask/MP4 入口 —— 用户裁定重复（FX 面板已有视频背景），Home 界面保持原样
-  // home-daily-recommendation-virtualization.test.js — 虚拟化日推窗口已落地，已解绑
-  'home-dashboard-update.test.js',           // 期望 home-discovery-strip DOM/CSS —— 用户裁定回滚发现条，保持原 Home 布局
-  // home-daily-recommendations-backend.test.js — handleDiscoverHome 全量日推 + mapDailyRecommendationSongs 已落地，已解绑
-]);
+// 2026-11-25：原 KUGOU_SKIP_TESTS 清单里的 6 个测试（platform-account-sync-guard /
+// playback-audio-graph-recovery / search-frontend-pagination / ui-default-theme-shelf-layer /
+// home-hero-mp4-platform-recommend / home-dashboard-update）断言的模块、函数、DOM 在本仓库
+// 从未存在（或已被用户裁定回滚），自 v3.0.0 起一直红且零覆盖，已删除。
+// 现在这里不再跳过任何文件：任何失败都是真回归，不允许再加"已知失败"白名单。
 
 function collectTestFiles() {
   const dir = path.join(cwd, 'tests');
   return fs.readdirSync(dir)
-    .filter(function (f) { return /\.test\.js$/.test(f) && !KUGOU_SKIP_TESTS.has(f); })
+    .filter(function (f) { return /\.test\.js$/.test(f); })
     .sort()
     .map(function (f) { return path.join('tests', f); });
 }
@@ -46,10 +36,6 @@ function runUnitTests() {
   const files = collectTestFiles();
   console.log('\n========================================');
   console.log('  [1/2] 单元测试  (node --test, ' + files.length + ' files)');
-  if (KUGOU_SKIP_TESTS.size) {
-    console.log('  [SKIP] ' + KUGOU_SKIP_TESTS.size + ' files (author-path modules, pending adaptation):');
-    KUGOU_SKIP_TESTS.forEach(function (f) { console.log('         - ' + f); });
-  }
   console.log('========================================');
   const res = spawnSync(process.execPath, ['--test'].concat(files), {
     cwd,

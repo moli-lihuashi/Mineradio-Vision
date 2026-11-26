@@ -875,7 +875,7 @@ function startSplashInkHandwriting(hwEl) {
   var reduce = false;
   try {
     reduce = !!reduceSplashMotion ||
-      !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      prefersReducedMotionNow();
   } catch (_) {}
   var renderer = null;
   try {
@@ -1109,7 +1109,7 @@ armSplashHandwrite();
 
     var exit = 0;
     if (window.splashGlExit && window.splashGlExit.started) {
-      exit = Math.min((now - window.splashGlExit.startAt) / 1400, 1.0);
+      exit = Math.min((now - window.splashGlExit.startAt) / 700, 1.0);
     }
 
     gl.uniform2f(uRes, canvas.width, canvas.height);
@@ -1250,7 +1250,7 @@ function dismissSplash() {
 
   var content = s.querySelector('.splash-content');
   if (content) {
-    content.style.transition = 'opacity 680ms cubic-bezier(.22,1,.36,1), transform 980ms cubic-bezier(.22,1,.36,1)';
+    content.style.transition = 'opacity 440ms cubic-bezier(.22,1,.36,1), transform 640ms cubic-bezier(.22,1,.36,1)';
     content.style.opacity = '0';
     content.style.transform = 'translateY(-14px) scale(.986)';
   }
@@ -1276,7 +1276,7 @@ function dismissSplash() {
         setTimeout(maybeShowUploadTipOnce, 5200);
       });
     });
-  }, 1180);
+  }, 700);
 }
 
 function markSplashReadyToEnter(degradedReason) {

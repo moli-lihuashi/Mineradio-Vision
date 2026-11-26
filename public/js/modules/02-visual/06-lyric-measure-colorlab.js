@@ -284,7 +284,16 @@ function customBackgroundAlbumCoverSource() {
   if (!src) {
     try {
       var thumb = document.getElementById('thumb-cover');
-      src = thumb && (thumb.currentSrc || thumb.src || thumb.getAttribute('src')) || '';
+      if (thumb) {
+        /* 必须优先用 getAttribute('src')：HTML 规范规定 img.src 在 src="" 时解析成
+         * **当前文档 URL**。封面还没加载的那一瞬间，thumb.src 会返回
+         * http://127.0.0.1:PORT/?startupAttempt=…&token=…，它会被当成封面写进
+         * --custom-bg-image —— 壁纸变成一张 HTML 页（加载失败），WE 层一旦被摘掉
+         * 就露出舞台歌词底（用户实测「反复返回 home 后内置壁纸被杀掉」）。
+         * 空 attr 时绝不能回落到 thumb.src。 */
+        var raw = thumb.getAttribute('src') || '';
+        src = raw || thumb.currentSrc || '';
+      }
     } catch (e2) { }
   }
   if (!src) {
@@ -292,6 +301,14 @@ function customBackgroundAlbumCoverSource() {
       var song = Array.isArray(playQueue) && currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
       if (song) src = typeof songCoverSrc === 'function' ? songCoverSrc(song, 640) : (song.customCover || song.cover || '');
     } catch (e3) { }
+  }
+  /* 统一兜底：文档 URL / 根路径带 ?token= 的地址永远不是图片，宁可返回空让上层
+   * 保留上一张（applyCustomBackground 的 keepAlbumArt 分支），也不写坏背景。 */
+  if (src) {
+    var docUrl = '';
+    try { docUrl = String(location.href || ''); } catch (_) { }
+    if (docUrl && src === docUrl) src = '';
+    else if (/^https?:\/\/(127\.0\.0\.1|localhost):\d+\/(\?|$)/i.test(src)) src = '';
   }
   return src || '';
 }

@@ -17,8 +17,22 @@
   if (!params || params.get('embedded') !== '1') return;
   if (window.foliaWidget) return;
 
-  // 深色版样式（widget-settings-dark.css）靠这个属性开闸，独立窗口不受影响
+  // 内嵌版样式（widget-settings-dark.css）靠这个属性开闸，独立窗口不受影响
   try { document.documentElement.setAttribute('data-embedded', '1'); } catch (_) { }
+
+  /* 主题：同源 iframe 能直接读父窗的 <html data-theme>，所以先同步一次 ——
+   * 等 postMessage 再设的话，会先用深色默认值画一帧，浅色下看得见闪。
+   * 之后父窗切主题由下面的 message 监听补推（父窗侧见 32-widget-settings-inline.js）。 */
+  function applyTheme(theme) {
+    try {
+      document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
+    } catch (_) { }
+  }
+  var initialTheme = 'dark';
+  try {
+    initialTheme = parent.document.documentElement.getAttribute('data-theme') || 'dark';
+  } catch (_) { }
+  applyTheme(initialTheme);
 
   var listeners = Object.create(null);
 
@@ -44,7 +58,9 @@
 
   window.addEventListener('message', function (event) {
     var data = event && event.data;
-    if (!data || data.__foliaEmbed !== 1 || data.kind !== 'event') return;
+    if (!data || data.__foliaEmbed !== 1) return;
+    if (data.kind === 'theme') { applyTheme(data.theme); return; }
+    if (data.kind !== 'event') return;
     emit(data.channel, data.payload);
   });
 

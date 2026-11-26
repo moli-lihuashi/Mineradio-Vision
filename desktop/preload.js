@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   close: (behavior) => ipcRenderer.invoke('desktop-window-close', behavior),
   getCloseBehavior: () => ipcRenderer.invoke('desktop-window-get-close-behavior'),
   setCloseBehavior: (behavior) => ipcRenderer.invoke('desktop-window-set-close-behavior', behavior),
+  getCloseAction: () => ipcRenderer.invoke('desktop-window-get-close-action'),
+  setCloseAction: (action) => ipcRenderer.invoke('desktop-window-set-close-action', action),
+  getUiZoom: () => ipcRenderer.invoke('mineradio-get-ui-zoom'),
+  setUiZoom: (factor) => ipcRenderer.invoke('mineradio-set-ui-zoom', factor),
+  // 播放时阻止系统休眠：true 只在「设置开着且真的在出声」时传，暂停/结束要传 false
+  setPlaybackPowerBlocker: (enabled) => ipcRenderer.invoke('mineradio-set-playback-power-blocker', !!enabled),
   openNeteaseMusicLogin: () => ipcRenderer.invoke('netease-music-open-login'),
   clearNeteaseMusicLogin: () => ipcRenderer.invoke('netease-music-clear-login'),
   openQQMusicLogin: (options) => ipcRenderer.invoke('qq-music-open-login', options || {}),
@@ -212,6 +218,16 @@ contextBridge.exposeInMainWorld('desktopWindow', {
       ipcRenderer.on('mineradio-floating-widget-visibility', listener);
       return () => ipcRenderer.removeListener('mineradio-floating-widget-visibility', listener);
     },
+  },
+  /* ---- Folia 面板型模组（听歌档案）----
+   * 模组的 client.mjs 走 t.rpc.call(method, ...args)，宿主把它转到这里，
+   * 主进程按 id 找到 index.cjs 注册的处理函数。返回 { ok, value | error }。 */
+  foliaPanel: {
+    rpc: (id, method, args) => ipcRenderer.invoke('mineradio-folia-panel-rpc', {
+      id: String(id || ''),
+      method: String(method || ''),
+      args: Array.isArray(args) ? args : []
+    }),
   },
 });
 

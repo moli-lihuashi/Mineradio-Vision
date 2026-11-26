@@ -213,6 +213,59 @@ function qishuiTokenFile() {
   return process.env.QISHUI_TOKEN_FILE || DEFAULT_QISHUI_TOKEN_FILE;
 }
 
+// access token 是账号凭据，落盘必须加密（与 desktop/secret-store.js 同格式：
+// "MR" 前缀 + safeStorage/DPAPI 密文）。此前这里是全项目唯一明文凭据文件。
+const QISHUI_TOKEN_ENCRYPTED_PREFIX = Buffer.from([0x4d, 0x52]); // "MR"
+
+function qishuiSafeStorage() {
+  try {
+    const ss = require('electron').safeStorage;
+    if (ss && typeof ss.isEncryptionAvailable === 'function' && ss.isEncryptionAvailable()) return ss;
+  } catch (_) {}
+  return null;
+}
+
+// 读：密文直接解；历史明文仅在本机加密可用时接受，并顺手迁移成密文。
+// 加密不可用时 fail-closed —— 与 spotify token / cookie 同口径，宁可让用户重登。
+function readQishuiTokenFile(file) {
+  const buf = fs.readFileSync(file);
+  if (!buf.length) return '';
+  const encrypted = buf.length > 2
+    && buf[0] === QISHUI_TOKEN_ENCRYPTED_PREFIX[0]
+    && buf[1] === QISHUI_TOKEN_ENCRYPTED_PREFIX[1];
+  const ss = qishuiSafeStorage();
+  if (encrypted) {
+    if (!ss) {
+      console.warn('[QishuiToken] encrypted token file present but OS encryption unavailable:', file);
+      return '';
+    }
+    return normalizeQishuiToken(ss.decryptString(buf.subarray(2)));
+  }
+  if (!ss) {
+    console.warn('[QishuiToken] plaintext token file ignored (OS encryption unavailable):', file);
+    return '';
+  }
+  const token = normalizeQishuiToken(buf.toString('utf8').replace(/^\uFEFF/, ''));
+  if (token) {
+    try { writeQishuiTokenFile(file, token); } catch (_) {}
+  }
+  return token;
+}
+
+function writeQishuiTokenFile(file, token) {
+  const ss = qishuiSafeStorage();
+  if (!ss) {
+    const err = new Error('QISHUI_TOKEN_STORAGE_UNAVAILABLE');
+    err.code = 'QISHUI_TOKEN_STORAGE_UNAVAILABLE';
+    throw err;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, Buffer.concat([
+    QISHUI_TOKEN_ENCRYPTED_PREFIX,
+    Buffer.from(ss.encryptString(String(token || ''))),
+  ]));
+}
+
 function normalizeQishuiToken(value) {
   let token = String(value || '').trim();
   token = token.replace(/^bearer\s+/i, '').trim();
@@ -255,5 +308,7 @@ module.exports = {
   qishuiOAuthConfigError,
   buildQishuiOAuthAuthorizeUrl,
   qishuiTokenFile,
+  readQishuiTokenFile,
+  writeQishuiTokenFile,
   normalizeQishuiToken,
 };

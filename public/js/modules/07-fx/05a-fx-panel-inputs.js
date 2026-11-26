@@ -1,6 +1,16 @@
 var homeWaveTrackState = { bars: 0, smooth: [] };
+/* 空房间波形元素缓存：updateHomeAudioVisual 每帧（80ms 门控）调用，
+ * 每次 getElementById 都是无谓的文档查询。节点被重建时用 isConnected 兜底。 */
+var homeWaveTrackEl = null;
+function homeWaveTrackNode() {
+  var el = homeWaveTrackEl;
+  if (el && el.isConnected) return el;
+  el = document.getElementById('home-wave-track');
+  homeWaveTrackEl = el;
+  return el;
+}
 function ensureHomeWaveTrackBars() {
-  var el = document.getElementById('home-wave-track');
+  var el = homeWaveTrackNode();
   if (!el) return;
   var count = 24;
   if (homeWaveTrackState.bars === count && el.children.length === count) return;
@@ -10,7 +20,7 @@ function ensureHomeWaveTrackBars() {
 }
 function updateHomeAudioVisual(dt) {
   if (!emptyHomeActive) return;
-  var wave = document.getElementById('home-wave-track');
+  var wave = homeWaveTrackNode();
   if (!wave) return;
   var nowMs = performance.now();
   if (homeWaveTrackState.lastAt && nowMs - homeWaveTrackState.lastAt < 80) return;

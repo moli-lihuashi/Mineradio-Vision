@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "note": "Folia 面板型模组清单（homeTabs + 主进程 RPC）。与 public/folia-mods/manifest.json 的歌词样式模组分开：这份由 18-folia-panel-host.js 加载，主进程侧按 id require index.cjs。",
+  "mods": [
+    {
+      "id": "listening-archive",
+      "dir": "listening-archive",
+      "enabled": true
+    }
+  ]
+}

@@ -36,7 +36,7 @@ test('镜像缓存必须提供主动失效入口', () => {
 test('写背景变量后必须立刻失效镜像缓存', () => {
   const start = ACCENT.indexOf('function applyCustomBackground()');
   assert.ok(start > 0, '必须存在 applyCustomBackground');
-  const body = ACCENT.slice(start, start + 2600);
+  const body = ACCENT.slice(start, start + 3400);
   const setAt = body.indexOf("setProperty('--custom-bg-image'");
   const invalidateAt = body.indexOf('invalidateLiquidGlassBackdropCache()');
   assert.ok(setAt > 0, '必须设置 --custom-bg-image');
@@ -48,4 +48,14 @@ test('CSS：background-image 不得参与 transition', () => {
   assert.ok(rule, '必须存在 #custom-bg::before 规则');
   assert.ok(!/transition:[^;}]*background-image/.test(rule), 'background-image 无法插值，不能放进 transition');
   assert.match(rule, /transition:opacity/, 'opacity 过渡保留');
+});
+
+test('封面模式空源不得把壁纸清成 none', () => {
+  // 返回 home / 退出 Folia 世界的瞬间，封面源可能暂时取不到；
+  // 此时把 --custom-bg-image 写成 none 会让壁纸消失且不再恢复（用户实测）。
+  assert.match(ACCENT, /var keepAlbumArt = albumMode && !image;/, '必须有空源保护判断');
+  const start = ACCENT.indexOf('var keepAlbumArt');
+  const body = ACCENT.slice(start, start + 400);
+  assert.match(body, /if \(!keepAlbumArt\)/, '空源时必须跳过 image/opacity 的覆盖');
+  assert.match(body, /setProperty\('--custom-bg-image'/, '非空源仍要正常写入');
 });

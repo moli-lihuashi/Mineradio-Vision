@@ -45,9 +45,12 @@ body.user-capsule-auto-hide #top-right::before{content:'';position:absolute;righ
 #home-btn:hover{border-color:rgba(0,245,212,.44);background:rgba(0,245,212,.075);color:#fff;box-shadow:0 14px 38px rgba(0,245,212,.08)}
 body.empty-home-active #home-btn{border-color:rgba(255,83,103,.36);background:rgba(255,83,103,.11);color:#fff}
 body.desktop-shell #empty-home{top:132px;bottom:46px;width:calc(100vw - 44px)}
+/* 卡片最小高度统一走 --home-card-min-h：宠物卡（.home-pet-card）也读这个变量，
+ * 否则桌面版紧凑断点里普通卡缩到 104、宠物卡还是 152，那一行被撑高、grid 拉伸把
+ * 左侧 hero 一起顶大（110% 界面缩放的窗口模式最明显）。 */
 body.desktop-shell .empty-home-shell{min-height:0}
 body.desktop-shell .home-hero{min-height:390px}
-body.desktop-shell .home-card{min-height:148px}
+body.desktop-shell .empty-home-shell{--home-card-min-h:148px}
 body.desktop-shell .home-tile{min-height:154px}
 body.desktop-shell .home-tile-cover{height:84px}
 body.desktop-shell.desktop-fullscreen #empty-home,html:fullscreen body.desktop-shell #empty-home{top:96px;bottom:52px;width:min(1480px,calc(100vw - 96px))}
@@ -58,7 +61,8 @@ body.desktop-shell.desktop-fullscreen .home-mosaic-cell.has-cover,html:fullscree
   body.desktop-shell #empty-home{top:118px;bottom:34px}
   body.desktop-shell .home-hero{min-height:330px;padding:22px}
   body.desktop-shell .home-visual{height:196px;max-width:260px}
-  body.desktop-shell .home-card{min-height:128px;padding:14px}
+  body.desktop-shell .empty-home-shell{--home-card-min-h:128px}
+  body.desktop-shell .home-card{padding:14px}
   body.desktop-shell .home-tile{min-height:130px}
   body.desktop-shell .home-tile-cover{height:70px}
   body.desktop-shell .home-mosaic{height:150px;min-height:126px}
@@ -73,7 +77,8 @@ body.desktop-shell.desktop-fullscreen .home-mosaic-cell.has-cover,html:fullscree
   body.desktop-shell .home-visual{height:190px;max-width:226px}
   body.desktop-shell .home-mosaic{height:132px;min-height:116px;margin-top:14px}
   body.desktop-shell .home-grid{gap:10px}
-  body.desktop-shell .home-card{min-height:122px;padding:14px}
+  body.desktop-shell .empty-home-shell{--home-card-min-h:122px}
+  body.desktop-shell .home-card{padding:14px}
   body.desktop-shell .home-card-label{margin-bottom:6px}
   body.desktop-shell .home-card-title{font-size:16px;max-width:66%}
   body.desktop-shell .home-card-sub{margin-top:6px;font-size:10.6px;line-height:1.32;max-width:64%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -92,7 +97,8 @@ body.desktop-shell.desktop-fullscreen .home-mosaic-cell.has-cover,html:fullscree
   body.desktop-shell .home-quick-row{margin-top:12px}
   body.desktop-shell .home-visual{height:166px;max-width:206px}
   body.desktop-shell .home-mosaic{height:104px;min-height:98px}
-  body.desktop-shell .home-card{min-height:104px;padding:12px}
+  body.desktop-shell .empty-home-shell{--home-card-min-h:104px}
+  body.desktop-shell .home-card{padding:12px}
   body.desktop-shell .home-card-title{font-size:15px}
   body.desktop-shell .home-card-sub{font-size:10.2px;line-height:1.28}
   body.desktop-shell .home-card-art{width:66px;height:66px;border-radius:15px}
@@ -106,7 +112,7 @@ body.desktop-shell.desktop-fullscreen .home-mosaic-cell.has-cover,html:fullscree
   body.desktop-shell .home-hero-inner:not(.home-construction-inner){grid-template-columns:minmax(0,1fr)}
   body.desktop-shell .home-visual{display:none}
   body.desktop-shell .home-mosaic{height:112px;min-height:100px}
-  body.desktop-shell .home-card{min-height:102px}
+  body.desktop-shell .empty-home-shell{--home-card-min-h:102px}
   body.desktop-shell .home-card-title{font-size:14.8px;max-width:68%}
   body.desktop-shell .home-card-sub{font-size:10px;max-width:62%}
   body.desktop-shell .home-card-art{width:62px;height:62px;border-radius:14px}

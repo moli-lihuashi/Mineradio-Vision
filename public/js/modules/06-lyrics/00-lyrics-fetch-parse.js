@@ -179,6 +179,76 @@ function refreshPersistentLyricCache(song, token) {
     applyLyricApiResponse(response, token, song);
   }).catch(function () {});
 }
+/* ===== 歌词时间粒度（设置 → 歌词 → 歌词源）=====
+ * 'auto'（默认）= 有逐字用逐字；'line' = 强制逐行。
+ * 有些平台的 yrc 逐字时间轴是坏的（整句挤在同一个时间点），表现为「不跟着唱」，
+ * 这时逐行反而更稳。这是 Folia keepProviderWordTiming 的反面开关。
+ * 决策抽成纯函数，方便直接测（tests/lyric-granularity-guard.test.js）。 */
+var LYRIC_GRANULARITY_STORE_KEY = 'mineradio:lyric-granularity:v1';
+var lyricGranularityPreference = (function () {
+  try { return localStorage.getItem(LYRIC_GRANULARITY_STORE_KEY) === 'line' ? 'line' : 'auto'; } catch (_) { return 'auto'; }
+})();
+/* 上一次真正应用过的响应：切粒度时要就地重算，不能等下一次取歌词 */
+var lastAppliedLyricResponse = null;
+
+function lyricLinesHaveWordTiming(lines) {
+  for (var i = 0; i < (lines || []).length; i++) {
+    if (lines[i] && lines[i].words && lines[i].words.length) return true;
+  }
+  return false;
+}
+
+function chooseLyricLines(nativeLines, lrcLines, mode) {
+  nativeLines = nativeLines || [];
+  lrcLines = lrcLines || [];
+  /* 强制逐行：只有在确实有逐行候选时才生效；某首歌只回了逐字（没有 lyric 字段）
+   * 也不能凭空造行级时间轴，那就照旧用逐字。 */
+  if (mode === 'line' && lrcLines.length) {
+    return {
+      lines: lrcLines,
+      hasNativeKaraoke: false,
+      timingSource: (lrcLines[0] && lrcLines[0].source) || 'lrc-line'
+    };
+  }
+  var lines = nativeLines.length ? nativeLines : lrcLines;
+  var nativeWord = lyricLinesHaveWordTiming(nativeLines);
+  var anyWord = nativeWord || lyricLinesHaveWordTiming(lrcLines);
+  var timingSource;
+  if (anyWord) timingSource = nativeWord ? 'yrc-word' : ((lrcLines[0] && lrcLines[0].source) || 'lrc-word');
+  else timingSource = nativeLines.length ? 'yrc-line' : (lrcLines.length ? ((lrcLines[0] && lrcLines[0].source) || 'lrc-line') : 'fallback');
+  return { lines: lines, hasNativeKaraoke: anyWord, timingSource: timingSource };
+}
+
+function applyLyricGranularityUi() {
+  var seg = document.getElementById('lyric-granularity-seg');
+  if (!seg) return;
+  Array.prototype.forEach.call(seg.querySelectorAll('button'), function (btn) {
+    var active = btn.getAttribute('data-lyric-granularity') === lyricGranularityPreference;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function setLyricGranularity(mode) {
+  lyricGranularityPreference = mode === 'line' ? 'line' : 'auto';
+  try { localStorage.setItem(LYRIC_GRANULARITY_STORE_KEY, lyricGranularityPreference); } catch (_) { }
+  applyLyricGranularityUi();
+  /* 就地重算：用户正在听这首歌，不该等下次切歌才看到变化 */
+  if (lastAppliedLyricResponse) {
+    try {
+      var song = typeof lyricTimingCurrentSong === 'function' ? lyricTimingCurrentSong() : null;
+      applyLyricApiResponse(lastAppliedLyricResponse, trackSwitchToken, song);
+      if (typeof showToast === 'function') {
+        showToast(lyricGranularityPreference === 'line' ? '歌词已切换为逐行显示' : '歌词已切回自动（优先逐字）');
+      }
+      return;
+    } catch (_) { }
+  }
+  if (typeof showToast === 'function') {
+    showToast(lyricGranularityPreference === 'line' ? '歌词粒度: 逐行' : '歌词粒度: 自动');
+  }
+}
+
 function applyLyricApiResponse(r, token, song) {
   if (token !== trackSwitchToken) return;
   r = r || {};
@@ -188,9 +258,14 @@ function applyLyricApiResponse(r, token, song) {
   var translationPayload = buildLyricTranslationPayload(r);
   lyricsTransLines = translationPayload.lines || [];
   lyricsTranslationLines = lyricsTransLines;
-  var hasNativeKaraoke = nativeLines.some(function(line){ return line.words && line.words.length; });
-  var timingSource = hasNativeKaraoke ? 'yrc-word' : (nativeLines.length ? 'yrc-line' : (lrcLines.length ? 'lrc-line' : 'fallback'));
-  var lines = withLyricFallback(nativeLines.length ? nativeLines : lrcLines);
+  /* 2026-11-23：逐字不再只有 YRC 能给 —— TTML / VTT / LDDC 解析出来同样带 words。
+   * 原来只查 nativeLines，这些格式的逐字会被当成逐行，动效退化成整行扫过。
+   * 2026-11-25：选哪一份交给 chooseLyricLines()，它同时考虑用户的「强制逐行」设置。 */
+  var chosenLyrics = chooseLyricLines(nativeLines, lrcLines, lyricGranularityPreference);
+  var hasNativeKaraoke = chosenLyrics.hasNativeKaraoke;
+  var timingSource = chosenLyrics.timingSource;
+  var lines = withLyricFallback(chosenLyrics.lines);
+  lastAppliedLyricResponse = r;
   if (lines.length && lines[0].fallback) timingSource = 'fallback';
   lines = attachLyricTranslations(lines, lyricsTransLines);
   var translationSource = translationPayload.lines.length ? translationPayload.source : 'none';
@@ -394,8 +469,44 @@ function buildLyricTranslationPayload(response) {
   if (yrcTranslations.length) sources.push('ytlrc');
   return { lines: lines, source: sources.length ? sources.join('+') : 'none' };
 }
+/* ===== 歌词译文显示（默认开）=====
+ * 译文是通过 attachLyricTranslations() 并进原文行的（原文上、译文下）。
+ * 三个调用点全在 06-lyrics 内部，所以只要在这一个函数入口处拦住，
+ * 舞台歌词 / 经典歌词 / 桌面歌词 / 悬浮小组件都会一起生效。 */
+var LYRIC_TRANSLATION_VISIBLE_STORE_KEY = 'mineradio:lyric-translation-visible:v1';
+var lyricTranslationVisiblePreference = (function () {
+  try { return localStorage.getItem(LYRIC_TRANSLATION_VISIBLE_STORE_KEY) !== 'false'; } catch (_) { return true; }
+})();
+function lyricTranslationVisible() {
+  return !!lyricTranslationVisiblePreference;
+}
+function applyLyricTranslationVisibleUi() {
+  var node = document.getElementById('t-lyricTranslationVisible');
+  if (!node) return;
+  node.classList.toggle('on', !!lyricTranslationVisiblePreference);
+  var dot = node.querySelector('.dot');
+  if (dot) dot.classList.toggle('on', !!lyricTranslationVisiblePreference);
+}
+function toggleLyricTranslationVisible() {
+  lyricTranslationVisiblePreference = !lyricTranslationVisiblePreference;
+  try { localStorage.setItem(LYRIC_TRANSLATION_VISIBLE_STORE_KEY, String(lyricTranslationVisiblePreference)); } catch (_) { }
+  applyLyricTranslationVisibleUi();
+  /* 就地重算：不等下次切歌 */
+  if (lastAppliedLyricResponse) {
+    try {
+      var song = typeof lyricTimingCurrentSong === 'function' ? lyricTimingCurrentSong() : null;
+      applyLyricApiResponse(lastAppliedLyricResponse, trackSwitchToken, song);
+    } catch (_) { }
+  }
+  if (typeof showToast === 'function') {
+    showToast(lyricTranslationVisiblePreference ? '歌词译文已显示' : '歌词译文已隐藏（原文保留）');
+  }
+}
+
 function attachLyricTranslations(primaryLines, translationLines) {
   var primary = cloneLyricLines(primaryLines || []);
+  /* 关掉译文时直接返回原文行。注意仍然要 clone：调用方会继续往行上写样式字段。 */
+  if (!lyricTranslationVisiblePreference) return primary;
   var translations = usableLyricTranslationLines(translationLines || []);
   if (!primary.length || !translations.length) return primary;
   var assignments = {};
@@ -648,7 +759,288 @@ function finalizeLyricLineDurations(lines) {
   }
   return lines;
 }
+/* ---------- 多格式歌词解析（2026-11-23） ----------
+ * 原来只认 LRC 与 QQ 的 YRC。本地曲库和外部歌词源里还有：
+ *   · TTML —— W3C / AMLL 的逐字歌词标准，<p begin><span begin> 两层时间轴；
+ *   · WebVTT —— 字幕标准，"00:00:01.000 --> 00:00:03.000" 后跟文本；
+ *   · LDDC 增强 LRC —— [mm:ss.xx]<t,d>字<t,d>字，角括号带逐字时间。
+ * 这里在 parseLyricText 入口按内容探测格式再分发，所有现有调用点自动受益
+ * （包括本地库 sidecar、在线歌词、详情页预览），不用逐个改签名。
+ * KRC 不在此列：它是 krc1 头 + base64 + zlib + XOR 的二进制格式，
+ * 要先在 Node 侧解密成明文才能进这里。 */
+
+/* 时间值归一：支持 "hh:mm:ss.mmm" / "mm:ss.mmm" / "ss.mmm" / 纯秒数 */
+function lyricTimeToSeconds(value) {
+  var str = String(value == null ? '' : value).trim();
+  if (!str) return NaN;
+  var m = str.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+  if (m) {
+    var hours = m[1] ? parseInt(m[1], 10) : 0;
+    return hours * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3]);
+  }
+  var num = parseFloat(str);
+  return isFinite(num) ? num : NaN;
+}
+
+function decodeLyricEntities(value) {
+  return String(value == null ? '' : value)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, function (_, code) { return String.fromCharCode(parseInt(code, 10) || 32); })
+    .replace(/&#x([0-9a-f]+);/gi, function (_, code) { return String.fromCharCode(parseInt(code, 16) || 32); })
+    .replace(/&amp;/g, '&');
+}
+
+function stripLyricMarkup(value) {
+  return decodeLyricEntities(String(value == null ? '' : value).replace(/<[^>]*>/g, ''));
+}
+
+/* 内容探测：宁可回落到 lrc，也不要把普通歌词误判成结构化格式。
+ * 判定都要求「格式独有的强特征」出现在文本开头或结构位置。 */
+/* words 是按顺序拼进 fullText 的，但拼的过程中会折叠空白、trim 首尾，
+ * 之前记下的 c0/c1 就对不上了。逐字动效直接拿 c0/c1 去 slice 文本，
+ * 所以这里统一用 indexOf 从头重算一遍，保证 slice 出来的就是该字的文本。 */
+function reindexWordRanges(fullText, words) {
+  if (!fullText || !words || !words.length) return words || [];
+  var cursor = 0;
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i];
+    var text = String(w.text || '').trim();
+    w.text = text;
+    var idx = text ? fullText.indexOf(text, cursor) : -1;
+    if (idx < 0) idx = Math.min(cursor, fullText.length);
+    w.c0 = idx;
+    w.c1 = Math.min(fullText.length, idx + text.length);
+    cursor = w.c1;
+  }
+  return words;
+}
+
+function detectLyricFormat(text) {
+  var src = String(text == null ? '' : text);
+  var head = src.replace(/^\uFEFF/, '').trimStart();
+  if (!head) return 'lrc';
+  if (/^WEBVTT\b/i.test(head)) return 'vtt';
+  if (/^<\?xml/i.test(head) || /^<tt[\s>]/i.test(head) || /<p\b[^>]*\bbegin\s*=/i.test(head)) return 'ttml';
+  if (/^krc1/i.test(head)) return 'krc';
+  if (/^\[\d+\s*,\s*\d+\]/.test(head)) return 'yrc';
+  /* 增强 LRC：行首时间标签后紧跟逐字时间（角括号，值为 mm:ss 或 数字） */
+  if (/^\[\d{1,2}:\d{1,2}(?:\.\d{1,3})?\][ \t]*</.test(head)) return 'lddc';
+  return 'lrc';
+}
+
+/* TTML：<p begin end> 是行，<span begin end> 是字。
+ * 时间轴可能是 hh:mm:ss.mmm 或 秒.毫秒；缺 end 时由 finalizeLyricLineDurations 兜底。 */
+function parseTtmlText(text) {
+  var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  var lines = [];
+  var pReg = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
+  var pm;
+  while ((pm = pReg.exec(src))) {
+    var attrs = pm[1] || '';
+    var inner = pm[2] || '';
+    var begin = lyricTimeToSeconds((attrs.match(/\bbegin\s*=\s*"([^"]*)"/i) || [])[1]);
+    var end = lyricTimeToSeconds((attrs.match(/\bend\s*=\s*"([^"]*)"/i) || [])[1]);
+    if (!isFinite(begin)) continue;
+
+    var words = [];
+    var fullText = '';
+    var sReg = /<span\b([^>]*)>([\s\S]*?)<\/span>/gi;
+    var sm;
+    var sawSpan = false;
+    while ((sm = sReg.exec(inner))) {
+      var sAttrs = sm[1] || '';
+      var txt = stripLyricMarkup(sm[2]).replace(/\s+/g, ' ');
+      if (!txt) continue;
+      sawSpan = true;
+      var st = lyricTimeToSeconds((sAttrs.match(/\bbegin\s*=\s*"([^"]*)"/i) || [])[1]);
+      var et = lyricTimeToSeconds((sAttrs.match(/\bend\s*=\s*"([^"]*)"/i) || [])[1]);
+      var startAt = isFinite(st) ? st : begin;
+      var dur = isFinite(et) && et > startAt ? et - startAt : 0;
+      var c0 = fullText.length;
+      fullText += txt;
+      words.push({
+        text: txt,
+        t: startAt,
+        d: dur > 0 ? Math.max(0.06, dur) : 0.14,
+        c0: c0,
+        c1: fullText.length
+      });
+    }
+    if (!sawSpan) fullText = stripLyricMarkup(inner);
+    fullText = fullText.replace(/\s+/g, ' ').trim();
+    if (!fullText) continue;
+
+    /* 折叠空白 + trim 之后原来的偏移不再可靠，按实际文本重算 */
+    if (words.length) reindexWordRanges(fullText, words);
+
+    lines.push({
+      t: begin,
+      duration: isFinite(end) && end > begin ? end - begin : 0,
+      text: fullText,
+      words: words,
+      charCount: Math.max(1, fullText.length),
+      source: words.length ? 'ttml-word' : 'ttml-line'
+    });
+  }
+  return finalizeLyricLineDurations(lines);
+}
+
+/* WebVTT：按块解析。一个 cue = 时间行 + 其后到空行之间的文本。
+ * 支持 cue 标识行、行内 <c>/<v>/<b> 标签，以及行内 <00:00:01.000> 时间戳（保留为逐字）。 */
+function parseVttText(text) {
+  var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  var blocks = src.split(/\n{2,}/);
+  var lines = [];
+  var timeLineReg = /^\s*((?:\d+:)?\d{1,2}:\d{1,2}\.\d{1,3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{1,2}\.\d{1,3})/;
+  blocks.forEach(function (block) {
+    var rows = block.split('\n');
+    var idx = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (timeLineReg.test(rows[i])) { idx = i; break; }
+    }
+    if (idx < 0) return;
+    var tm = rows[idx].match(timeLineReg);
+    var start = lyricTimeToSeconds(tm[1]);
+    var end = lyricTimeToSeconds(tm[2]);
+    if (!isFinite(start)) return;
+
+    var body = rows.slice(idx + 1).join('\n');
+    if (!body.trim()) return;
+
+    /* 行内时间戳：<00:00:12.345>字 —— 有就按逐字处理 */
+    var words = [];
+    var fullText = '';
+    var inlineReg = /<((?:\d+:)?\d{1,2}:\d{1,2}\.\d{1,3})>([^<]*)/g;
+    var im;
+    var sawInline = false;
+    while ((im = inlineReg.exec(body))) {
+      var txt = stripLyricMarkup(im[2]).replace(/\s+/g, ' ');
+      if (!txt) continue;
+      sawInline = true;
+      var at = lyricTimeToSeconds(im[1]);
+      var c0 = fullText.length;
+      fullText += txt;
+      words.push({ text: txt, t: isFinite(at) ? at : start, d: 0.14, c0: c0, c1: fullText.length });
+    }
+    if (!sawInline) fullText = stripLyricMarkup(body).replace(/\s*\n\s*/g, ' ');
+    fullText = fullText.replace(/\s+/g, ' ').trim();
+    if (!fullText) return;
+
+    /* 逐字的时长交给 finalize 之外再补一层：用下一个字的时间差 */
+    if (words.length) {
+      for (var w = 0; w < words.length; w++) {
+        var nextT = w + 1 < words.length ? words[w + 1].t : (isFinite(end) ? end : words[w].t + 0.4);
+        var span = nextT - words[w].t;
+        words[w].d = Math.max(0.06, span > 0 ? span : 0.12);
+      }
+      reindexWordRanges(fullText, words);
+    }
+
+    lines.push({
+      t: start,
+      duration: isFinite(end) && end > start ? end - start : 0,
+      text: fullText,
+      words: words,
+      charCount: Math.max(1, fullText.length),
+      source: words.length ? 'vtt-word' : 'vtt-line'
+    });
+  });
+  return finalizeLyricLineDurations(lines);
+}
+
+/* LDDC 增强 LRC：[mm:ss.xx]<t,d>字<t,d>字
+ * 角括号里的 t 可以是绝对时间（mm:ss.xx）也可以是相对行首的毫秒/秒数字。
+ * 判据同 parseYrcText：数值明显小于行起点时视为相对偏移。 */
+function parseEnhancedLrcText(text) {
+  var lines = [];
+  String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n').forEach(function (row) {
+    var head = row.match(/^\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]([\s\S]*)$/);
+    if (!head) return;
+    var lineStart = parseInt(head[1], 10) * 60 + parseInt(head[2], 10) +
+      (head[3] ? parseFloat('0.' + head[3]) : 0);
+    var body = head[4] || '';
+    if (!body.trim()) return;
+
+    var words = [];
+    var fullText = '';
+    var reg = /<([^<>]+)>([^<]*)/g;
+    var m;
+    while ((m = reg.exec(body))) {
+      var stamp = String(m[1] || '').trim();
+      var txt = decodeLyricEntities(m[2] || '').replace(/\s+/g, ' ');
+      if (!txt) continue;
+
+      var t = NaN;
+      var d = 0;
+      if (/^\d{1,2}:\d{1,2}/.test(stamp)) {
+        t = lyricTimeToSeconds(stamp);
+      } else {
+        var parts = stamp.split(',');
+        var raw = parseFloat(parts[0]);
+        if (isFinite(raw)) {
+          if (parts.length > 1) {
+            /* <t,d>：两个值都是毫秒、相对行首（LDDC / YRC 的共同约定）。
+             * 不能靠「数值是否大于行起点」判断 —— 500 既可能是 0.5s 偏移，
+             * 也可能被误当成 500 秒绝对时间。 */
+            t = lineStart + raw / 1000;
+          } else {
+            t = raw >= lineStart - 0.5 ? raw : lineStart + raw / 1000;
+          }
+        }
+        var dur = parseFloat(parts[1]);
+        if (isFinite(dur)) d = dur / 1000;
+      }
+      if (!isFinite(t)) t = lineStart;
+
+      var c0 = fullText.length;
+      fullText += txt;
+      words.push({ text: txt, t: t, d: d > 0 ? Math.max(0.06, d) : 0.14, c0: c0, c1: fullText.length });
+    }
+    if (!fullText) {
+      fullText = decodeLyricEntities(body.replace(/<[^<>]+>/g, '')).replace(/\s+/g, ' ').trim();
+      words = [];
+    }
+    fullText = String(fullText).replace(/\s+/g, ' ').trim();
+    if (!fullText) return;
+
+    if (words.length) {
+      reindexWordRanges(fullText, words);
+      /* 缺时长的字用下一个字补齐 */
+      for (var i = 0; i < words.length; i++) {
+        if (words[i].d > 0.14) continue;
+        var next = i + 1 < words.length ? words[i + 1].t : words[i].t + 0.4;
+        var span = next - words[i].t;
+        if (span > 0 && span < 3) words[i].d = Math.max(0.06, span);
+      }
+    }
+
+    lines.push({
+      t: lineStart,
+      duration: 0,
+      text: fullText,
+      words: words,
+      charCount: Math.max(1, fullText.length),
+      source: words.length ? 'lddc-word' : 'lddc-line'
+    });
+  });
+  return finalizeLyricLineDurations(lines);
+}
+
 function parseLyricText(text) {
+  /* 2026-11-23：先探格式再分发。返回结构与 LRC 分支完全一致，
+   * 调用方（本地库/在线歌词/详情页预览）无需改动。 */
+  switch (detectLyricFormat(text)) {
+    case 'ttml': return parseTtmlText(text);
+    case 'vtt': return parseVttText(text);
+    case 'lddc': return parseEnhancedLrcText(text);
+    case 'yrc': return parseYrcText(text);
+    default: break;
+  }
   var lines = [], reg = /\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]/g;
   text.split(/\r?\n/).forEach(function(line){
     var times = [], m;
@@ -770,8 +1162,12 @@ function aiLyricTranslateEnabled() {
 }
 
 function updateAiLyricTranslateToggle() {
-  var el = document.getElementById('t-aiLyricTranslate');
-  if (el) el.classList.toggle('on', aiLyricTranslateEnabled());
+  /* 两个入口共用同一个开关状态：视觉控制台那个 + 设置 → AI 里那个 */
+  var on = aiLyricTranslateEnabled();
+  ['t-aiLyricTranslate', 't-aiLyricTranslateSettings'].forEach(function (id) {
+    var node = document.getElementById(id);
+    if (node) node.classList.toggle('on', on);
+  });
 }
 
 function toggleAiLyricTranslate() {

@@ -777,9 +777,6 @@ function cloneLyricLine(line) {
   if (line && Array.isArray(line.words)) copy.words = line.words.map(function(w){ return Object.assign({}, w); });
   return copy;
 }
-function cloneLyricLines(lines) {
-  return (Array.isArray(lines) ? lines : []).map(cloneLyricLine);
-}
 function setOriginalLyricsState(lines, hasNativeKaraoke, timingSource, translationLines, translationSource) {
   originalLyricsState = {
     lines: cloneLyricLines(lines || []),

@@ -45,6 +45,7 @@ const {
   qishuiOAuthConfigError,
   buildQishuiOAuthAuthorizeUrl,
   qishuiTokenFile,
+  readQishuiTokenFile,
   normalizeQishuiToken,
 } = require('./config');
 
@@ -397,6 +398,14 @@ function qishuiCookieUserId(cookieText) {
   return 'web:' + crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
 }
 
+// 其它模块（account 的状态缓存）注册自己的清理动作，避免 http ←→ account 循环依赖。
+const qishuiRuntimeCacheClearHooks = [];
+function registerQishuiRuntimeCacheClearHook(fn) {
+  if (typeof fn === 'function' && !qishuiRuntimeCacheClearHooks.includes(fn)) {
+    qishuiRuntimeCacheClearHooks.push(fn);
+  }
+}
+
 function clearQishuiRuntimeCaches() {
   qishuiSearchCache.clear && qishuiSearchCache.clear();
   qishuiFeedCache.clear && qishuiFeedCache.clear();
@@ -406,7 +415,15 @@ function clearQishuiRuntimeCaches() {
   qishuiMembershipCache.clear && qishuiMembershipCache.clear();
   qishuiTrackMetadataCache.clear && qishuiTrackMetadataCache.clear();
   qishuiPlaybackCache.clear && qishuiPlaybackCache.clear();
+  _qishuiTokenInfoCache = null;
+  for (const hook of qishuiRuntimeCacheClearHooks) {
+    try { hook(); } catch (_) {}
+  }
 }
+
+// token 文件读取缓存：文件内容是 safeStorage 密文，每次调用都要走一次 DPAPI 解密。
+// 按 (file, mtimeMs, size) 失效；save/clear token 时由 clearQishuiRuntimeCaches 兜底清空。
+let _qishuiTokenInfoCache = null;
 
 function qishuiAccessTokenInfo() {
   const envKeys = ['QISHUI_ACCESS_TOKEN', 'DOUYIN_ACCESS_TOKEN', 'DOUYIN_OPEN_ACCESS_TOKEN'];
@@ -416,12 +433,23 @@ function qishuiAccessTokenInfo() {
   }
   const file = qishuiTokenFile();
   try {
-    if (fs.existsSync(file)) {
-      const token = normalizeQishuiToken(fs.readFileSync(file, 'utf8'));
-      if (token) return { token, source: 'file', file };
+    const stat = fs.statSync(file);
+    if (_qishuiTokenInfoCache
+      && _qishuiTokenInfoCache.file === file
+      && _qishuiTokenInfoCache.mtimeMs === stat.mtimeMs
+      && _qishuiTokenInfoCache.size === stat.size) {
+      return _qishuiTokenInfoCache.info;
     }
-  } catch (_) {}
-  return { token: '', source: '', file };
+    const token = readQishuiTokenFile(file);
+    const info = token
+      ? { token, source: 'file', file }
+      : { token: '', source: '', file };
+    _qishuiTokenInfoCache = { file, mtimeMs: stat.mtimeMs, size: stat.size, info };
+    return info;
+  } catch (_) {
+    _qishuiTokenInfoCache = null;
+    return { token: '', source: '', file };
+  }
 }
 
 function qishuiAccessToken() {
@@ -626,6 +654,7 @@ module.exports = {
   qishuiCookieFingerprint,
   qishuiCookieUserId,
   clearQishuiRuntimeCaches,
+  registerQishuiRuntimeCacheClearHook,
   qishuiAccessTokenInfo,
   qishuiAccessToken,
   qishuiRestriction,

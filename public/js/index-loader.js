@@ -235,6 +235,8 @@
     'js/modules/07-fx/05e-skin-popover.js',
     // 控制条底层频谱：皮肤弹层的第四格宿主 + #bottom-bar 内的独立 2D 画布
     'js/modules/07-fx/05f-bar-spectrum.js',
+    // fx 面板的液态展开/吸回：挂在 #fx-fab 的收起动作上，依赖面板已渲染完成
+    'js/modules/07-fx/09-fx-panel-genie.js',
     'js/modules/07-fx/09-lyric-shader-market.js',
     'js/modules/07-fx/12-perf-dashboard.js',
     'js/modules/08-account/00-update-preview.js',
@@ -326,6 +328,8 @@
     'js/modules/12-folia/0l1-folia-mode-panels.js',
     'js/modules/12-folia/03-folia-world-runtime.js',
     'js/modules/12-folia/17-folia-mod-host.js',
+    'js/modules/12-folia/18-folia-panel-host.js',
+    'js/modules/12-folia/19-folia-panel-icons.js',
     'js/modules/12-folia/04-folia-panel.js'
   ];
 

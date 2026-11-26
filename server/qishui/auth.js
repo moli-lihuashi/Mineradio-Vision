@@ -5,11 +5,11 @@
 // 第 3 刀从 qishui-api.js 抽出。只依赖 config/http —— 登录是纯协议，不认识任何业务领域。
 
 const fs = require('fs');
-const path = require('path');
 
 const {
   normalizeQishuiToken,
   qishuiTokenFile,
+  writeQishuiTokenFile,
 } = require('./config');
 
 const {
@@ -28,8 +28,9 @@ function saveQishuiAccessToken(value) {
     throw err;
   }
   const file = qishuiTokenFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, token, 'utf8');
+  // 加密落盘（"MR" + safeStorage）；加密不可用时抛 QISHUI_TOKEN_STORAGE_UNAVAILABLE，
+  // 绝不退化成明文 —— 与 netease/qq/kugou/spotify 凭据同口径。
+  writeQishuiTokenFile(file, token);
   clearQishuiRuntimeCaches();
   return { ...getQishuiStatus(), saved: true };
 }

@@ -80,8 +80,12 @@ test('index-loader 与 HTML 脚本通道并集覆盖全部模块，无死文件�
   // 2026-11-22：+1 = 10-shell/30-floating-widget-bridge.js（悬浮小组件桥接）
   // 2026-11-23：+1 = 10-shell/31-settings-page.js（设置页开合 / 搜索 / 菜单摘要同步）
   // 2026-11-23：+1 = 10-shell/32-widget-settings-inline.js（皮肤面板里的挂件设置）
+  // 2026-11-25：core -2 = 05-playback/03e-listening-archive.js + 03f-cover-tunnel.js（旧听歌档案整块删除）；
+  //             deferred +2 = 12-folia/18-folia-panel-host.js（Folia 面板模组宿主）
+  //                         + 12-folia/19-folia-panel-icons.js（面板按钮图标换成 morphicons）
+  // 2026-11-26：deferred +1 = 07-fx/09-genie-menu.js（fx 面板头部的液态拉出菜单）
   assert.equal(core.length, 136, 'core module count changed — update expectation deliberately');
-  assert.equal(deferred.length, 80, 'deferred module count changed — update expectation deliberately');
+  assert.equal(deferred.length, 83, 'deferred module count changed — update expectation deliberately');
   const overlap = deferred.filter((p) => core.includes(p));
   assert.deepEqual(overlap, [], 'same module must not load twice across waves');
 

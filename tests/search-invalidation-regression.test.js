@@ -78,8 +78,11 @@ function makeAbsorbSandbox() {
     mergeSongSearchResults() { return []; },
   };
   const bundle = [
+    // searchPreferredProvider 读这条常量，直接取源码原文，避免测试里再写一份（会漂移）
+    source.match(/var MUSIC_SEARCH_MIXED_EXTRA_PROVIDERS = \[[^\]]*\];/)[0],
     namedFunctionSource('musicSearchSongKey'),
     namedFunctionSource('appendUniqueSongs'),
+    namedFunctionSource('searchPreferredProvider'),
     namedFunctionSource('musicSearchProvidersForMode'),
     namedFunctionSource('absorbMusicSearchPage'),
   ].join('\n');
@@ -160,7 +163,10 @@ test('混合分页：失败平台恢复后撤销失败标记，并能正常判�
 
 test('源码守卫：判定到底必须遍历全部参与平台，且失败平台保留重试', () => {
   const absorbSrc = namedFunctionSource('absorbMusicSearchPage');
-  assert.match(absorbSrc, /musicSearchProvidersForMode\(state\.mode\)\.every/);
+  // 名单来自会话快照，快照缺失时回落到完整名单（musicSearchProvidersForMode）
+  assert.match(absorbSrc, /state\.providers/);
+  assert.match(absorbSrc, /musicSearchProvidersForMode\(state\.mode\)/);
+  assert.match(absorbSrc, /sessionProviders\.every\(function \(provider\)/);
   assert.match(absorbSrc, /state\.failures\.indexOf\(provider\) >= 0\) return false/);
   assert.match(absorbSrc, /state\.moreByProvider\[provider\] === false/);
   assert.doesNotMatch(absorbSrc, /providers\.every\(function \(p\) \{ return !state\.moreByProvider\[p\]; \}\)/,

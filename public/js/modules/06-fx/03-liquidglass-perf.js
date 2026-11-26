@@ -131,6 +131,12 @@
     if (typeof window.refreshHomeLiquidGlassAfterPerf === 'function') {
       try { window.refreshHomeLiquidGlassAfterPerf(); } catch (_) {}
     }
+    // WE 壁纸的玻璃镜像画布是独立的 rAF 循环，主线程过载时它会停更、内容凝固成黑
+    // （用户实测：反复快速点 Home 后壁纸被「杀掉」，露出黑底 + 舞台歌词）。
+    // 降级恢复是它唯一不会被主动唤醒的路径——这里补一脚，把凝固的黑帧强制刷掉。
+    if (typeof window.wallpaperEngineGlassMirrorKick === 'function') {
+      try { window.wallpaperEngineGlassMirrorKick(); } catch (_) {}
+    }
   }
 
   // ===== 主监测循环 =====

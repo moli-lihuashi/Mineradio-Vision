@@ -1,7 +1,7 @@
 {
   "name": "mineradio",
   "productName": "Mineradio",
-  "version": "3.3.4",
+  "version": "3.3.5",
   "description": "沉浸式音乐播放器，融合天气电台、歌词舞台、粒子视觉和 3D 歌单架。",
   "author": "Mineradio",
   "main": "desktop/main.js",
@@ -70,7 +70,13 @@
       "!public/wallpaper.html",
       "!desktop/wallpaper-preload.js"
     ],
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "native/**/*",
+      "**/*.node",
+      "qishui-audio-decryptor/**/*",
+      "public/folia-panel-mods/**/*"
+    ],
     "win": {
       "executableName": "Mineradio",
       "icon": "build/icon.ico",

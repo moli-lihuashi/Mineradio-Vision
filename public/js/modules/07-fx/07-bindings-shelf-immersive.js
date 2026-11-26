@@ -447,6 +447,16 @@ function bindFxPanelDom() {
       setCloseBehaviorMode(btn.getAttribute('data-close-behavior'));
     });
   });
+  document.querySelectorAll('#close-action-seg [data-close-action]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      setCloseActionMode(btn.getAttribute('data-close-action'));
+    });
+  });
+  document.querySelectorAll('#ui-zoom-seg [data-ui-zoom]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      setUiZoomMode(btn.getAttribute('data-ui-zoom'));
+    });
+  });
   initDesktopIntegrationControls();
   updateFxInputs();
   initFxParticleFireSlider();
@@ -564,6 +574,14 @@ function toggleFxPanel(force) {
   if (peekTimers && peekTimers.fx) { clearTimeout(peekTimers.fx); peekTimers.fx = null; }
   fxPanelPinned = false;
   if (force === false) {
+    /* 收起统一走液态吸回（含自动隐藏）。接管成功就不再跑弹簧，
+     * 两套动画同时写 transform 会互相盖。 */
+    if (currentlyOpen && window.FxPanelGenie && window.FxPanelGenie.close()) {
+      var fabC = document.getElementById('fx-fab');
+      if (fabC) fabC.classList.remove('active');
+      closeColorLab();
+      return;
+    }
     if (currentlyOpen && window.MineradioMotion && typeof window.MineradioMotion.springUiOut === 'function') {
       window.MineradioMotion.springUiOut(el, {
         toX: 0,
@@ -587,6 +605,8 @@ function toggleFxPanel(force) {
   closePlayerQuickMenu();
   if (typeof closeSkinPopover === 'function') closeSkinPopover();
   el.classList.remove('show', 'closing');
+  /* 打开同理；沉浸模式下 setPeek 会拒绝显示，这里保留该语义 */
+  if (!immersiveMode && window.FxPanelGenie && window.FxPanelGenie.open()) return;
   setPeek(el, true, 'fx');
 }
 function toggleFxPanelPin(e) {
@@ -600,6 +620,13 @@ function toggleFxPanelPin(e) {
   if (!el) return;
   if (el.classList.contains('show')) {
     fxPanelPinned = false;
+    /* 收起走液态吸回（09-fx-panel-genie）：它自己负责动画与收尾类名，
+     * 失败（例如系统要求减弱动效）才落回原来的 toggleFxPanel 路径。 */
+    if (window.FxPanelGenie && window.FxPanelGenie.close()) {
+      if (fab) fab.classList.remove('active');
+      document.body.classList.remove('fx-fab-peek');
+      return;
+    }
     toggleFxPanel(false);
     return;
   }
@@ -616,7 +643,9 @@ function toggleFxPanelPin(e) {
   if (typeof closeSkinPopover === 'function') closeSkinPopover();
   el.classList.remove('closing', 'peek');
   el.classList.add('show');
-  if (window.MineradioMotion && typeof window.MineradioMotion.springUiIn === 'function') {
+  /* 打开同样交给液态展开；它返回 false 时才用弹簧 */
+  var genieHandled = !!(window.FxPanelGenie && window.FxPanelGenie.open());
+  if (!genieHandled && window.MineradioMotion && typeof window.MineradioMotion.springUiIn === 'function') {
     window.MineradioMotion.springUiIn(el, {
       fromX: 0,
       fromY: 14,

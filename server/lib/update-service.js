@@ -556,6 +556,11 @@ module.exports = function createUpdateService(deps) {
     return parts.join('/');
   }
   function patchTargetPath(rel) {
+    /* asar 打包后 appRoot 指向 .../app.asar —— 那是一个文件，不是目录。
+     * 继续拼 "app.asar/public/x.js" 只会得到 ENOTDIR，把「功能不可用」
+     * 伪装成磁盘错误。补丁签名公钥未配置时本就 fail-closed（见
+     * assertPatchSignature），这里再明确挡一层：asar 形态下不提供热补丁。 */
+    if (/\.asar($|[\\/])/i.test(String(appRoot || ''))) return null;
     const safeRel = safePatchRelativePath(rel);
     if (!safeRel) return null;
     const target = path.resolve(appRoot, safeRel);

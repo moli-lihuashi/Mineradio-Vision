@@ -7,6 +7,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const { assertPublicHttpUrl } = require('../lib/net-guard');
 let electronFetch = null;
 try {
   const electronNet = require('electron').net;
@@ -229,26 +230,6 @@ function sanitizeHeaders(headers) {
   return safe;
 }
 
-function sourceUrlHttpFallback(sourceUrl, err) {
-  try {
-    const target = new URL(String(sourceUrl || '').trim());
-    const message = String((err && (err.code || err.message)) || err || '');
-    if (target.protocol === 'https:' && target.hostname === 'ynx.de5.net' && /CERT|SSL|TLS|COMMON_NAME|certificate/i.test(message)) {
-      target.protocol = 'http:';
-      return target.href;
-    }
-  } catch (_err) {}
-  return '';
-}
-
-
-function normalizeCurrentScriptInfoName(name) {
-  name = String(name || '');
-  // 兼容部分玉宁熙脚本：注释里的 @name 带 -Pro，但脚本内部校验用的是 lx-玉宁熙。
-  if (/玉宁熙/i.test(name)) return name.replace(/-?Pro$/i, '').trim() || 'lx-玉宁熙';
-  return name;
-}
-
 function normalizeImportSourceUrl(input) {
   let text = String(input || '').trim();
   if (!text) throw new Error('LX_SOURCE_URL_INVALID');
@@ -265,10 +246,41 @@ function normalizeImportSourceUrl(input) {
   }
   if (!/^https?:$/.test(target.protocol)) throw new Error('LX_SOURCE_URL_INVALID');
   if (target.protocol === 'https:' && target.hostname === 'ynx.de5.net') {
-    // 这个域名的 https 证书经常不匹配，直接走官方注释给的 http。
+    // 该域名的 https 证书经常不匹配（上游公开的 APIKEY 约定本身就是 http）。
+    // 只对这一台做窄例外，且不再有「任意地址证书错误 → 自动降级 http」的通用路径。
     target.protocol = 'http:';
   }
+  if (target.protocol === 'http:' && target.hostname !== 'ynx.de5.net') {
+    console.warn('[LXSource] importing script over plaintext http (no downgrade was performed):', target.href);
+  }
   return target.href;
+}
+
+// 带重定向逐跳校验的 fetch：公网地址才放行，3xx 的 Location 每一跳重新过 net-guard。
+async function fetchWithGuardedRedirects(fetchImpl, url, init, redirectsLeft = 5) {
+  let current = String(url);
+  const baseInit = Object.assign({}, init || {});
+  for (let hop = 0; ; hop += 1) {
+    await assertPublicHttpUrl(current, 'LX_REQUEST');
+    const response = await fetchImpl(current, Object.assign({}, baseInit, { redirect: 'manual' }));
+    if (response && response.status >= 300 && response.status < 400 && hop < redirectsLeft) {
+      const location = response.headers && typeof response.headers.get === 'function'
+        ? response.headers.get('location')
+        : '';
+      if (location) {
+        current = new URL(location, current).href;
+        continue;
+      }
+    }
+    return response;
+  }
+}
+
+function normalizeCurrentScriptInfoName(name) {
+  name = String(name || '');
+  // 兼容部分玉宁熙脚本：注释里的 @name 带 -Pro，但脚本内部校验用的是 lx-玉宁熙。
+  if (/玉宁熙/i.test(name)) return name.replace(/-?Pro$/i, '').trim() || 'lx-玉宁熙';
+  return name;
 }
 
 function lxRequest(url, options, callback, redirectCount = 0) {
@@ -297,76 +309,93 @@ function lxRequest(url, options, callback, redirectCount = 0) {
   }, options.headers || {}));
   const body = encodeRequestData(options, headers);
   headers = sanitizeHeaders(headers);
-  if (electronFetch) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.min(Math.max(Number(options.timeout) || 60000, 1000), 60000));
-    electronFetch(target.href, {
-      method: String(options.method || 'GET').toUpperCase(),
-      headers,
-      body: body == null ? undefined : body,
-      redirect: 'follow',
-      signal: controller.signal,
-    }).then(async response => {
-      const raw = Buffer.from(await response.arrayBuffer());
-      const text = raw.toString('utf8');
-      let parsed = text;
-      try { parsed = JSON.parse(text); } catch (_err) {}
-      const responseHeaders = {};
-      response.headers.forEach((value, key) => { responseHeaders[key] = value; });
-      callback(null, {
-        statusCode: response.status,
-        statusMessage: response.statusText,
-        headers: responseHeaders,
-        bytes: raw.length,
-        raw,
-        body: parsed,
-      }, parsed);
-    }).catch(err => callback(err)).finally(() => clearTimeout(timeout));
-    return () => {
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }
-  if (body != null && !Object.keys(headers).some(key => key.toLowerCase() === 'content-length')) {
-    headers['content-length'] = Buffer.byteLength(body);
-  }
-  const transport = target.protocol === 'https:' ? https : http;
-  const req = transport.request(target, {
-    method: String(options.method || 'GET').toUpperCase(),
-    headers,
-    timeout: Math.min(Math.max(Number(options.timeout) || LX_HTTP_TIMEOUT_MS, 1000), 20000),
-  }, res => {
-    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectCount < 5) {
-      res.resume();
-      return lxRequest(new URL(res.headers.location, target).href, options, callback, redirectCount + 1);
-    }
-    const chunks = [];
-    res.on('data', chunk => chunks.push(chunk));
-    res.on('end', async () => {
-      try {
-        const raw = await decodeResponseBody(Buffer.concat(chunks), res.headers['content-encoding']);
+  // 第三方脚本的 lx.request 与「链接导入」共用这一条通道：所有出站请求先过 net-guard
+  // （只放行公网 http(s)，内网/回环/云元数据地址直接报错），重定向逐跳复核。
+  // 校验是异步的，期间保留取消句柄，调用方仍可同步取消。
+  let disposed = false;
+  let cancelInner = () => {};
+  assertPublicHttpUrl(target.href, 'LX_REQUEST')
+    .then(() => {
+      if (disposed) return;
+      cancelInner = startLxRequest();
+    })
+    .catch(err => done(err));
+  return () => {
+    disposed = true;
+    try { cancelInner(); } catch (_err) {}
+  };
+
+  function startLxRequest() {
+    if (electronFetch) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.min(Math.max(Number(options.timeout) || 60000, 1000), 60000));
+      fetchWithGuardedRedirects(electronFetch, target.href, {
+        method: String(options.method || 'GET').toUpperCase(),
+        headers,
+        body: body == null ? undefined : body,
+        signal: controller.signal,
+      }).then(async response => {
+        const raw = Buffer.from(await response.arrayBuffer());
         const text = raw.toString('utf8');
         let parsed = text;
         try { parsed = JSON.parse(text); } catch (_err) {}
-        const response = {
-          statusCode: res.statusCode,
-          statusMessage: res.statusMessage,
-          headers: res.headers,
+        const responseHeaders = {};
+        response.headers.forEach((value, key) => { responseHeaders[key] = value; });
+        callback(null, {
+          statusCode: response.status,
+          statusMessage: response.statusText,
+          headers: responseHeaders,
           bytes: raw.length,
           raw,
           body: parsed,
-        };
-        done(null, response, parsed);
-      } catch (err) {
-        done(err);
+        }, parsed);
+      }).catch(err => callback(err)).finally(() => clearTimeout(timeout));
+      return () => {
+        clearTimeout(timeout);
+        controller.abort();
+      };
+    }
+    if (body != null && !Object.keys(headers).some(key => key.toLowerCase() === 'content-length')) {
+      headers['content-length'] = Buffer.byteLength(body);
+    }
+    const transport = target.protocol === 'https:' ? https : http;
+    const req = transport.request(target, {
+      method: String(options.method || 'GET').toUpperCase(),
+      headers,
+      timeout: Math.min(Math.max(Number(options.timeout) || LX_HTTP_TIMEOUT_MS, 1000), 20000),
+    }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectCount < 5) {
+        res.resume();
+        return lxRequest(new URL(res.headers.location, target).href, options, callback, redirectCount + 1);
       }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', async () => {
+        try {
+          const raw = await decodeResponseBody(Buffer.concat(chunks), res.headers['content-encoding']);
+          const text = raw.toString('utf8');
+          let parsed = text;
+          try { parsed = JSON.parse(text); } catch (_err) {}
+          const response = {
+            statusCode: res.statusCode,
+            statusMessage: res.statusMessage,
+            headers: res.headers,
+            bytes: raw.length,
+            raw,
+            body: parsed,
+          };
+          done(null, response, parsed);
+        } catch (err) {
+          done(err);
+        }
+      });
     });
-  });
-  req.on('error', err => callback(err));
-  req.on('timeout', () => req.destroy(new Error('Request timeout')));
-  if (body != null) req.write(body);
-  req.end();
-  return () => req.destroy();
+    req.on('error', err => callback(err));
+    req.on('timeout', () => req.destroy(new Error('Request timeout')));
+    if (body != null) req.write(body);
+    req.end();
+    return () => req.destroy();
+  }
 }
 
 function lxRequestCompat(url, options, callback) {
@@ -481,7 +510,16 @@ async function createRuntime(recordOverride) {
     TextEncoder,
     TextDecoder,
     AbortController,
-    fetch: typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined,
+    // 沙箱内的网络出口统一过 net-guard：第三方脚本不能请求内网/本机/云元数据地址。
+    // （vm 本身不是安全边界，见 server/routes/lx.js 的说明；这里只收敛 SSRF 面。）
+    fetch: typeof globalThis.fetch === 'function'
+      ? (input, init) => {
+        const targetUrl = typeof input === 'string' || input instanceof URL
+          ? String(input)
+          : String((input && input.url) || input);
+        return fetchWithGuardedRedirects(globalThis.fetch.bind(globalThis), targetUrl, init || {});
+      }
+      : undefined,
     crypto: crypto.webcrypto,
     setTimeout,
     clearTimeout,
@@ -796,7 +834,10 @@ async function deleteSources(ids) {
   }
 }
 
-function downloadSourceScript(sourceUrl) {
+async function downloadSourceScript(sourceUrl) {
+  // 导入的 URL 来自用户输入：先过 net-guard（公网 http(s)、DNS 复核），再下载。
+  // 下载内容随后会进 vm 执行，这里是 SSRF 的唯一闸门。
+  await assertPublicHttpUrl(sourceUrl, 'LX_SOURCE_DOWNLOAD');
   return new Promise((resolve, reject) => {
     lxRequest(sourceUrl, {
       method: 'GET',
@@ -816,15 +857,8 @@ function downloadSourceScript(sourceUrl) {
 
 async function importSourceUrl(sourceUrl) {
   sourceUrl = normalizeImportSourceUrl(sourceUrl);
-  let script;
-  try {
-    script = await downloadSourceScript(sourceUrl);
-  } catch (err) {
-    const fallbackUrl = sourceUrlHttpFallback(sourceUrl, err);
-    if (!fallbackUrl) throw err;
-    sourceUrl = fallbackUrl;
-    script = await downloadSourceScript(sourceUrl);
-  }
+  // 不再有「证书错误 → 自动降级 http 重试」的路径：脚本会被执行，明文下载等于允许中间人换脚本。
+  const script = await downloadSourceScript(sourceUrl);
   let fileName = 'remote-source.js';
   try {
     fileName = decodeURIComponent(path.basename(new URL(sourceUrl).pathname)) || fileName;

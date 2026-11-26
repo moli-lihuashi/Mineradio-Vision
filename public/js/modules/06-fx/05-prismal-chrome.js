@@ -6,8 +6,15 @@
   var hosts = [];
   /* 2026-11-23：设置页里的滑块和视觉控制台是同一批 .fx-slider，
    * 填充条靠这里写 --prism-fill；不带上就会被拖了不动（只有轨道没有进度）。 */
+  /* 2026-11-25：设置页里除了 .fx-slider，还有三排「自带网格」的滑块
+   * （淡入淡出 .fade-control-row / 变速与均衡 .at-control-row / 过渡参数 .tt-param-row）。
+   * 它们不在 .fx-slider 里，之前既没被画皮肤、也没人写 --prism-fill，
+   * 结果是浏览器默认滑块（轨道几乎没有填充色）。这里一并纳入。 */
   var RANGE_SEL = '#fx-panel .fx-slider:not(.fx-fire-slider-row) input[type=range], ' +
     '#settings-modal .fx-slider:not(.fx-fire-slider-row) input[type=range], ' +
+    '#settings-modal .fade-control-row input[type=range], ' +
+    '#settings-modal .at-control-row input[type=range], ' +
+    '#settings-modal .tt-param-row input[type=range], ' +
     '#skin-popover .fx-slider:not(.fx-fire-slider-row) input[type=range], #volume-slider';
 
   function isFireRange(input) {

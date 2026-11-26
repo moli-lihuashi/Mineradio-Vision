@@ -1144,10 +1144,18 @@ function updateLiquidGlassBackdropMirror() {
   var weMirrorReady = document.body.classList.contains('wallpaper-engine-active')
     && document.body.classList.contains('wallpaper-engine-video-ready');
   var weMirror = weMirrorReady ? document.getElementById('wallpaper-engine-glass-mirror') : null;
-  if (weMirror && weMirror.width >= 2 && weMirror.height >= 2) {
+  var weMirrorLost = (typeof window.wallpaperEngineGlassMirrorLost === 'function') && window.wallpaperEngineGlassMirrorLost();
+  if (weMirror && weMirror.width >= 2 && weMirror.height >= 2 && !weMirrorLost) {
     try {
       _lgMirrorCtx.drawImage(weMirror, 0, 0, W, H);
     } catch (_) {}
+  } else if (weMirrorLost && typeof window.wallpaperEngineGlassMirrorSnapshot === 'function') {
+    /* 镜像画布上下文已丢（黑帧）：退回采样「最后有效帧快照」（静态 2D canvas，
+     * 能被玻璃回读）。玻璃折射的是上一帧壁纸，而非黑帧，黑屏彻底消失。 */
+    var snap = window.wallpaperEngineGlassMirrorSnapshot();
+    if (snap && snap.width >= 2 && snap.height >= 2) {
+      try { _lgMirrorCtx.drawImage(snap, 0, 0, W, H); } catch (_) {}
+    }
   } else if (document.body.classList.contains('wallpaper-engine-active')
              && !document.body.classList.contains('wallpaper-engine-dwm-active')) {
     /* WE 静态壁纸（图片预览 / 图片原图）：11-13 只补了视频镜像，图片从未进合成，

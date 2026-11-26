@@ -139,7 +139,21 @@ function openHomeLibrary() {
   openPlaylistPanelTab('playlists', true);
   refreshUserPlaylists(true);
 }
+// Home 切换冷却：快速反复切换 Home 会反复重排/重合成页面，把主线程压到短时
+// 过载，进而让 Chromium 回收 WE 壁纸玻璃镜像的 WebGL 上下文（整屏壁纸变黑）。
+// 冷却期内直接忽略重复点击 —— 只降级 forceLoad 不够：Home 照样反复进出，
+// body class 与合成层照样抖动。间隔由实机扫描定：300ms 触发率约 50%，
+// 400ms 起降到个位数百分比且连续 8 轮/96 次切换零触发，故选 400ms（比 1s 更跟手）。
+var homeToggleCooldownUntil = 0;
+var HOME_TOGGLE_COOLDOWN_MS = 400;
 function goHome() {
+  var now = performance.now();
+  if (now < homeToggleCooldownUntil) {
+    // 冷却期内不切换：给一次可见回弹反馈，把等待解释成动画而不是卡顿
+    if (typeof homeCooldownNudge === 'function') homeCooldownNudge();
+    return;
+  }
+  homeToggleCooldownUntil = now + HOME_TOGGLE_COOLDOWN_MS;
   // 音域回响激活时，先退出预设再回 Home
   if (document.body.classList.contains('sonic-topography-active')) {
     try { setPreset(0, { silent: true, skipTransition: true }); } catch (_) {}
@@ -151,6 +165,9 @@ function goHome() {
     return;
   }
   showHome({ forceLoad: true, forced: true, closePanels: true });
+  // 只在用户主动进入时播放入场动效；内部可见性同步（updateEmptyHomeVisibility）
+  // 会周期性调 showHome，不能让它刷新动效预算/重播动画。
+  if (typeof playHomeEnterAnimation === 'function') playHomeEnterAnimation();
   showToast('已回到 Home');
 }
 function dismissHomePage(opts) {

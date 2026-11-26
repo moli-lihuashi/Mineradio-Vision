@@ -1,5 +1,48 @@
 # Changelog
 
+## v3.3.5 · 2026-11-26
+
+### Folia 面板模组
+
+- 新增面板型模组宿主（`12-folia/18-folia-panel-host.js` + `desktop/folia-panel-host.js`），与歌词样式模组（`17`）是两条独立通道：面板模组提供一整个页面 + 主进程 RPC，歌词模组注册成世界样式卡。
+- 首个接入模组为「听歌档案」（listening-archive v1.3.3，MIT）：注册标签页、命令与封面采集层，按秒采样播放状态并经 RPC 交主进程落盘。模组源码一行未改，缺失能力在宿主侧补齐或明确降级。
+- 宿主按模组实际调用面实现（`host.folium` 版本门槛、`playback.getState` 返回 `state` 字符串而非布尔、`song` 走 `title/artist/album/source/id` 五字段、队列分页、`playback.*` 事件订阅），不是照文档抄。
+- 面板外壳支持深/浅色：应用切浅色时宿主把 `isDaylight` 传给模组，模组自行切 `.daylight`。
+
+### 液态面板动效
+
+- FX 控制台改用液态展开/吸回动效（`09-fx-panel-genie.js`）：黏滞液滴从滑杆按钮拉出、目标沿三维空间翻折展开，收起 175ms 干脆吸回。
+- 只接管「点滑杆按钮」这条路径，鼠标贴边 peek 仍走原来的轻量逻辑；面板原有的 `fx-panel-in` 与 `springUiOut` 在这条路径上跳过。
+
+### 安全
+
+- **出站 URL 防护（SSRF）**：LX 音源「从链接导入」此前只校验协议，任意内网地址都能被服务端请求，下载到的脚本随后进 vm 执行——构成 SSRF 到 RCE 的链路。新增 `server/lib/net-guard.js` 统一判定，只放行公网 http(s)。
+- 补齐此前漏掉的网段：CGNAT `100.64/10`、`0.0.0.0/8`、组播/保留段、IPv6 映射地址；同时覆盖 `.localhost` / `.local` / `.internal` / `.lan` / `.home.arpa` / 反解域名等后缀。
+- 媒体代理共用同一套 IP 判定，不再各自维护白名单。
+- 已知边界：DNS 校验与实际连接是两次解析（TOCTOU），本层挡住的是「域名解析到内网」这类常规 SSRF；彻底解决需要在 socket 层锁定解析结果。
+
+### 打包
+
+- **正式构建开启 asar**（`build.asar: true`）：冷启动少开约 2700 个文件。
+- `asarUnpack` 覆盖三类必须在真实路径上的资源：`native/**/*` 与 `**/*.node`（`process.dlopen` 需要真实路径，bindings 还会用 fs 扫目录）、`qishui-audio-decryptor/**/*`（worker_threads 用原生 fs 打开脚本，Node 没有 Electron 的 asar 补丁）、`public/folia-panel-mods/**/*`（面板模组需按目录扫描）。
+- 热补丁在 asar 形态下改为 fail-closed，不再报 `ENOTDIR`；`sync-dist` 会清掉旧 `app.asar`，避免遮蔽新代码（否则表现为「改了完全没反应」）。
+
+### 设置
+
+- **更新偏好可配**：新增「设置 → 关于 → 更新」两个开关——是否检查更新、是否自动下载。此前是启动 9 秒后无条件查一次，用户既关不掉、也不能让新版本自动下好。
+- **设置备份**：支持导出/导入设置。导出按白名单过滤，绝不带登录凭据（避免用户随手发出等于泄号）；导入同样走白名单，防止构造过的 JSON 往任意 localStorage 键写入。
+- **界面缩放**：对应 Folia 的 `uiZoom`，用 `webContents.setZoomFactor` 实现，而不是给 body 加 CSS `zoom`——后者会同步缩小 CSS 视口（`innerWidth` 变小），导致绝对定位、媒体查询与画布尺寸全部错位。
+
+### Home 动效
+
+- 400ms Home 切换冷却改为可见动效：进入时天气/主视觉区与玻璃卡片分段飞入，动画时长对齐冷却窗口，不再表现为「点了没反应」。
+- 新增减少动效（`prefers-reduced-motion`）统一开关。
+
+### 其他
+
+- 新增 20 个回归守卫与测试，覆盖 asar 打包、出站 URL、模块重名、歌词格式、更新偏好、界面缩放、设置备份、Home 动效、面板浅色主题、面板滚动联动等。
+- 清理 6 个此前挂在 `KUGOU_SKIP_TESTS` 豁免名单里的失效测试（引用的模块路径在酷狗版拆分后已不存在）。
+
 ## v3.3.4 · 2026-11-23
 
 ### 悬浮小组件

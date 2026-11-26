@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, screen, session, globalShortcut, dialog, Tray, Menu, protocol, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, screen, session, globalShortcut, dialog, Tray, Menu, protocol, desktopCapturer, powerSaveBlocker } = require('electron');
 const net = require('net');
 const http = require('http');
 const path = require('path');
@@ -48,6 +48,9 @@ const { BuiltInPlaylistLibrary } = require('./built-in-playlist-library');
 // 悬浮小组件（Enhanced Remote Widget，MIT）：原版是官方 Folia 的主进程模组，
 // 这里用自己的窗口 + IPC 重建宿主，前端零改动。见 desktop/floating-widget.js 头部说明。
 const floatingWidget = require('./floating-widget');
+// Folia 面板型模组宿主（homeTabs + 主进程 rpc/storage）：听歌档案走这条，
+// 与 public/folia-mods 那批「歌词样式」模组分开加载。
+const foliaPanelHost = require('./folia-panel-host');
 
 // ---- 懒加载：重模块首次 IPC 时再 require / 实例化 ----
 let _spotifyApiMod = null;
@@ -211,9 +214,12 @@ const APP_USER_MODEL_ID = _BETA_META.appUserModelId || 'com.mineradio.desktop';
 // 启动状态追踪：闪屏 + GPU 崩溃检测 + loadURL 重试
 const STARTUP_ERROR_LOG_FILE = 'startup-error.log';
 const STARTUP_STATE_FILE = 'startup-state.json';
-const STARTUP_SERVER_TIMEOUT_MS = 10000;
-const STARTUP_HTTP_TIMEOUT_MS = 8000;
-const STARTUP_NAVIGATION_TIMEOUT_MS = 15000;
+const STARTUP_SERVER_TIMEOUT_MS = 20000;
+/* cookie 解密走 safeStorage/DPAPI，杀软/系统繁忙时单次 readFn 实测可耗时 2–5s，
+ * 4 个 cookie 读完会让服务启动超过 8s，进而误报 MR-BOOT-SERVER-START 并连带
+ * loadURL 超时。探活窗口放宽到 30s，宁可慢启动也不要直接失败。 */
+const STARTUP_HTTP_TIMEOUT_MS = 30000;
+const STARTUP_NAVIGATION_TIMEOUT_MS = 20000;
 const STARTUP_SHOW_WATCHDOG_MS = 3500;
 
 let startupCompleted = false;
@@ -230,6 +236,10 @@ const MIN_WINDOWED_HEIGHT = 832;
 const APP_ICON_ICO = path.join(__dirname, '..', 'build', 'icon.ico');
 let tray = null;
 let closeBehavior = 'exit';
+/* 关闭按钮（右上角 ×、Alt+F4、任务栏关闭）的行为：
+ *   'exit'（默认）= 完全退出整个进程树；'tray' = 隐藏到托盘，播放继续。
+ * 与 closeBehavior（最小化按钮）分开，两者互不影响。 */
+let closeAction = 'exit';
 let appQuitting = false;
 // 强制全退出状态：关闭按钮一旦触发就不再允许任何 preventDefault / hide() 拦截。
 let forceQuitting = false;
@@ -619,6 +629,9 @@ function focusMainWindow() {
 function normalizeCloseBehavior(value) {
   return value === 'tray' ? 'tray' : 'exit';
 }
+function normalizeCloseAction(value) {
+  return value === 'tray' ? 'tray' : 'exit';
+}
 function createOrUpdateTray() {
   if (process.platform !== 'win32' && process.platform !== 'linux') return;
   if (tray) {
@@ -894,23 +907,33 @@ function directoryUsageBytes(directory) {
   return new Promise((resolve) => {
     if (!directory) { resolve(0); return; }
     let total = 0;
-    const walk = (dir, done) => {
+    let pending = 0;
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(total); } };
+    const settleOne = () => { pending -= 1; if (pending === 0) finish(); };
+    // 全部用异步 IO：缓存目录可达数千文件，statSync 会把主进程事件循环切成
+    // 数百段碎片（期间窗口拖动、桌面歌词 IPC 都被顶住）。
+    const walk = (dir) => {
+      pending += 1;
       fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
-        if (err) { done(); return; }
-        let pending = entries.length;
-        if (!pending) { done(); return; }
-        entries.forEach((entry) => {
-          const full = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(full, () => { if (--pending === 0) done(); });
-          } else {
-            try { total += fs.statSync(full).size; } catch (_) {}
-            if (--pending === 0) done();
+        if (!err && entries && entries.length) {
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              walk(full);
+            } else {
+              pending += 1;
+              fs.stat(full, (statErr, stat) => {
+                if (!statErr && stat && stat.isFile()) total += stat.size;
+                settleOne();
+              });
+            }
           }
-        });
+        }
+        settleOne();
       });
     };
-    walk(directory, () => resolve(total));
+    walk(directory);
   });
 }
 async function cacheSettingsSnapshot() {
@@ -1067,11 +1090,56 @@ function ensureMainWindowInsideDisplay(win) {
   } catch (_) {}
 }
 
-function resetMainWindowZoom(win) {
-  if (!win || win.isDestroyed()) return;
-  try { win.webContents.setZoomFactor(1); } catch (_) {}
-  try { win.webContents.setZoomLevel(0); } catch (_) {}
+/* ===== 界面缩放（设置 → 通用 → 窗口）=====
+ * 用 webContents.setZoomFactor 缩放主窗，而不是给 body 加 CSS zoom：
+ *   · Chromium 的 zoom 会同步缩小 CSS 视口（innerWidth 变小），绝对定位、
+ *     媒体查询、canvas 尺寸都跟着走，JS 侧不用改一行；
+ *   · CSS zoom 只改绘制，WebGL 画布与指针坐标的换算会错位。
+ * 注意：setZoomFactor 之后**不能**再 setZoomLevel(0) —— 那等于把缩放重置回 100%。
+ * 落盘走 _STABLE_USER_DATA：setPath('cache') 会把 app.getPath('userData') 篡改成
+ * 缓存目录，用它存偏好会随缓存目录搬家（见 cache-settings.json 那次的教训）。 */
+const UI_ZOOM_FILE = 'ui-zoom.json';
+const UI_ZOOM_MIN = 0.9;
+const UI_ZOOM_MAX = 1.2;
+let uiZoomFactor = 1;
+let uiZoomLoaded = false;
+
+function normalizeUiZoom(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  const rounded = Math.round(n * 100) / 100;
+  return Math.max(UI_ZOOM_MIN, Math.min(UI_ZOOM_MAX, rounded));
 }
+function uiZoomPath() {
+  return path.join(_STABLE_USER_DATA, UI_ZOOM_FILE);
+}
+function loadUiZoom() {
+  if (uiZoomLoaded) return uiZoomFactor;
+  uiZoomLoaded = true;
+  try {
+    const raw = JSON.parse(fs.readFileSync(uiZoomPath(), 'utf8')) || {};
+    uiZoomFactor = normalizeUiZoom(raw.factor);
+  } catch (_) {
+    uiZoomFactor = 1;
+  }
+  return uiZoomFactor;
+}
+function saveUiZoom() {
+  try {
+    fs.mkdirSync(_STABLE_USER_DATA, { recursive: true });
+    const file = uiZoomPath();
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, factor: uiZoomFactor }, null, 2), 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (_) { }
+}
+function applyMainWindowZoom(win) {
+  if (!win || win.isDestroyed()) return;
+  try { win.webContents.setZoomFactor(loadUiZoom()); } catch (_) { }
+}
+/* 注意：登录窗 / 桌面歌词 / 小组件都是独立的 webContents，不继承主窗 zoom；
+ * 以前那个「每次显示都把主窗缩放打回 1」的 resetMainWindowZoom 已删除 ——
+ * 留着只会和用户设置互相打架。 */
 
 function getUpdateDownloadDir() {
   if (cacheSettings && cacheSettings.updatesPath) return cacheSettings.updatesPath;
@@ -2811,6 +2879,24 @@ async function broadcastDesktopWallpaperStatus(status) {
 
 ipcMain.handle('mineradio-get-api-token', () => mineradioApiToken || process.env.MINERADIO_API_TOKEN || '');
 
+/* 播放时阻止系统休眠（设置页「播放行为」）。
+ * 只用一个 prevent-display-sleep 类型的 blocker，开/关都按当前状态幂等收敛：
+ * 反复调用不会叠加 id，也不会在已经停止的情况下再去 stop 一个失效 id。
+ * 渲染层负责只在「设置开着且真的在出声」时传 true，暂停/切歌/结束都会传 false。 */
+let playbackPowerBlockerId = null;
+function setPlaybackPowerBlocker(enabled) {
+  const active = playbackPowerBlockerId !== null && powerSaveBlocker.isStarted(playbackPowerBlockerId);
+  if (enabled && !active) {
+    playbackPowerBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+  } else if (!enabled && active) {
+    powerSaveBlocker.stop(playbackPowerBlockerId);
+    playbackPowerBlockerId = null;
+  }
+  const nextActive = playbackPowerBlockerId !== null && powerSaveBlocker.isStarted(playbackPowerBlockerId);
+  return { ok: true, active: nextActive };
+}
+ipcMain.handle('mineradio-set-playback-power-blocker', (_event, enabled) => setPlaybackPowerBlocker(!!enabled));
+
 ipcMain.handle('desktop-window-minimize', (event) => {
   const win = getSenderWindow(event);
   if (win === mainWindow && fullDesktopModeRuntime && fullDesktopModeRuntime.getStatus('window-minimize').enabled === true) {
@@ -2858,13 +2944,32 @@ ipcMain.handle('desktop-window-get-state', (event) => {
 
 ipcMain.handle('desktop-window-close', (event, behavior) => {
   if (behavior) closeBehavior = normalizeCloseBehavior(behavior);
-  /* 关闭按钮 = 完全退出。不再 win.close() 后干等 window-all-closed：
-     只要还有登录窗 / 桌面歌词 / 壁纸层活着，那个事件就永远不来。 */
+  const win = getSenderWindow(event) || mainWindow;
+  /* 关闭按钮的语义由设置决定（默认仍是完全退出）：
+   *   exit → 直接 forceExitApp，不再 win.close() 后干等 window-all-closed：
+   *          只要还有登录窗 / 桌面歌词 / 壁纸层活着，那个事件就永远不来。
+   *   tray → 隐藏主窗 + 建托盘，进程与播放都留着，托盘菜单「退出」才是真的结束。 */
+  if (closeAction === 'tray' && !forceQuitting && win && win === mainWindow && !win.isDestroyed()) {
+    try { createOrUpdateTray(); } catch (_) { }
+    try { win.hide(); } catch (_) { }
+    try { sendWindowState(win); } catch (_) { }
+    return { ok: true, hidden: true, closeAction: 'tray' };
+  }
   forceExitApp('window-close-button');
 });
 
 ipcMain.handle('desktop-window-get-close-behavior', () => {
   return { behavior: closeBehavior };
+});
+
+ipcMain.handle('desktop-window-get-close-action', () => {
+  return { action: closeAction };
+});
+
+ipcMain.handle('desktop-window-set-close-action', (_event, action) => {
+  closeAction = normalizeCloseAction(action);
+  if (closeAction === 'tray') createOrUpdateTray();
+  return { action: closeAction };
 });
 
 ipcMain.handle('desktop-window-set-close-behavior', (_event, behavior) => {
@@ -4019,7 +4124,9 @@ function showMainWindowSafely(win, reason) {
   ensureMainWindowInsideDisplay(win);
   if (win.isMinimized()) win.restore();
   if (!win.isVisible()) win.show();
-  resetMainWindowZoom(win);
+  /* 以前每次显示都会把缩放重置成 100%，现在按用户设置应用；
+   * 缩放值来自 ui-zoom.json，重启与页面重载都保留。 */
+  applyMainWindowZoom(win);
   sendWindowState(win);
   if (!startupState.windowVisibleAt) {
     writeStartupState('window-visible', { windowVisibleAt: Date.now(), visibleReason: String(reason || '') });
@@ -4047,6 +4154,9 @@ async function ensureLocalServerStarted() {
     process.env.QISHUI_COOKIE_FILE = path.join(_stableUserData, '.qishui-cookie');
     process.env.QISHUI_TOKEN_FILE = path.join(_stableUserData, '.qishui-token');
     process.env.QISHUI_QR_CONFIG_FILE = path.join(_stableUserData, '.qishui-qr-login.json');
+    /* asar 化后 __dirname 在 app.asar 内部（只读），server.js 的这条默认路径
+     * 会写失败。必须指到用户数据区 —— 与 cookie 同一批，在 require(server.js) 之前。 */
+    process.env.CUEFIELD_FEEDBACK_FILE = path.join(_stableUserData, 'cuefield-feedback.jsonl');
     process.env.SPOTIFY_TOKEN_FILE = path.join(_stableUserData, '.spotify-token.json');
     if (!process.env.SPOTIFY_CONFIG_FILE) {
       process.env.SPOTIFY_CONFIG_FILE = path.join(_stableUserData, '.spotify-credentials.json');
@@ -4148,14 +4258,21 @@ async function ensureLocalServerStarted() {
     if (localServer && typeof localServer.configureCookieStorage === 'function') {
       const secretStore = require('./secret-store');
       const _cookieDebugLogPath = path.join(_stableUserData, 'cookie-debug.log');
+      /* 调试日志挂在 cookie 读写回调上（登录/刷新路径），同步 statSync + appendFileSync
+       * 会把主进程事件循环按住。改成异步 append + 内存字节计数，限幅仍是 512KB。 */
+      let _cookieLogBytes = 0;
+      try { _cookieLogBytes = fs.statSync(_cookieDebugLogPath).size; } catch (_) {}
       const _cookieLog = (msg) => {
         try {
-          // 限幅：超过 512KB 清空重写，防止无限增长
-          try {
-            const st = fs.statSync(_cookieDebugLogPath);
-            if (st.size > 512 * 1024) fs.writeFileSync(_cookieDebugLogPath, '');
-          } catch (_) {}
-          fs.appendFileSync(_cookieDebugLogPath, '[' + new Date().toISOString() + '] [main] ' + msg + '\n', 'utf8');
+          const line = '[' + new Date().toISOString() + '] [main] ' + msg + '\n';
+          const lineBytes = Buffer.byteLength(line, 'utf8');
+          if (_cookieLogBytes + lineBytes > 512 * 1024) {
+            _cookieLogBytes = lineBytes;
+            fs.writeFile(_cookieDebugLogPath, line, 'utf8', () => {});
+            return;
+          }
+          _cookieLogBytes += lineBytes;
+          fs.appendFile(_cookieDebugLogPath, line, 'utf8', () => {});
         } catch (_) {}
       };
       _cookieLog('configureCookieStorage setup starting, realAppData=' + _REAL_APP_DATA + ' stableUserData=' + _stableUserData + ' wrongUserData=' + app.getPath('userData'));
@@ -4440,6 +4557,9 @@ async function createWindow(options = {}) {
 
   mainWindow.webContents.on('did-finish-load', () => {
     sendWindowState(mainWindow);
+    /* 壁纸模式是「销毁重建窗口 + 页面重载」实现的，缩放必须在每次加载完成后重放，
+     * 否则切一次壁纸模式就回到 100%。 */
+    applyMainWindowZoom(mainWindow);
     try { ensureUserPluginDir(); } catch (_) {}
   });
 
@@ -4557,11 +4677,22 @@ async function createWindow(options = {}) {
     scheduleStageWindowFollowDisplay();
   });
   mainWindow.on('resize', () => scheduleWindowStateSend(mainWindow));
-  /* 不再注册 'close' 拦截：旧逻辑在 closeBehavior==='tray' 时
-     event.preventDefault() + mainWindow.hide()，窗口藏了、进程全部留着，
-     用户看到「托盘和任务栏都没窗口，播放器却还在后台跑」。
-     现在关闭按钮 / Alt+F4 都让窗口真正关闭，随后 window-all-closed
-     走 forceExitApp 收掉整个进程树；「后台托盘」只由最小化按钮承担。 */
+  /* 'close' 拦截只在「关闭按钮 = 隐藏到托盘」（closeAction==='tray'）时生效，
+     见上面的 mainWindow.on('close')。旧实现把托盘行为绑死在最小化上、
+     关闭一律真关，用户既没有选择、也解释不清「窗口没了进程还在」；
+     现在两条路径各有独立开关，默认仍然是完全退出。 */
+  /* Alt+F4 / 任务栏关闭都走 'close' 事件。设置成「后台托盘」时必须在这里拦，
+   * 否则窗口一关就触发 window-all-closed → forceExitApp，等于设置没生效。
+   * forceQuitting 期间一律放行：托盘菜单「退出」、关闭按钮选「完全退出」
+   * 都是走 forceExitApp，不能被这里顶回去。 */
+  mainWindow.on('close', (event) => {
+    if (forceQuitting) return;
+    if (closeAction !== 'tray') return;
+    event.preventDefault();
+    try { createOrUpdateTray(); } catch (_) { }
+    try { mainWindow.hide(); } catch (_) { }
+    try { sendWindowState(mainWindow); } catch (_) { }
+  });
   mainWindow.on('closed', () => {
     if (mainWindowStateTimer) {
       clearTimeout(mainWindowStateTimer);
@@ -5052,6 +5183,12 @@ if (!gotSingleInstanceLock) {
     } catch (error) {
       console.warn('[FloatingWidget] init failed:', (error && error.message) || error);
     }
+    /* Folia 面板模组：只装 IPC，模组本体首次调用才 require（会起统计 Worker）。 */
+    try {
+      foliaPanelHost.registerFoliaPanelIpc(ipcMain);
+    } catch (error) {
+      console.warn('[FoliaPanel] ipc init failed:', (error && error.message) || error);
+    }
   }).catch((e) => reportWindowCreationFailure('Main', e));
 
   // 子进程崩溃（GPU / raster / utility / audio）——renderer 的 reason=crashed 常常是它们的连锁反应，
@@ -5144,6 +5281,8 @@ if (!gotSingleInstanceLock) {
     unregisterMineradioGlobalHotkeys();
     closeOverlayWindows();
     try { floatingWidget.disposeFloatingWidget(); } catch (_) {}
+    // 面板模组可能起了统计 Worker：先 onDispose 再退出，别留孤儿线程。
+    try { foliaPanelHost.disposeAll(); } catch (_) {}
     destroyTray();
     if (localServer && localServer.close) localServer.close();
     // powershell 鼠标轮询 / 光标监视是独立 OS 进程，主进程退出不一定带走。
@@ -5171,9 +5310,25 @@ if (!gotSingleInstanceLock) {
     runAppShutdownCleanup();
   });
 
-  app.on('will-quit', () => {
+  ipcMain.handle('mineradio-get-ui-zoom', () => ({ factor: loadUiZoom() }));
+ipcMain.handle('mineradio-set-ui-zoom', (event, factor) => {
+  uiZoomFactor = normalizeUiZoom(factor);
+  uiZoomLoaded = true;
+  saveUiZoom();
+  const win = getSenderWindow(event) || mainWindow;
+  if (win === mainWindow) applyMainWindowZoom(win);
+  return { factor: uiZoomFactor };
+});
+
+app.on('will-quit', () => {
     try { flushDesktopLyricsAnchor(); } catch (_) {}
     try { killAppChildProcesses(); } catch (_) {}
     if (forceExitTimer) { clearTimeout(forceExitTimer); forceExitTimer = null; }
+    /* 防休眠的 blocker 必须在这里放掉：它是进程级状态，留着会让整个系统
+     * 在播放器退出后仍然不熄屏。合并进既有 will-quit，不另开一个同事件处理器。 */
+    if (playbackPowerBlockerId !== null && powerSaveBlocker.isStarted(playbackPowerBlockerId)) {
+      try { powerSaveBlocker.stop(playbackPowerBlockerId); } catch (_) { }
+      playbackPowerBlockerId = null;
+    }
   });
 }

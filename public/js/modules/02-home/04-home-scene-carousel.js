@@ -249,9 +249,9 @@
     return { cards: cards, geos: [cardGeo, glowGeo, contentGeo, shadowGeo], shadowTex: shadowTex };
   }
 
-  // ─── Fallback（WebGL 不可用时） ────────────────────────────
-  function renderFallback(container, cardsData, onSelect) {
-    var html = '<div class="home-scene-carousel-fallback">';
+  // ─── Fallback（WebGL 不可用 / 上下文丢失） ────────────────
+  function buildFallbackButtons(cardsData) {
+    var html = '';
     cardsData.forEach(function (def) {
       html += '<button type="button" class="home-scene-carousel-fallback-btn" data-scene-id="' + def.id + '" style="--scene-gradient:linear-gradient(135deg,' + def.a + ',' + def.b + ')">';
       html += '<span class="hcfb-badge">' + (def.badge || '场景') + '</span>';
@@ -259,6 +259,11 @@
       html += '<span class="hcfb-sub">' + def.sub + '</span>';
       html += '</button>';
     });
+    return html;
+  }
+  function renderFallback(container, cardsData, onSelect) {
+    var html = '<div class="home-scene-carousel-fallback">';
+    html += buildFallbackButtons(cardsData);
     html += '</div>';
     container.innerHTML = html;
     container.querySelectorAll('[data-scene-id]').forEach(function (btn) {

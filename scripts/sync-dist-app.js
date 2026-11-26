@@ -110,6 +110,25 @@ if (fs.existsSync(nativeIdx)) {
   files++;
 }
 
+/* app.asar 优先级高于 app/ 目录：如果只更新 app/ 却留着旧 asar，Electron 会继续加载
+ * 旧代码，症状就是「改了完全没反应」（与 build-freshness 想抓的是同一类坑）。
+ * 这里在同步完成后主动清掉残留 asar；需要 asar 形态时重跑 scripts/pack-app-asar.js。 */
+try {
+  const asarPath = path.join(path.dirname(app), 'app.asar');
+  /* 验证 asar 期间如果反复跑本脚本，会把刚打好的包清掉（用户看到的就是「怎么还是散的」）。
+   * 设 MINERADIO_SYNC_KEEP_ASAR=1 可保留，但要注意此时 app/ 比 asar 新，Electron 仍读 asar。 */
+  if (fs.existsSync(asarPath) && process.env.MINERADIO_SYNC_KEEP_ASAR !== '1') {
+    fs.rmSync(asarPath, { force: true });
+    const unpacked = asarPath + '.unpacked';
+    if (fs.existsSync(unpacked)) fs.rmSync(unpacked, { recursive: true, force: true });
+    console.log('[sync-dist] removed stale app.asar (app/ 已更新，asar 会遮蔽它；需要 asar 请重跑 pack-app-asar)');
+  } else if (fs.existsSync(asarPath)) {
+    console.log('[sync-dist] kept app.asar by MINERADIO_SYNC_KEEP_ASAR=1 —— 注意它会遮蔽本次同步的新代码');
+  }
+} catch (err) {
+  console.warn('[sync-dist] failed to clear stale app.asar:', err && err.message || err);
+}
+
 console.log('synced', files, 'files ->', app);
 if (targetArg) {
   console.log('note: 这是额外目标；默认目标仍是 dist/Mineradio/resources/app');

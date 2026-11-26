@@ -32,7 +32,7 @@ var heartFxLastSolo = '';
 
 function heartFxReduceMotion() {
   try {
-    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    return prefersReducedMotionNow();
   } catch (_) {
     return false;
   }

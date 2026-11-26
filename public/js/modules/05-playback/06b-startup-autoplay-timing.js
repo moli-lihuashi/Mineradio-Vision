@@ -116,8 +116,65 @@ function getLyricTimingOffsetForSong(song) {
   var key = lyricTimingSongKey(song);
   return key && lyricTimingOffsetMap && lyricTimingOffsetMap[key] ? lyricTimingOffsetEntryValue(lyricTimingOffsetMap[key]) : 0;
 }
+
+/* === 全局歌词偏移（设置页「歌词 → 时间校准」）===
+ * 逐曲偏移解决的是「这一首的歌词本身错位」；全局偏移解决的是「所有歌都差半秒」
+ * 这种设备/音源延迟。两者相加后统一从 getActiveLyricTimingOffsetSeconds() 出去，
+ * 舞台歌词 / 经典歌词 / 桌面歌词 / 悬浮小组件 / Folia 读的都是同一个值。
+ * 注意：adjustCurrentLyricTimingOffset 写的是「逐曲」偏移，必须用逐曲值做基准，
+ * 不能用这个求和后的值，否则每按一次 ±0.1 都会把全局值累进逐曲记录里。 */
+var GLOBAL_LYRIC_OFFSET_STORE_KEY = 'mineradio:lyric-global-offset:v1';
+var GLOBAL_LYRIC_OFFSET_LIMIT = 3;
+var globalLyricTimingOffset = (function () {
+  try {
+    var raw = Number(localStorage.getItem(GLOBAL_LYRIC_OFFSET_STORE_KEY));
+    if (!isFinite(raw)) return 0;
+    return Math.max(-GLOBAL_LYRIC_OFFSET_LIMIT, Math.min(GLOBAL_LYRIC_OFFSET_LIMIT, raw));
+  } catch (_) { return 0; }
+})();
+function normalizeGlobalLyricTimingOffset(seconds) {
+  var v = Number(seconds);
+  if (!isFinite(v)) v = 0;
+  v = Math.round(v * 10) / 10;
+  return Math.max(-GLOBAL_LYRIC_OFFSET_LIMIT, Math.min(GLOBAL_LYRIC_OFFSET_LIMIT, v));
+}
+function getGlobalLyricTimingOffset() {
+  return globalLyricTimingOffset;
+}
+function formatGlobalLyricTimingOffset(offset) {
+  offset = normalizeGlobalLyricTimingOffset(offset);
+  if (!offset) return '0.0s';
+  return (offset > 0 ? '+' : '-') + Math.abs(offset).toFixed(1) + 's';
+}
+function applyGlobalLyricTimingOffsetUi() {
+  var range = document.getElementById('global-lyric-offset-range');
+  if (range && String(range.value) !== String(globalLyricTimingOffset)) range.value = String(globalLyricTimingOffset);
+  var out = document.getElementById('global-lyric-offset-value');
+  if (out) out.textContent = formatGlobalLyricTimingOffset(globalLyricTimingOffset);
+  var reset = document.getElementById('global-lyric-offset-reset');
+  if (reset) reset.disabled = !globalLyricTimingOffset;
+  if (typeof MineradioPrismalChrome !== 'undefined' && MineradioPrismalChrome && typeof MineradioPrismalChrome.syncFills === 'function') {
+    try { MineradioPrismalChrome.syncFills(); } catch (_) { }
+  }
+}
+function setGlobalLyricTimingOffset(seconds, opts) {
+  globalLyricTimingOffset = normalizeGlobalLyricTimingOffset(seconds);
+  try { localStorage.setItem(GLOBAL_LYRIC_OFFSET_STORE_KEY, String(globalLyricTimingOffset)); } catch (_) { }
+  applyGlobalLyricTimingOffsetUi();
+  /* 舞台歌词每帧都会重新取时间，桌面歌词与小组件也有自己的 tick，
+   * 所以这里只要把「值」改掉就够了；不需要重建歌轨。 */
+  if (!(opts && opts.silent) && typeof showToast === 'function') {
+    showToast(globalLyricTimingOffset
+      ? ('全局歌词偏移 ' + formatGlobalLyricTimingOffset(globalLyricTimingOffset))
+      : '全局歌词偏移已归零');
+  }
+  return globalLyricTimingOffset;
+}
+function resetGlobalLyricTimingOffset() {
+  return setGlobalLyricTimingOffset(0);
+}
 function getActiveLyricTimingOffsetSeconds() {
-  return getLyricTimingOffsetForSong(lyricTimingCurrentSong());
+  return getLyricTimingOffsetForSong(lyricTimingCurrentSong()) + globalLyricTimingOffset;
 }
 function getAdjustedLyricPlaybackTime(rawTime) {
   var t = Number(rawTime);
@@ -214,7 +271,8 @@ function setCurrentLyricTimingOffset(offset, opts) {
   return offset;
 }
 function adjustCurrentLyricTimingOffset(delta) {
-  var next = getActiveLyricTimingOffsetSeconds() + (Number(delta) || 0);
+  // 基准必须是「逐曲」偏移：全局偏移是另一层，不能累进逐曲记录
+  var next = getLyricTimingOffsetForSong(lyricTimingCurrentSong()) + (Number(delta) || 0);
   return setCurrentLyricTimingOffset(next);
 }
 function handleLyricTimingOffsetClick(e) {

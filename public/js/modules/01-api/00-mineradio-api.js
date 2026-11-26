@@ -106,6 +106,33 @@
     img.src = MINERADIO_BLANK_IMAGE;
   }
 
+  /* 失败图片守卫：Chromium 会给加载失败的 <img> 画一块白色占位 + 哭脸图标。
+   * Home 的玻璃大量使用 backdrop-filter，这层白会被糊开成整卡发白；壁纸大图
+   * 失败时尤其明显（2026-11-25 实测：壁纸图坏 src + glass 直接把 hero 变白）。
+   * 这里统一在捕获阶段把失败图片隐藏，下次 load 成功再恢复显示，保证失败态
+   * 永远不会以白色破图的形式出现在界面上。 */
+  if (typeof document !== 'undefined' && !global.__mineradioImgFailGuard) {
+    global.__mineradioImgFailGuard = true;
+    document.addEventListener('error', function (event) {
+      var target = event && event.target;
+      if (!target || target.tagName !== 'IMG') return;
+      if (target.getAttribute('data-img-broken') !== '1') {
+        target.setAttribute('data-img-prev-vis', target.style.visibility || '');
+      }
+      target.style.visibility = 'hidden';
+      target.setAttribute('data-img-broken', '1');
+    }, true);
+    document.addEventListener('load', function (event) {
+      var target = event && event.target;
+      if (!target || target.tagName !== 'IMG') return;
+      if (target.getAttribute('data-img-broken') !== '1') return;
+      var prev = target.getAttribute('data-img-prev-vis');
+      target.removeAttribute('data-img-broken');
+      target.removeAttribute('data-img-prev-vis');
+      target.style.visibility = prev || '';
+    }, true);
+  }
+
   global.Mineradio = global.Mineradio || {};
   async function resolveApiToken() {
     if (global.desktopWindow && global.desktopWindow.fetchApiToken) {

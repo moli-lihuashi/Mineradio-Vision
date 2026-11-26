@@ -2696,3 +2696,20 @@ body.folia-world-active #interlude-wave-canvas {
   color: rgba(235, 235, 245, .62);
   background: rgba(120, 120, 128, .18);
 }
+
+/* ---------- 未开启世界时的样式网格（2026-11-23） ----------
+   列表常显是为了让用户先看到有哪些样式；未开启时置灰 + 屏蔽点击，
+   避免「点了没反应」的错觉。开启后 refreshFoliaWorldUi 会摘掉 is-locked。 */
+#fx-folia-mode-grid.is-locked,
+#fx-folia-bg-grid.is-locked{
+  opacity:.36;
+  filter:grayscale(.9);
+  pointer-events:none;
+  user-select:none;
+}
+/* 置灰态下连 hover 高亮也一并压掉，别让人以为可点 */
+#fx-folia-mode-grid.is-locked .fx-folia-mode-card:hover,
+#fx-folia-bg-grid.is-locked > *:hover{
+  transform:none;
+  box-shadow:none;
+}

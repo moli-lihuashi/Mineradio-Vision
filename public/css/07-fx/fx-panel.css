@@ -472,3 +472,9 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 .pet-skin-action:hover{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#fff}
 .pet-skin-note{font-size:10.5px;line-height:1.45;color:rgba(255,255,255,.42)}
 .pet-skin-empty{grid-column:1/-1;font-size:11px;color:rgba(255,255,255,.4);padding:6px 2px}
+
+/* ---------- 液态玻璃参数块（2026-11-25 从皮肤面板搬回） ---------- */
+/* 参数沿用 .fx-slider，这里只管这一块的说明文字排版（预览已按用户要求去掉）。 */
+.fx-liquidglass-block{margin:6px 0 10px}
+.fx-glass-scope-note{font-size:10.5px;line-height:1.65;color:rgba(255,255,255,.38);margin:2px 0 10px}
+

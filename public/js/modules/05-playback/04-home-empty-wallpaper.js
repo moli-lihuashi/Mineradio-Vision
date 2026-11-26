@@ -141,6 +141,64 @@ function clearHomeUiState() {
   document.body.classList.remove('home-preset-enter');
   if (typeof stopHomeWeatherFx === 'function') stopHomeWeatherFx();
 }
+
+/* ===== Home 入场动效 / 冷却反馈 =====
+   入场：给 #empty-home 挂 home-enter-anim，卡片与天气区按 CSS 分段飞入（420ms，
+   对齐 400ms 冷却窗口），动画结束后摘掉 class，避免长期占用合成层。
+   冷却：重复点击不切换 Home，只让卡片（Home 可见时）或 Home 按钮轻回弹一次，
+   把「被冷却忽略」变成可见反馈，而不是无响应。 */
+var homeMotionTimer = 0;
+var homeLastEnterAt = 0;
+function playHomeEnterAnimation() {
+  var el = document.getElementById('empty-home');
+  if (!el) return;
+  var now = performance.now();
+  /* 动效预算：1.2s 内重复进出 Home 时不放入场动画。
+   * 快速来回切换本身就是 GPU 高压场景，再叠加玻璃卡片的合成动画会把 WE 镜像
+   * 的 WebGL 上下文再次逼丢（实测 4 轮扫描出现 17 次兜底切换）。正常间隔进入
+   * 仍有完整入场动效；连点时直接切，既稳又不拖慢响应。 */
+  var rapid = homeLastEnterAt && (now - homeLastEnterAt < 1200);
+  homeLastEnterAt = now;
+  el.classList.remove('home-cooldown-nudge');
+  el.classList.remove('home-enter-anim');
+  if (rapid) return;
+  void el.offsetWidth; // 强制重排以重播动画
+  el.classList.add('home-enter-anim');
+  clearTimeout(homeMotionTimer);
+  homeMotionTimer = setTimeout(function () {
+    el.classList.remove('home-enter-anim');
+  }, 760);
+}
+function homeCooldownNudge() {
+  var now = performance.now();
+  var home = document.getElementById('empty-home');
+  var btn = document.getElementById('home-btn');
+  var rapid = homeLastEnterAt && (now - homeLastEnterAt < 1200);
+  // 快速连点期间只高亮 Home 按钮：给 5 张玻璃卡改边框/阴影会触发整组重绘，
+  // 反而把 GPU 压力加回去；单个按钮重绘代价小得多。
+  if (!rapid && document.body.classList.contains('empty-home-active') && home) {
+    if (homeCooldownNudge._cardAt && now - homeCooldownNudge._cardAt < 260) return;
+    homeCooldownNudge._cardAt = now;
+    home.classList.remove('home-cooldown-nudge');
+    void home.offsetWidth;
+    home.classList.add('home-cooldown-nudge');
+    clearTimeout(homeCooldownNudge._cardTimer);
+    homeCooldownNudge._cardTimer = setTimeout(function () {
+      home.classList.remove('home-cooldown-nudge');
+    }, 340);
+    return;
+  }
+  if (!btn) return;
+  if (homeCooldownNudge._btnAt && now - homeCooldownNudge._btnAt < 260) return;
+  homeCooldownNudge._btnAt = now;
+  btn.classList.remove('home-btn-cooldown-pulse');
+  void btn.offsetWidth;
+  btn.classList.add('home-btn-cooldown-pulse');
+  clearTimeout(homeCooldownNudge._btnTimer);
+  homeCooldownNudge._btnTimer = setTimeout(function () {
+    btn.classList.remove('home-btn-cooldown-pulse');
+  }, 340);
+}
 function hasActivePresetOverlay() {
   // 只有音域回响（sonic-topography）是全屏覆盖层，需要为 HOME 隐藏。
   // 经典预设是播放器主界面，不是覆盖层：HOME 显示时它应作为背景层保留在下面

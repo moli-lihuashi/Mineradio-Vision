@@ -1,5 +1,24 @@
-/* ===== 桌面集成: 托盘 closeBehavior + 缓存目录 (调用 desktopWindow IPC) ===== */
-var desktopCloseBehavior = 'exit';
+/* ===== 桌面集成: 关闭/最小化行为 + 缓存目录 (调用 desktopWindow IPC) ===== */
+/* 主进程只把这两个值放在内存里，重启就回到默认；真正的持久化在 localStorage，
+ * 启动时由 applyStoredClosePrefs() 推给主进程。 */
+var CLOSE_BEHAVIOR_STORE_KEY = 'mineradio:close-behavior:v1';
+var CLOSE_ACTION_STORE_KEY = 'mineradio:close-action:v1';
+var UI_ZOOM_STORE_KEY = 'mineradio:ui-zoom:v1';
+var UI_ZOOM_MIN = 0.9;
+var UI_ZOOM_MAX = 1.2;
+function readClosePref(key) {
+  try { return localStorage.getItem(key) === 'tray' ? 'tray' : 'exit'; } catch (_) { return 'exit'; }
+}
+var desktopCloseBehavior = readClosePref(CLOSE_BEHAVIOR_STORE_KEY);
+var desktopCloseAction = readClosePref(CLOSE_ACTION_STORE_KEY);
+function readUiZoomPref() {
+  try {
+    var v = Number(localStorage.getItem(UI_ZOOM_STORE_KEY));
+    if (!isFinite(v) || v <= 0) return 1;
+    return Math.max(UI_ZOOM_MIN, Math.min(UI_ZOOM_MAX, Math.round(v * 100) / 100));
+  } catch (_) { return 1; }
+}
+var desktopUiZoom = readUiZoomPref();
 function formatBytes(bytes) {
   if (!bytes || bytes < 1024) return (bytes || 0) + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -19,11 +38,83 @@ function setCloseBehaviorMode(mode) {
   }
   desktopWindow.setCloseBehavior(next).then(function(res) {
     desktopCloseBehavior = (res && res.behavior) || next;
+    try { localStorage.setItem(CLOSE_BEHAVIOR_STORE_KEY, desktopCloseBehavior); } catch (_) { }
     updateCloseBehaviorControls();
     showToast(desktopCloseBehavior === 'tray' ? '最小化行为: 后台托盘' : '最小化行为: 任务栏');
   }).catch(function() {
     showToast('设置最小化行为失败');
   });
+}
+function updateCloseActionControls() {
+  document.querySelectorAll('#close-action-seg [data-close-action]').forEach(function (btn) {
+    var active = btn.getAttribute('data-close-action') === desktopCloseAction;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+function setCloseActionMode(mode) {
+  var next = (mode === 'tray') ? 'tray' : 'exit';
+  if (!window.desktopWindow || typeof desktopWindow.setCloseAction !== 'function') {
+    showToast('桌面端功能仅在桌面版可用');
+    return;
+  }
+  desktopWindow.setCloseAction(next).then(function (res) {
+    desktopCloseAction = (res && res.action) || next;
+    try { localStorage.setItem(CLOSE_ACTION_STORE_KEY, desktopCloseAction); } catch (_) { }
+    updateCloseActionControls();
+    showToast(desktopCloseAction === 'tray' ? '关闭按钮: 隐藏到托盘' : '关闭按钮: 完全退出');
+  }).catch(function () {
+    showToast('设置关闭按钮行为失败');
+  });
+}
+function updateUiZoomControls() {
+  document.querySelectorAll('#ui-zoom-seg [data-ui-zoom]').forEach(function (btn) {
+    var value = Number(btn.getAttribute('data-ui-zoom'));
+    var active = Math.abs(value - desktopUiZoom) < 0.001;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+function setUiZoomMode(value) {
+  var next = Number(value);
+  if (!isFinite(next)) next = 1;
+  next = Math.max(UI_ZOOM_MIN, Math.min(UI_ZOOM_MAX, Math.round(next * 100) / 100));
+  if (!window.desktopWindow || typeof desktopWindow.setUiZoom !== 'function') {
+    showToast('桌面端功能仅在桌面版可用');
+    return;
+  }
+  desktopWindow.setUiZoom(next).then(function (res) {
+    desktopUiZoom = (res && res.factor) || next;
+    try { localStorage.setItem(UI_ZOOM_STORE_KEY, String(desktopUiZoom)); } catch (_) { }
+    updateUiZoomControls();
+    showToast('界面缩放: ' + Math.round(desktopUiZoom * 100) + '%');
+  }).catch(function () {
+    showToast('设置界面缩放失败');
+  });
+}
+/* 备注：控制台里 Ctrl+滚轮 会临时改掉 webContents 的 zoom，但那里的值不会被我们读取；
+ * 重新打开设置页或重启后会回到这里存的值，不会被意外值写坏。 */
+function applyStoredUiZoom() {
+  updateUiZoomControls();
+  if (!window.desktopWindow || typeof desktopWindow.setUiZoom !== 'function') return;
+  try {
+    Promise.resolve(desktopWindow.setUiZoom(desktopUiZoom)).catch(function () { });
+  } catch (_) { }
+}
+
+/* 启动时把两个偏好推给主进程（主进程不落盘，不推就会退回默认值） */
+function applyStoredClosePrefs() {
+  updateCloseBehaviorControls();
+  updateCloseActionControls();
+  if (!window.desktopWindow) return;
+  try {
+    if (typeof desktopWindow.setCloseBehavior === 'function') {
+      Promise.resolve(desktopWindow.setCloseBehavior(desktopCloseBehavior)).catch(function () { });
+    }
+    if (typeof desktopWindow.setCloseAction === 'function') {
+      Promise.resolve(desktopWindow.setCloseAction(desktopCloseAction)).catch(function () { });
+    }
+  } catch (_) { }
 }
 function renderCacheSettings(snapshot) {
   var total = document.getElementById('cache-storage-total');
@@ -119,18 +210,19 @@ function chooseCacheDirectory() {
   });
 }
 function initDesktopIntegrationControls() {
-  // 托盘 closeBehavior: 从主进程读取当前值
-  if (window.desktopWindow && typeof desktopWindow.getCloseBehavior === 'function') {
-    desktopWindow.getCloseBehavior().then(function(res) {
-      desktopCloseBehavior = (res && res.behavior) || 'exit';
-      updateCloseBehaviorControls();
-    }).catch(function() {
-      updateCloseBehaviorControls();
-    });
+  /* 以 localStorage 为准推给主进程：主进程本来就不落盘，
+   * 以前只看 getCloseBehavior() 等于「每次重启都回到默认值」。 */
+  if (window.desktopWindow && typeof desktopWindow.setCloseBehavior === 'function') {
+    applyStoredClosePrefs();
+    applyStoredUiZoom();
   } else {
     // 非桌面端: 隐藏桌面集成控件
     var seg = document.getElementById('close-behavior-seg');
     if (seg) seg.style.display = 'none';
+    var actionSeg = document.getElementById('close-action-seg');
+    if (actionSeg) actionSeg.style.display = 'none';
+    var zoomSeg = document.getElementById('ui-zoom-seg');
+    if (zoomSeg) zoomSeg.style.display = 'none';
     var cacheRow = document.querySelector('.fx-cache-row');
     if (cacheRow) cacheRow.style.display = 'none';
   }

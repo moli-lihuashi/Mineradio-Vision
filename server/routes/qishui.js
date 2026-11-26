@@ -179,12 +179,15 @@ module.exports = function register(ctx) {
       } catch (err) {
         console.error('[QishuiLoginToken]', err);
         const invalid = err && (err.code === 'INVALID_QISHUI_TOKEN' || err.message === 'INVALID_QISHUI_TOKEN');
+        const storageUnavailable = err && err.code === 'QISHUI_TOKEN_STORAGE_UNAVAILABLE';
         sendJSON(res, {
           provider: 'qishui',
           configured: getQishuiStatus(ctx.qishuiCookie).configured,
           loggedIn: getQishuiStatus(ctx.qishuiCookie).loggedIn,
           error: invalid ? 'INVALID_QISHUI_TOKEN' : err.message,
-          message: invalid ? '汽水 OpenAPI token 无效或太短' : err.message,
+          message: invalid
+            ? '汽水 OpenAPI token 无效或太短'
+            : (storageUnavailable ? '系统加密不可用，token 未写入磁盘' : err.message),
         }, invalid ? 400 : 500);
       }
       return;

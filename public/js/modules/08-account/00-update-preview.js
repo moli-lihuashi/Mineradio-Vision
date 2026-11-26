@@ -28,8 +28,56 @@ function updateProgressDetailText() {
   if (updatePreviewState.etaSeconds > 0 && updatePreviewState.etaSeconds < 3600) parts.push('约 ' + updatePreviewState.etaSeconds + ' 秒');
   return parts.join(' · ');
 }
+/* ===== 更新偏好（设置 → 关于 → 更新）=====
+ * 启动检查默认开（与改动前行为一致），自动下载默认关。
+ * 自动下载只负责把包取到本地，安装仍要用户点「立即更新」，
+ * 所以不存在「偷偷装东西」的风险。 */
+var UPDATE_CHECK_ON_START_KEY = 'mineradio:update-check-on-start:v1';
+var UPDATE_AUTO_DOWNLOAD_KEY = 'mineradio:update-auto-download:v1';
+function updateCheckOnStartEnabled() {
+  try { return localStorage.getItem(UPDATE_CHECK_ON_START_KEY) !== 'false'; } catch (_) { return true; }
+}
+function updateAutoDownloadEnabled() {
+  try { return localStorage.getItem(UPDATE_AUTO_DOWNLOAD_KEY) === 'true'; } catch (_) { return false; }
+}
+function applyUpdatePrefsUi() {
+  var check = document.getElementById('t-updateCheckOnStart');
+  if (check) {
+    check.classList.toggle('on', updateCheckOnStartEnabled());
+    var d1 = check.querySelector('.dot');
+    if (d1) d1.classList.toggle('on', updateCheckOnStartEnabled());
+  }
+  var auto = document.getElementById('t-updateAutoDownload');
+  if (auto) {
+    auto.classList.toggle('on', updateAutoDownloadEnabled());
+    var d2 = auto.querySelector('.dot');
+    if (d2) d2.classList.toggle('on', updateAutoDownloadEnabled());
+  }
+}
+function toggleUpdateCheckOnStart() {
+  var next = !updateCheckOnStartEnabled();
+  try { localStorage.setItem(UPDATE_CHECK_ON_START_KEY, String(next)); } catch (_) { }
+  applyUpdatePrefsUi();
+  showToast(next ? '启动时会检查更新' : '启动时不再检查更新');
+  // 刚打开就补一次：否则用户要等下一次启动才看到有没有新版本
+  if (next && typeof checkLatestUpdate === 'function') checkLatestUpdate();
+}
+function toggleUpdateAutoDownload() {
+  var next = !updateAutoDownloadEnabled();
+  try { localStorage.setItem(UPDATE_AUTO_DOWNLOAD_KEY, String(next)); } catch (_) { }
+  applyUpdatePrefsUi();
+  showToast(next ? '发现新版本后会自动下载安装包' : '不再自动下载更新');
+}
+
 function initUpdatePreview() {
   renderUpdatePreviewPanel();
+  if (!updateCheckOnStartEnabled()) {
+    /* 关掉启动检查时连「更新」入口都不该被点亮：setUpdatePreviewVisible(true)
+     * 会加 .available 类，之后再靠 applyLatestUpdateInfo 收回来，中间会闪一下。 */
+    setUpdatePreviewVisible(false);
+    updatePreviewState.skippedStartupCheck = true;
+    return;
+  }
   setUpdatePreviewVisible(true);
   checkLatestUpdate();
   setTimeout(startUpdateIconBreathing, 760);
@@ -54,10 +102,16 @@ function setUpdatePreviewVisible(visible) {
 }
 
 async function checkLatestUpdate() {
+  if (updatePreviewState.checking) return;
+  updatePreviewState.checking = true;
   try {
     var data = await apiJson('/api/update/latest?t=' + Date.now());
+    updatePreviewState.checking = false;
+    updatePreviewState.checked = true;
     applyLatestUpdateInfo(data);
   } catch (e) {
+    updatePreviewState.checking = false;
+    updatePreviewState.checked = true;
     updatePreviewState.preview = true;
     updatePreviewState.updateAvailable = false;
     updatePreviewState.status = 'check-failed';
@@ -92,6 +146,24 @@ function applyLatestUpdateInfo(data) {
   }
   renderUpdatePreviewPanel();
   setUpdatePreviewVisible(updatePreviewState.updateAvailable || updatePreviewState.preview);
+  maybeAutoDownloadUpdate();
+}
+
+/* 自动下载：只在「有新版本 + 拿到可下载地址 + 这个版本本轮还没自动下过」时触发。
+ * 用版本号做去重键，避免每次定时检查都重启一次下载任务。 */
+function maybeAutoDownloadUpdate() {
+  if (!updateAutoDownloadEnabled()) return;
+  if (!updatePreviewState.updateAvailable || updatePreviewState.preview) return;
+  if (updatePreviewState.status === 'downloading' || updatePreviewState.status === 'opening') return;
+  var version = String(updatePreviewState.version || '');
+  if (!version) return;
+  if (updatePreviewState.autoDownloadedVersion === version) return;
+  var canPatch = !!(updatePreviewState.patchAvailable && updatePreviewState.patchUrl);
+  if (!canPatch && !updatePreviewState.downloadUrl) return;
+  updatePreviewState.autoDownloadedVersion = version;
+  showToast('发现新版本 v' + version + '，正在后台下载');
+  if (canPatch) startRealUpdatePatch();
+  else startRealUpdateDownload();
 }
 
 function startUpdateIconBreathing() {
@@ -200,6 +272,9 @@ function openUpdatePanel() {
   var entry = document.getElementById('update-entry');
   if (!mask) return;
   renderUpdatePreviewPanel();
+  /* 关掉「启动时检查更新」后，这里是唯一的手动入口：没检查过就先查一次，
+   * 否则面板会停在 idle 的旧状态上，看起来像「检查按钮没反应」。 */
+  if (!updatePreviewState.checked) checkLatestUpdate();
   if (entry && window.gsap) {
     window.gsap.fromTo(entry, { scale: 0.93 }, { scale: 1, duration: 0.42, ease: 'back.out(1.7)', overwrite: 'auto' });
   }

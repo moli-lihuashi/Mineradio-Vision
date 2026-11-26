@@ -171,13 +171,22 @@ function homePetCycleCharacter() {
 
 function homePetResize() {
   if (!homePet.canvas) return;
-  var rect = homePet.canvas.getBoundingClientRect();
-  var cssW = Math.round(rect.width);
-  var cssH = Math.round(rect.height);
-  if (cssW < 60 || cssH < 40 || cssW > 4000 || cssH > 2000) return;
+  /* 尺寸来源改成「卡片」而不是画布自己：画布尺寸是这一函数写进去的，
+   * 读自己的 rect 会形成反馈（尤其是配合下面的等比回写）。 */
+  var host = homePet.canvas.parentElement || homePet.canvas;
+  var hostRect = host.getBoundingClientRect();
+  var availW = hostRect.width - 12;   // 与 CSS 里的左右各 6px 对应
+  var cardH = hostRect.height;
+  if (availW < 40 || cardH < 80 || availW > 4000 || cardH > 2000) return;
   var dpr = Math.min(2, window.devicePixelRatio || 1);
-  var px = Math.max(4, Math.min(12, Math.floor(Math.min(cssW * dpr / 16, cssH * dpr / 16))));
-  var cols = Math.max(16, Math.floor(cssW * dpr / px));
+  /* px 是「每个精灵像素占几个设备像素」，画布纵向恰好 16 格 → 宠物高 = px*16/dpr。
+   * 按卡片高度取比例（约 62%，2026-11-25 按用户要求在此前基础上放大 20%），
+   * 而不是「塞满剩余空间」：紧凑卡可用高度只有 40，按剩余空间取整只剩 32，宠物看着太小。
+   * 再用「不超过卡片高度 - 12」封顶，保证不会顶出卡片。 */
+  var px = Math.max(2, Math.min(12, Math.round(cardH * dpr * 0.039)));
+  px = Math.min(px, Math.floor((cardH - 12) * dpr / 16));
+  px = Math.max(2, px);
+  var cols = Math.max(16, Math.floor(availW * dpr / px));
   homePet.px = px;
   homePet.cols = cols;
   homePet.offX = Math.floor((cols - 16) / 2);
@@ -186,6 +195,16 @@ function homePetResize() {
   if (homePet.canvas.width !== w || homePet.canvas.height !== h) {
     homePet.canvas.width = w;
     homePet.canvas.height = h;
+  }
+  /* CSS 尺寸严格等于 backing store / dpr：canvas 永远按 backing 尺寸拉伸显示，
+   * 只要两者不成整数比例，精灵就会被非等比缩放（宠物变扁的根因）。 */
+  var cssW = w / dpr;
+  var cssH = h / dpr;
+  if (homePet._cssW !== cssW || homePet._cssH !== cssH) {
+    homePet._cssW = cssW;
+    homePet._cssH = cssH;
+    homePet.canvas.style.width = cssW + 'px';
+    homePet.canvas.style.height = cssH + 'px';
   }
   if (homePet.ctx) homePet.ctx.imageSmoothingEnabled = false;
 }

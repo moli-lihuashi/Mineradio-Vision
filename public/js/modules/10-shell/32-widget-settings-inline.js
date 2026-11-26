@@ -54,6 +54,33 @@
     } catch (_) { }
   }
 
+  /* 主题：iframe 是独立文档，拿不到父窗的 data-theme 变化。
+   * 它自己会在加载时读一次初值（widget-embed-bridge.js），这里负责「打开面板之后再切主题」
+   * 的那条路：<html data-theme> 一变就把新值推过去，内嵌页不用重载。 */
+  function currentTheme() {
+    try {
+      return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    } catch (_) { return 'dark'; }
+  }
+
+  function pushThemeToFrame() {
+    if (!frameReady) return;
+    var frame = el('skin-widget-frame');
+    if (!frame || !frame.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage({ __foliaEmbed: 1, kind: 'theme', theme: currentTheme() }, '*');
+    } catch (_) { }
+  }
+
+  function watchThemeChanges() {
+    if (typeof MutationObserver !== 'function') return;
+    try {
+      new MutationObserver(pushThemeToFrame).observe(document.documentElement, {
+        attributes: true, attributeFilter: ['data-theme']
+      });
+    } catch (_) { }
+  }
+
   /* 向主进程要一次最新快照：顺带保证 widget 窗口（隐藏）已经起来。
      它是唯一持有配置的地方（存在 widget 窗口的 localStorage 里）。 */
   function requestSnapshot() {
@@ -127,6 +154,7 @@
 
       if (data.kind === 'ready') {
         frameReady = true;
+        pushThemeToFrame();
         requestSnapshot();
         return;
       }
@@ -157,6 +185,8 @@
 
   global.mountInlineWidgetFrame = mountInlineWidgetFrame;
   global.requestInlineWidgetSnapshot = requestSnapshot;
+
+  watchThemeChanges();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', bindInlineWidgetSettings);

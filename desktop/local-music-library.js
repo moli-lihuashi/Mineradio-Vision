@@ -311,6 +311,12 @@ function readReplayGainTrackDb(metadata) {
   return gain;
 }
 
+/* 同目录歌词文件：按「逐字优先」的顺序取一个。
+ * 2026-11-23 起不再只认 .lrc —— TTML（AMLL 标准）、WebVTT、YRC 都能直接解析，
+ * 同一首歌同时存在几种时取信息量最大的那个。KRC 不在此列：它是 krc1 加密格式，
+ * 要到 Node 侧解密后才有明文，当前直接读会得到乱码，所以不参与扫描。 */
+const SIDECAR_LYRIC_EXTS = ['.ttml', '.vtt', '.yrc', '.lrc'];
+
 async function buildLrcSidecarIndex(entries) {
   const directories = Array.from(new Set(entries.map((entry) => path.dirname(entry.path))));
   const maps = new Map();
@@ -319,8 +325,13 @@ async function buildLrcSidecarIndex(entries) {
     try {
       const names = await fs.promises.readdir(directory);
       for (const name of names) {
-        if (path.extname(name).toLowerCase() !== '.lrc') continue;
-        lookup.set(path.basename(name, path.extname(name)).toLowerCase(), path.join(directory, name));
+        const ext = path.extname(name).toLowerCase();
+        const rank = SIDECAR_LYRIC_EXTS.indexOf(ext);
+        if (rank < 0) continue;
+        const base = path.basename(name, ext).toLowerCase();
+        const prev = lookup.get(base);
+        if (prev && prev.rank <= rank) continue;
+        lookup.set(base, { path: path.join(directory, name), rank: rank, ext: ext });
       }
     } catch (_) {}
     maps.set(normalizedPathIdentity(directory), lookup);
@@ -523,7 +534,8 @@ class LocalMusicLibrary {
       }
       : await this.stageCover(id, picture, previous);
     const directoryLookup = sidecarDirectories.get(normalizedPathIdentity(path.dirname(entry.path)));
-    const sidecarPath = directoryLookup && directoryLookup.get(fallbackTitle.toLowerCase());
+    const sidecarEntry = directoryLookup && directoryLookup.get(fallbackTitle.toLowerCase());
+    const sidecarPath = sidecarEntry ? sidecarEntry.path : '';
     let lyric = '';
     let lyricSource = '';
     if (sidecarPath) {

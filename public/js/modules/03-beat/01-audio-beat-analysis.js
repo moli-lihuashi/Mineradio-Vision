@@ -28,6 +28,268 @@ var BEAT_ANALYSIS_TEMPO_RATE = 22050;       // 分段路径下 mono 的目标采
 // 没有它，"时长未知 + 130MB 文件"会绕过第一道闸，整轨下载+解码照样把渲染进程顶爆。
 var BEAT_ANALYSIS_DURATION_PROBE_MIN_BYTES = 24 * 1024 * 1024;
 
+function downsampleMono(buf, targetRate) {
+  var srcRate = buf.sampleRate;
+  var channels = buf.numberOfChannels || 1;
+  var chData = [];
+  for (var c = 0; c < channels; c++) chData.push(buf.getChannelData(c));
+  if (targetRate >= srcRate) {
+    var monoFull = new Float32Array(buf.length);
+    var scaleFull = 1 / channels;
+    for (var i = 0; i < buf.length; i++) {
+      var acc = 0;
+      for (var ci = 0; ci < channels; ci++) acc += chData[ci][i];
+      monoFull[i] = acc * scaleFull;
+    }
+    return { pcm: monoFull, rate: srcRate };
+  }
+  var decim = Math.max(1, Math.round(srcRate / targetRate));
+  var outLen = Math.floor(buf.length / decim);
+  if (outLen < 1) return null;
+  var out = new Float32Array(outLen);
+  var scale = 1 / (decim * channels);
+  for (var o = 0; o < outLen; o++) {
+    var base = o * decim;
+    var sum = 0;
+    for (var k = 0; k < decim; k++) {
+      var pos = base + k;
+      for (var cj = 0; cj < channels; cj++) sum += chData[cj][pos];
+    }
+    out[o] = sum * scale;
+  }
+  return { pcm: out, rate: srcRate / decim };
+}
+
+function concatFloat32(parts) {
+  if (!parts || !parts.length) return null;
+  if (parts.length === 1) return parts[0];
+  var total = 0;
+  for (var i = 0; i < parts.length; i++) total += parts[i].length;
+  var out = new Float32Array(total);
+  var at = 0;
+  for (var j = 0; j < parts.length; j++) { out.set(parts[j], at); at += parts[j].length; parts[j] = null; }
+  return out;
+}
+
+// 长音轨分段解码：按 HTTP Range 逐段拉取、逐段 decodeAudioData，只保留 10ms 帧能量包络
+// 与两份降采样 PCM（tempo 22.05k / 音高画像 11.025k）。任意时刻只有一段 PCM 在场。
+// 2026-11-25 从 analyzeAudioBeats 的闭包里外提；函数体逐字未改，外部依赖全部经 deps 注入。
+// 返回 null 表示这条路走不通（服务端不支持 Range / 解不出 / 时长对不上），调用方回退整轨路径。
+async function decodeBeatsInputBySegments(audioUrl, plan, token, options, deps) {
+  var showBeatChip = deps.showBeatChip;
+  var hideBeatChip = deps.hideBeatChip;
+  var beatMapToken = deps.beatMapToken;
+  var DecodeCtx = deps.DecodeCtx;
+  var renderBandEnergyOn = deps.renderBandEnergyOn;
+  var yieldToIdle = deps.yieldToIdle;
+  var beatAnalysisYieldMs = deps.beatAnalysisYieldMs;
+  if (options.prefetch) showBeatChip('预热长音频节奏（分段）…');
+  else showBeatChip('正在分析长音频节奏（分段）…');
+
+  var bands = [[38, 155], [130, 420], [420, 2600], [1800, 9000]];
+  var envParts = [null, null, null, null];
+  var monoParts = [];
+  var profileParts = [];
+  var monoRate = 0;
+  var profileRate = 0;
+  var sampleRate = 0;
+  var coveredSec = 0;       // 时间轴上已经"吃掉"的秒数（按实际解码出来的时长推进）
+  var segments = 0;
+  var guard = 0;
+  var maxSegments = Math.ceil(plan.totalSec / BEAT_ANALYSIS_SEGMENT_SEC) + 4;
+
+  while (coveredSec < plan.totalSec - 1.0 && guard < maxSegments) {
+    guard++;
+    if (token !== beatMapToken) { hideBeatChip(); return null; }
+    var t0 = coveredSec;
+    var byteStart = Math.max(0, Math.floor(t0 * plan.bytesPerSec) - (segments === 0 ? 0 : BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES));
+    var byteEnd = Math.min(plan.contentLength - 1,
+      Math.ceil((t0 + BEAT_ANALYSIS_SEGMENT_SEC) * plan.bytesPerSec) + BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES);
+    if (byteEnd <= byteStart) break;
+
+    var segResp;
+    try {
+      segResp = await fetch(audioUrl, { headers: { Range: 'bytes=' + byteStart + '-' + byteEnd } });
+    } catch (_) { return null; }
+    // 服务端不支持 Range 时会给 200 + 整个 body：那正是要避免的整块下载，直接放弃分段
+    if (!segResp || segResp.status !== 206) { hideBeatChip(); return null; }
+    var segAb;
+    try { segAb = await segResp.arrayBuffer(); } catch (_) { return null; }
+    if (!segAb || !segAb.byteLength) { return null; }
+    if (token !== beatMapToken) { hideBeatChip(); return null; }
+
+    var segDc = new DecodeCtx();
+    var segBuf = await new Promise(function(resolve, reject){
+      segDc.decodeAudioData(segAb, resolve, reject);
+    }).catch(function(e){ console.warn('[beat] 分段解码失败:', e && e.message || e); return null; });
+    segAb = null;
+    try { segDc.close && segDc.close(); } catch (_) {}
+    if (!segBuf || !segBuf.length || !segBuf.sampleRate) { return null; }
+    if (token !== beatMapToken) { hideBeatChip(); return null; }
+    if (sampleRate === 0) sampleRate = segBuf.sampleRate;
+    else if (Math.abs(segBuf.sampleRate - sampleRate) > 1) { return null; }
+
+    var segWin = Math.floor(sampleRate * 0.010);
+    // 段首丢一小截：从任意字节偏移起解，解码器要先重同步，开头几十毫秒是垃圾。
+    // 不丢的话每个段边界都会出一个假 onset，直接被当成鼓点。
+    var trimFrames = segments === 0 ? 0 : Math.ceil(BEAT_ANALYSIS_SEGMENT_TRIM_SEC / 0.010);
+    for (var bi = 0; bi < bands.length; bi++) {
+      var part = await renderBandEnergyOn(segBuf, bands[bi][0], bands[bi][1]);
+      if (!part) { hideBeatChip(); return null; }
+      var kept = trimFrames > 0 && part.length > trimFrames + 8 ? part.subarray(trimFrames) : part;
+      if (!envParts[bi]) envParts[bi] = [];
+      envParts[bi].push(kept);
+      part = null;
+    }
+    // tempo 用的降采样 mono
+    var monoPart = downsampleMono(segBuf, BEAT_ANALYSIS_TEMPO_RATE);
+    if (!monoPart) { return null; }
+    monoParts.push(monoPart.pcm);
+    // 音高画像用的降采样 mono（~11.025kHz）
+    var profilePart = downsampleMono(segBuf, MUSICAL_PROFILE_SAMPLE_RATE);
+    if (!profilePart) { return null; }
+    profileParts.push(profilePart.pcm);
+    // downsampleMono 在「目标率高于源速率」时按源速率原样返回，所以实际速率
+    // 必须用它回给我的 rate，不能拿目标率常量硬顶 —— 顶了就是把错的采样率
+    // 传给 tempo worker / chroma FFT，拍速和音高映射全歪。
+    if (monoRate === 0) monoRate = monoPart.rate;
+    else if (Math.abs(monoPart.rate - monoRate) > 1) { return null; }
+    if (profileRate === 0) profileRate = profilePart.rate;
+    else if (Math.abs(profilePart.rate - profileRate) > 1) { return null; }
+
+    coveredSec += Math.max(0, segBuf.duration - (trimFrames * 0.010));
+    segments++;
+    segBuf = null;
+    await yieldToIdle(beatAnalysisYieldMs(options, 30, 160));
+    if (token !== beatMapToken) { hideBeatChip(); return null; }
+  }
+
+  if (!segments || coveredSec < 2.0 || !monoRate || !profileRate) { hideBeatChip(); return null; }
+
+  var energy = concatFloat32(envParts[0]);
+  var bodyEnergy = concatFloat32(envParts[1]);
+  var vocalEnergy = concatFloat32(envParts[2]);
+  var snapEnergy = concatFloat32(envParts[3]);
+  for (var ei = 0; ei < 4; ei++) envParts[ei] = null;
+  if (!energy || !bodyEnergy || !vocalEnergy || !snapEnergy) { hideBeatChip(); return null; }
+
+  var mono = concatFloat32(monoParts);
+  monoParts.length = 0;
+  var profilePcm = concatFloat32(profileParts);
+  profileParts.length = 0;
+
+  // 段尾 preroll 会让覆盖时长略超真实时长（900s 实测 910s）。超出去的那截
+  // 必须裁掉，否则 duration / 节拍网格会比音轨本身还长，视觉特效会跑到曲子外面。
+  var overSec = coveredSec - plan.totalSec;
+  if (overSec > 0.05) {
+    var drop = Math.min(Math.floor(overSec / 0.010), energy.length - 1000);
+    if (drop > 0) {
+      energy = energy.subarray(0, energy.length - drop);
+      bodyEnergy = bodyEnergy.subarray(0, bodyEnergy.length - drop);
+      vocalEnergy = vocalEnergy.subarray(0, vocalEnergy.length - drop);
+      snapEnergy = snapEnergy.subarray(0, snapEnergy.length - drop);
+      var keepMono = Math.max(0, mono.length - Math.round(drop * 0.010 * monoRate));
+      if (keepMono < mono.length) mono = mono.subarray(0, keepMono);
+      var keepProfile = Math.max(0, profilePcm.length - Math.round(drop * 0.010 * profileRate));
+      if (keepProfile < profilePcm.length) profilePcm = profilePcm.subarray(0, keepProfile);
+      coveredSec -= drop * 0.010;
+    }
+  }
+
+  var stats = {
+    segments: segments,
+    coveredSec: Math.round(coveredSec * 10) / 10,
+    requestedSec: Math.round(plan.totalSec * 10) / 10,
+    bytesPerSec: Math.round(plan.bytesPerSec),
+    frames: energy.length,
+    monoRate: monoRate,
+    profileRate: profileRate
+  };
+  console.log('[beat] 分段解码完成:', JSON.stringify(stats));
+
+  return {
+    energy: energy,
+    bodyEnergy: bodyEnergy,
+    vocalEnergy: vocalEnergy,
+    snapEnergy: snapEnergy,
+    duration: coveredSec,
+    sampleRate: sampleRate,
+    mono: mono,
+    monoRate: monoRate,
+    profilePcm: profilePcm,
+    profileRate: profileRate,
+    profileMeta: { srcRate: sampleRate, decim: Math.max(1, Math.round(sampleRate / profileRate)) },
+    stats: stats
+  };
+}
+
+// 帧化能量（10ms 窗，RMS）。内部每 520 帧让出主线程，长音轨才不会把 UI 卡死。
+// 2026-11-25 从 analyzeAudioBeats 闭包外提；函数体逐字未改，依赖经 deps 注入。
+async function makeFrameEnergy(pcm, win, deps) {
+  var token = deps.token;
+  var beatMapToken = deps.beatMapToken;
+  var yieldToPaint = deps.yieldToPaint;
+    var frames = Math.floor(pcm.length / win);
+    var out = new Float32Array(frames);
+    for (var f = 0; f < frames; f++) {
+      var s = 0;
+      var off2 = f * win;
+      for (var i = 0; i < win; i++) {
+        var v = pcm[off2 + i];
+        s += v * v;
+      }
+      out[f] = Math.sqrt(s / win);
+      if (f > 0 && f % 520 === 0) {
+        await yieldToPaint();
+        if (token !== beatMapToken) return null;
+      }
+    }
+    return out;
+}
+
+// 用离线上下文渲染一条频带（高切 / 低切）并抽 10ms 帧能量。
+// 2026-11-25 从 analyzeAudioBeats 闭包外提；函数体逐字未改，依赖经 deps 注入。
+async function renderBandEnergyOn(buf, hpFreq, lpFreq, deps) {
+  var TmpCtx = deps.TmpCtx;
+  var token = deps.token;
+  var beatMapToken = deps.beatMapToken;
+  var releaseBandSrc = deps.releaseBandSrc;
+  var yieldToIdle = deps.yieldToIdle;
+  var beatAnalysisYieldMs = deps.beatAnalysisYieldMs;
+  var options = deps.options;
+  var makeFrameEnergy = deps.makeFrameEnergy;
+    var off = new TmpCtx(1, buf.length, buf.sampleRate);
+    var src = off.createBufferSource(); src.buffer = buf;
+    var node = src;
+    if (hpFreq) {
+      var hp = off.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = Math.min(hpFreq, buf.sampleRate * 0.45);
+      hp.Q.value = 0.85;
+      node.connect(hp);
+      node = hp;
+    }
+    if (lpFreq) {
+      var lp = off.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = Math.min(lpFreq, buf.sampleRate * 0.45);
+      lp.Q.value = 0.9;
+      node.connect(lp);
+      node = lp;
+    }
+    node.connect(off.destination);
+    src.start(0);
+    var rendered = await off.startRendering();
+    if (token !== beatMapToken) { releaseBandSrc(src); return null; }
+    await yieldToIdle(beatAnalysisYieldMs(options, 110, 620));
+    var energy = await makeFrameEnergy(rendered.getChannelData(0), Math.floor(buf.sampleRate * 0.010));
+    // 算完包络就丢：断开源节点对整轨 buffer 的引用，渲染目标随作用域退出释放
+    releaseBandSrc(src);
+    rendered = null;
+    off = null;
+    return energy;
+}
+
 async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   options = options || {};
   var analysisProfile = cinemaAnalysisProfileForSong(options.song);
@@ -44,60 +306,33 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   function releaseBandSrc(src) {
       try { src.buffer = null; } catch (e) {}
   }
-  async function renderBandEnergyOn(buf, hpFreq, lpFreq) {
-      var off = new TmpCtx(1, buf.length, buf.sampleRate);
-      var src = off.createBufferSource(); src.buffer = buf;
-      var node = src;
-      if (hpFreq) {
-        var hp = off.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = Math.min(hpFreq, buf.sampleRate * 0.45);
-        hp.Q.value = 0.85;
-        node.connect(hp);
-        node = hp;
+
+  // 外提后的频带渲染 / 帧化能量需要显式注入闭包状态（TmpCtx / token / options / 释放钩子）。
+  // 每次调用现取：token 与 TmpCtx 都是在分析过程中才赋值的 var，不能提前快照。
+  function beatBandRenderDeps() {
+    return {
+      TmpCtx: TmpCtx,
+      token: token,
+      beatMapToken: beatMapToken,
+      releaseBandSrc: releaseBandSrc,
+      yieldToIdle: yieldToIdle,
+      beatAnalysisYieldMs: beatAnalysisYieldMs,
+      options: options,
+      makeFrameEnergy: function (pcm, win) {
+        return makeFrameEnergy(pcm, win, {
+          token: token,
+          beatMapToken: beatMapToken,
+          yieldToPaint: yieldToPaint
+        });
       }
-      if (lpFreq) {
-        var lp = off.createBiquadFilter();
-        lp.type = 'lowpass';
-        lp.frequency.value = Math.min(lpFreq, buf.sampleRate * 0.45);
-        lp.Q.value = 0.9;
-        node.connect(lp);
-        node = lp;
-      }
-      node.connect(off.destination);
-      src.start(0);
-      var rendered = await off.startRendering();
-      if (token !== beatMapToken) { releaseBandSrc(src); return null; }
-      await yieldToIdle(beatAnalysisYieldMs(options, 110, 620));
-      var energy = await makeFrameEnergy(rendered.getChannelData(0), Math.floor(buf.sampleRate * 0.010));
-      // 算完包络就丢：断开源节点对整轨 buffer 的引用，渲染目标随作用域退出释放
-      releaseBandSrc(src);
-      rendered = null;
-      off = null;
-      return energy;
+    };
   }
+
   async function renderBandEnergy(hpFreq, lpFreq) {
-      return renderBandEnergyOn(buffer, hpFreq, lpFreq);
+      return renderBandEnergyOn(buffer, hpFreq, lpFreq, beatBandRenderDeps());
   }
   // 帧化能量 (10ms 窗口)。内部每 520 帧让出主线程，长音轨才不会把 UI 卡死。
-  async function makeFrameEnergy(pcm, win) {
-      var frames = Math.floor(pcm.length / win);
-      var out = new Float32Array(frames);
-      for (var f = 0; f < frames; f++) {
-        var s = 0;
-        var off2 = f * win;
-        for (var i = 0; i < win; i++) {
-          var v = pcm[off2 + i];
-          s += v * v;
-        }
-        out[f] = Math.sqrt(s / win);
-        if (f > 0 && f % 520 === 0) {
-          await yieldToPaint();
-          if (token !== beatMapToken) return null;
-        }
-      }
-      return out;
-  }
+
 
   try {
     beatMapBusy = true;
@@ -167,7 +402,17 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
     if (segPlan) {
       // 分段落定：不再需要这个完整响应，把 body 停掉，别让它在后台把整包拉完
       try { if (resp.body && resp.body.cancel) resp.body.cancel(); } catch (_) {}
-      var segInput = await decodeBeatsInputBySegments(audioUrl, segPlan, token, options);
+      var segInput = await decodeBeatsInputBySegments(audioUrl, segPlan, token, options, {
+        showBeatChip: showBeatChip,
+        hideBeatChip: hideBeatChip,
+        beatMapToken: beatMapToken,
+        DecodeCtx: DecodeCtx,
+        renderBandEnergyOn: function (buf, hpFreq, lpFreq) {
+          return renderBandEnergyOn(buf, hpFreq, lpFreq, beatBandRenderDeps());
+        },
+        yieldToIdle: yieldToIdle,
+        beatAnalysisYieldMs: beatAnalysisYieldMs
+      });
       if (token !== beatMapToken) { hideBeatChip(); return null; }
       if (segInput) {
         window.__lastBeatSegmentStats = segInput.stats;
@@ -929,191 +1174,13 @@ async function analyzeAudioBeats(audioUrl, durationSec, token, options) {
   //
   // 返回 null 表示"这条路走不通"（服务端不支持 Range / 解不出 / 时长对不上），
   // 调用方据此回退整轨路径 —— 宁可慢，不能没有节拍图。
-  async function decodeBeatsInputBySegments(audioUrl, plan, token, options) {
-    if (options.prefetch) showBeatChip('预热长音频节奏（分段）…');
-    else showBeatChip('正在分析长音频节奏（分段）…');
 
-    var bands = [[38, 155], [130, 420], [420, 2600], [1800, 9000]];
-    var envParts = [null, null, null, null];
-    var monoParts = [];
-    var profileParts = [];
-    var monoRate = 0;
-    var profileRate = 0;
-    var sampleRate = 0;
-    var coveredSec = 0;       // 时间轴上已经"吃掉"的秒数（按实际解码出来的时长推进）
-    var segments = 0;
-    var guard = 0;
-    var maxSegments = Math.ceil(plan.totalSec / BEAT_ANALYSIS_SEGMENT_SEC) + 4;
-
-    while (coveredSec < plan.totalSec - 1.0 && guard < maxSegments) {
-      guard++;
-      if (token !== beatMapToken) { hideBeatChip(); return null; }
-      var t0 = coveredSec;
-      var byteStart = Math.max(0, Math.floor(t0 * plan.bytesPerSec) - (segments === 0 ? 0 : BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES));
-      var byteEnd = Math.min(plan.contentLength - 1,
-        Math.ceil((t0 + BEAT_ANALYSIS_SEGMENT_SEC) * plan.bytesPerSec) + BEAT_ANALYSIS_SEGMENT_PREROLL_BYTES);
-      if (byteEnd <= byteStart) break;
-
-      var segResp;
-      try {
-        segResp = await fetch(audioUrl, { headers: { Range: 'bytes=' + byteStart + '-' + byteEnd } });
-      } catch (_) { return null; }
-      // 服务端不支持 Range 时会给 200 + 整个 body：那正是要避免的整块下载，直接放弃分段
-      if (!segResp || segResp.status !== 206) { hideBeatChip(); return null; }
-      var segAb;
-      try { segAb = await segResp.arrayBuffer(); } catch (_) { return null; }
-      if (!segAb || !segAb.byteLength) { return null; }
-      if (token !== beatMapToken) { hideBeatChip(); return null; }
-
-      var segDc = new DecodeCtx();
-      var segBuf = await new Promise(function(resolve, reject){
-        segDc.decodeAudioData(segAb, resolve, reject);
-      }).catch(function(e){ console.warn('[beat] 分段解码失败:', e && e.message || e); return null; });
-      segAb = null;
-      try { segDc.close && segDc.close(); } catch (_) {}
-      if (!segBuf || !segBuf.length || !segBuf.sampleRate) { return null; }
-      if (token !== beatMapToken) { hideBeatChip(); return null; }
-      if (sampleRate === 0) sampleRate = segBuf.sampleRate;
-      else if (Math.abs(segBuf.sampleRate - sampleRate) > 1) { return null; }
-
-      var segWin = Math.floor(sampleRate * 0.010);
-      // 段首丢一小截：从任意字节偏移起解，解码器要先重同步，开头几十毫秒是垃圾。
-      // 不丢的话每个段边界都会出一个假 onset，直接被当成鼓点。
-      var trimFrames = segments === 0 ? 0 : Math.ceil(BEAT_ANALYSIS_SEGMENT_TRIM_SEC / 0.010);
-      for (var bi = 0; bi < bands.length; bi++) {
-        var part = await renderBandEnergyOn(segBuf, bands[bi][0], bands[bi][1]);
-        if (!part) { hideBeatChip(); return null; }
-        var kept = trimFrames > 0 && part.length > trimFrames + 8 ? part.subarray(trimFrames) : part;
-        if (!envParts[bi]) envParts[bi] = [];
-        envParts[bi].push(kept);
-        part = null;
-      }
-      // tempo 用的降采样 mono
-      var monoPart = downsampleMono(segBuf, BEAT_ANALYSIS_TEMPO_RATE);
-      if (!monoPart) { return null; }
-      monoParts.push(monoPart.pcm);
-      // 音高画像用的降采样 mono（~11.025kHz）
-      var profilePart = downsampleMono(segBuf, MUSICAL_PROFILE_SAMPLE_RATE);
-      if (!profilePart) { return null; }
-      profileParts.push(profilePart.pcm);
-      // downsampleMono 在「目标率高于源速率」时按源速率原样返回，所以实际速率
-      // 必须用它回给我的 rate，不能拿目标率常量硬顶 —— 顶了就是把错的采样率
-      // 传给 tempo worker / chroma FFT，拍速和音高映射全歪。
-      if (monoRate === 0) monoRate = monoPart.rate;
-      else if (Math.abs(monoPart.rate - monoRate) > 1) { return null; }
-      if (profileRate === 0) profileRate = profilePart.rate;
-      else if (Math.abs(profilePart.rate - profileRate) > 1) { return null; }
-
-      coveredSec += Math.max(0, segBuf.duration - (trimFrames * 0.010));
-      segments++;
-      segBuf = null;
-      await yieldToIdle(beatAnalysisYieldMs(options, 30, 160));
-      if (token !== beatMapToken) { hideBeatChip(); return null; }
-    }
-
-    if (!segments || coveredSec < 2.0 || !monoRate || !profileRate) { hideBeatChip(); return null; }
-
-    var energy = concatFloat32(envParts[0]);
-    var bodyEnergy = concatFloat32(envParts[1]);
-    var vocalEnergy = concatFloat32(envParts[2]);
-    var snapEnergy = concatFloat32(envParts[3]);
-    for (var ei = 0; ei < 4; ei++) envParts[ei] = null;
-    if (!energy || !bodyEnergy || !vocalEnergy || !snapEnergy) { hideBeatChip(); return null; }
-
-    var mono = concatFloat32(monoParts);
-    monoParts.length = 0;
-    var profilePcm = concatFloat32(profileParts);
-    profileParts.length = 0;
-
-    // 段尾 preroll 会让覆盖时长略超真实时长（900s 实测 910s）。超出去的那截
-    // 必须裁掉，否则 duration / 节拍网格会比音轨本身还长，视觉特效会跑到曲子外面。
-    var overSec = coveredSec - plan.totalSec;
-    if (overSec > 0.05) {
-      var drop = Math.min(Math.floor(overSec / 0.010), energy.length - 1000);
-      if (drop > 0) {
-        energy = energy.subarray(0, energy.length - drop);
-        bodyEnergy = bodyEnergy.subarray(0, bodyEnergy.length - drop);
-        vocalEnergy = vocalEnergy.subarray(0, vocalEnergy.length - drop);
-        snapEnergy = snapEnergy.subarray(0, snapEnergy.length - drop);
-        var keepMono = Math.max(0, mono.length - Math.round(drop * 0.010 * monoRate));
-        if (keepMono < mono.length) mono = mono.subarray(0, keepMono);
-        var keepProfile = Math.max(0, profilePcm.length - Math.round(drop * 0.010 * profileRate));
-        if (keepProfile < profilePcm.length) profilePcm = profilePcm.subarray(0, keepProfile);
-        coveredSec -= drop * 0.010;
-      }
-    }
-
-    var stats = {
-      segments: segments,
-      coveredSec: Math.round(coveredSec * 10) / 10,
-      requestedSec: Math.round(plan.totalSec * 10) / 10,
-      bytesPerSec: Math.round(plan.bytesPerSec),
-      frames: energy.length,
-      monoRate: monoRate,
-      profileRate: profileRate
-    };
-    console.log('[beat] 分段解码完成:', JSON.stringify(stats));
-
-    return {
-      energy: energy,
-      bodyEnergy: bodyEnergy,
-      vocalEnergy: vocalEnergy,
-      snapEnergy: snapEnergy,
-      duration: coveredSec,
-      sampleRate: sampleRate,
-      mono: mono,
-      monoRate: monoRate,
-      profilePcm: profilePcm,
-      profileRate: profileRate,
-      profileMeta: { srcRate: sampleRate, decim: Math.max(1, Math.round(sampleRate / profileRate)) },
-      stats: stats
-    };
-  }
 
   // 盒式平均降采样 + 混 mono。targetRate 高于源速率时原样返回（不升采样）。
-  function downsampleMono(buf, targetRate) {
-    var srcRate = buf.sampleRate;
-    var channels = buf.numberOfChannels || 1;
-    var chData = [];
-    for (var c = 0; c < channels; c++) chData.push(buf.getChannelData(c));
-    if (targetRate >= srcRate) {
-      var monoFull = new Float32Array(buf.length);
-      var scaleFull = 1 / channels;
-      for (var i = 0; i < buf.length; i++) {
-        var acc = 0;
-        for (var ci = 0; ci < channels; ci++) acc += chData[ci][i];
-        monoFull[i] = acc * scaleFull;
-      }
-      return { pcm: monoFull, rate: srcRate };
-    }
-    var decim = Math.max(1, Math.round(srcRate / targetRate));
-    var outLen = Math.floor(buf.length / decim);
-    if (outLen < 1) return null;
-    var out = new Float32Array(outLen);
-    var scale = 1 / (decim * channels);
-    for (var o = 0; o < outLen; o++) {
-      var base = o * decim;
-      var sum = 0;
-      for (var k = 0; k < decim; k++) {
-        var pos = base + k;
-        for (var cj = 0; cj < channels; cj++) sum += chData[cj][pos];
-      }
-      out[o] = sum * scale;
-    }
-    return { pcm: out, rate: srcRate / decim };
-  }
+
 
   // 边拷边释放：否则「所有分片 + 合并结果」同时在场，55 分钟的 mono 就是 582MB。
-  function concatFloat32(parts) {
-    if (!parts || !parts.length) return null;
-    if (parts.length === 1) return parts[0];
-    var total = 0;
-    for (var i = 0; i < parts.length; i++) total += parts[i].length;
-    var out = new Float32Array(total);
-    var at = 0;
-    for (var j = 0; j < parts.length; j++) { out.set(parts[j], at); at += parts[j].length; parts[j] = null; }
-    return out;
-  }
+
 }
 
 // 用 <audio> 元素探时长：只读元数据不播放，Chromium 只会拉开头一小段。

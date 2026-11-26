@@ -1,0 +1,223 @@
+/* =============================================================================
+ * 听歌档案 · Folia 面板模组外壳（2026-11-25，2026-11-26 加浅色）
+ *
+ * 内容全部由 public/folia-panel-mods/listening-archive/client.mjs 渲染。
+ * 配色规则：
+ *   - 深色是默认（模组 .archive-root 自带深色变量）。
+ *   - 应用「设置 → 外观」选浅色时，<html data-theme="light">，这里把外壳换成浅色，
+ *     同时宿主把 isDaylight 传给模组，它会自己切 .daylight。
+ *   - 外壳所有颜色走 --fp-* 令牌，浅色只换令牌值，不写第二套规则。
+ *
+ * 面板用 opacity + pointer-events 开关，不用 display:none：
+ * 模组的图表/热力图按容器宽度算格子，隐藏时量到 0 宽会画空。opacity:0 仍然有布局。
+ * ========================================================================== */
+
+#folia-panel{
+  --fp-scrim:rgba(8,8,7,.74);
+  --fp-bg:#15171e;
+  --fp-bg-soft:#181a22;
+  --fp-bg-foot:rgba(10,11,15,.55);
+  --fp-ink:rgba(238,234,247,.97);
+  --fp-ink-92:rgba(238,234,247,.92);
+  --fp-ink-62:rgba(238,234,247,.62);
+  --fp-ink-46:rgba(238,234,247,.46);
+  --fp-ink-30:rgba(238,234,247,.30);
+  --fp-line:rgba(255,255,255,.07);
+  --fp-line-strong:rgba(255,255,255,.14);
+  --fp-hover:rgba(255,255,255,.06);
+  --fp-accent:#b8a4e7;
+  --fp-accent-soft:rgba(184,164,231,.11);
+  --fp-accent-line:rgba(184,164,231,.34);
+  --fp-chip-on-bg:rgba(238,234,247,.94);
+  --fp-chip-on-ink:#15171e;
+  --fp-shadow:rgba(0,0,0,.60);
+  --fp-mask-ink:rgba(238,234,247,.92);
+  --fp-danger:rgba(255,170,170,.92);
+}
+html[data-theme="light"] #folia-panel{
+  --fp-scrim:rgba(233,232,240,.72);
+  --fp-bg:#f8f7fc;
+  --fp-bg-soft:#ffffff;
+  --fp-bg-foot:rgba(245,244,250,.92);
+  --fp-ink:rgba(26,25,36,.96);
+  --fp-ink-92:rgba(26,25,36,.90);
+  --fp-ink-62:rgba(26,25,36,.64);
+  --fp-ink-46:rgba(26,25,36,.50);
+  --fp-ink-30:rgba(26,25,36,.34);
+  --fp-line:rgba(20,18,30,.10);
+  --fp-line-strong:rgba(20,18,30,.18);
+  --fp-hover:rgba(20,18,30,.05);
+  --fp-accent:#6a5ad0;
+  --fp-accent-soft:rgba(106,90,208,.09);
+  --fp-accent-line:rgba(106,90,208,.28);
+  --fp-chip-on-bg:#1b1a24;
+  --fp-chip-on-ink:#ffffff;
+  --fp-shadow:rgba(20,18,30,.22);
+  --fp-mask-ink:rgba(26,25,36,.82);
+  --fp-danger:#c0392b;
+}
+
+#folia-panel{position:fixed;inset:0;z-index:680;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:var(--fp-scrim);
+  -webkit-backdrop-filter:blur(14px) saturate(1.1);backdrop-filter:blur(14px) saturate(1.1);
+  opacity:0;pointer-events:none;transition:opacity .2s ease}
+#folia-panel.show{opacity:1;pointer-events:auto}
+body.folia-panel-open{overflow:hidden}
+
+.fp-box{position:relative;width:min(1180px,95vw);height:min(860px,92vh);display:flex;flex-direction:column;
+  border-radius:18px;border:1px solid var(--fp-line-strong);
+  background:var(--fp-bg);overflow:hidden;
+  box-shadow:0 36px 90px var(--fp-shadow);
+  transform:translateY(12px);transition:transform .26s cubic-bezier(.2,.8,.3,1)}
+#folia-panel.show .fp-box{transform:none}
+
+/* ---------- 主体：模组自带页头，外壳不再放标题 ---------- */
+.fp-body{flex:1 1 auto;min-height:0;position:relative;overflow:hidden}
+.fp-mount{position:absolute;inset:0;min-height:0}
+/* 模组的 .archive-root 用 --folium-font，这里直接给具体字体栈。
+ * 不要写成 var(--font-sans,…)：项目里没有 --font-sans 时整个值会失效，
+ * font 声明被丢弃，模组会退成浏览器默认衬线。 */
+.fp-mount .archive-root{--folium-font:system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
+
+.fp-error{margin:40px auto;max-width:520px;padding:14px 16px;border-radius:10px;
+  background:rgba(120,20,20,.32);border:1px solid rgba(255,120,120,.28);
+  color:#ffdede;font:12px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap}
+
+/* ---------- 底部 ---------- */
+.fp-foot{flex:0 0 auto;display:flex;justify-content:flex-end;align-items:center;gap:8px;
+  padding:9px 18px 11px;border-top:1px solid var(--fp-line);
+  background:var(--fp-bg-foot)}
+.fp-foot-btn{height:30px;padding:0 15px;border-radius:9px;font-family:inherit;font-size:12px;font-weight:500;
+  border:1px solid var(--fp-line-strong);background:transparent;color:var(--fp-ink-62);
+  cursor:pointer;transition:background .16s,border-color .16s,color .16s}
+.fp-foot-btn:hover{background:var(--fp-hover);border-color:var(--fp-line-strong);color:var(--fp-ink)}
+
+/* ---------- 累计聆听时长卡（外壳，不碰模组） ---------- */
+.fp-summary{flex:0 0 auto;padding:12px 22px 10px;border-bottom:1px solid var(--fp-line);
+  background:var(--fp-bg-soft)}
+.fp-sum-top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.fp-sum-ranges{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.fp-sum-ranges button{height:26px;padding:0 12px;border:0;border-radius:999px;background:transparent;
+  color:var(--fp-ink-62);font-family:inherit;font-size:12px;font-weight:500;letter-spacing:.2px;
+  cursor:pointer;transition:background .16s,color .16s}
+.fp-sum-ranges button:hover{background:var(--fp-hover);color:var(--fp-ink-92)}
+.fp-sum-ranges button.active{background:var(--fp-chip-on-bg);color:var(--fp-chip-on-ink);font-weight:600}
+.fp-sum-dates{font-family:var(--font-mono,ui-monospace,monospace);font-size:11px;letter-spacing:.3px;
+  color:var(--fp-ink-46);font-variant-numeric:tabular-nums}
+.fp-sum-dates i{font-style:normal;margin:0 6px;color:var(--fp-ink-30)}
+
+.fp-sum-bottom{display:grid;grid-template-columns:auto 200px auto;align-items:end;gap:22px;margin-top:6px}
+.fp-sum-total-wrap{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fp-sum-label{font-size:11px;letter-spacing:.4px;color:var(--fp-ink-46)}
+.fp-sum-total{font-size:34px;line-height:1;font-weight:660;letter-spacing:.5px;
+  color:var(--fp-ink);font-variant-numeric:tabular-nums}
+.fp-sum-total small{font-size:14px;font-weight:520;margin-left:5px;color:var(--fp-ink-62)}
+.fp-sum-daily{font-size:11.5px;color:var(--fp-ink-46);font-variant-numeric:tabular-nums}
+.fp-sum-daily b{font-weight:600;color:var(--fp-ink-92)}
+
+/* 近 30 天趋势：竖线会随容器拉伸，靠 non-scaling-stroke 保住 1.6px 描边 */
+.fp-sum-trend{position:relative;min-width:0;align-self:center;padding-bottom:11px}
+.fp-sum-trend svg{display:block;width:100%;height:40px}
+.fp-trend-line{fill:none;stroke:var(--fp-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.fp-trend-area{fill:var(--fp-accent-soft);stroke:none}
+.fp-sum-trend-cap{position:absolute;right:0;bottom:0;font-size:10px;letter-spacing:.3px;color:var(--fp-ink-30)}
+
+.fp-sum-side{display:flex;flex-direction:column;align-items:flex-end;gap:7px;min-width:0;text-align:right}
+.fp-sum-slogan{margin:0;font-size:11.5px;line-height:1.55;color:var(--fp-ink-46);letter-spacing:.2px}
+.fp-sum-ai{height:26px;padding:0 12px;border-radius:999px;border:1px solid var(--fp-accent-line);
+  background:var(--fp-accent-soft);color:var(--fp-accent);font-family:inherit;font-size:11.5px;
+  font-weight:500;cursor:pointer;transition:background .16s,border-color .16s,color .16s}
+.fp-sum-ai:hover{background:var(--fp-accent-soft);border-color:var(--fp-accent);filter:brightness(1.15)}
+.fp-sum-ai[disabled]{opacity:.55;cursor:default}
+
+/* ---------- 浅色下修正模组硬编码的白字 ----------
+ * 模组有 `.daylight .cover-window{color:#fff}`：它假设封面遮罩是深色渐变。
+ * 但同一份 .daylight 又把 --cover-shade 换成了跟着宿主 --bg 的浅色渐变，
+ * 结果白字落在浅遮罩上（实测「带我走」那张几乎看不见）。
+ * 这里只把文字色拉回主题色，遮罩不动。 */
+html[data-theme="light"] #folia-panel .archive-root .cover-window,
+html[data-theme="light"] #folia-panel .archive-root .hero-artwork strong,
+html[data-theme="light"] #folia-panel .archive-root .time-value > span{
+  color:var(--fp-ink)}
+
+/* ---------- AI 总结：居中卡片，不占满面板 ---------- */
+.fp-ai{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
+  padding:30px;background:rgba(6,6,10,.58)}
+html[data-theme="light"] #folia-panel .fp-ai{background:rgba(28,26,40,.30)}
+.fp-ai[hidden]{display:none}
+.fp-ai-card{display:flex;flex-direction:column;width:min(660px,100%);max-height:min(540px,100%);
+  border-radius:16px;border:1px solid var(--fp-line-strong);background:var(--fp-bg);
+  box-shadow:0 26px 70px var(--fp-shadow);overflow:hidden}
+.fp-ai-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 20px 10px;border-bottom:1px solid var(--fp-line)}
+.fp-ai-title{font-size:11px;letter-spacing:.5px;color:var(--fp-accent)}
+.fp-ai-close{height:24px;padding:0 12px;border-radius:999px;border:1px solid var(--fp-line-strong);
+  background:transparent;color:var(--fp-ink-62);font-family:inherit;font-size:11.5px;cursor:pointer;
+  transition:color .16s,border-color .16s}
+.fp-ai-close:hover{color:var(--fp-ink);border-color:var(--fp-line-strong)}
+.fp-ai-body{flex:1 1 auto;min-height:0;overflow:auto;padding:16px 22px 22px;
+  font-size:13.5px;line-height:1.9;color:var(--fp-ink-92);letter-spacing:.2px}
+.fp-ai-body.is-error{color:var(--fp-danger)}
+.fp-ai-body p{margin:0 0 11px}
+.fp-ai-body strong{font-weight:620;color:var(--fp-ink)}
+/* 人格标签：第一行的 **加粗** 单独成块，当标题用 */
+.fp-ai-name{margin:2px 0 14px;font-size:18px;line-height:1.5;font-weight:680;letter-spacing:.4px;
+  color:var(--fp-ink)}
+.fp-ai-body .fp-ai-hint{color:var(--fp-ink-46);font-size:11.5px;line-height:1.7}
+
+/* 生成中的点阵：canvas 宽高由 CSS 定，JS 按 clientWidth 乘 DPR */
+.fp-ai-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;min-height:330px;padding:4px 0 10px}
+.fp-ai-dots{display:block;width:260px;height:260px}
+.fp-ai-loading-text{margin:0;font-size:12px;letter-spacing:.3px;color:var(--fp-ink-62)}
+.fp-ai-loading-sub{margin:0;font-size:10.5px;letter-spacing:.4px;color:var(--fp-ink-30)}
+
+/* ---------- 卡片动作按钮：▷ ＋ ↗ 换成 morphicons 那套 Lucide 图标 ----------
+ * 这三个按钮里放的是纯文字（模组的 React 直接渲染 '▷' / '＋' / '↗'），
+ * 替换子节点会在下一次 render 时让 React 抛 removeChild。
+ * 所以不动 DOM：把字形设透明（保留宽度，按钮尺寸不变），
+ * 用伪元素 + SVG mask 盖上图标。mask 里的 path 与 19-folia-panel-icons.js
+ * 用的是同一套 24 网格数据，和已经升级的 svg 按钮视觉一致。 */
+#folia-panel .cover-window button[aria-label^="立即播放"],
+#folia-panel .cover-window button[aria-label^="加入队列"],
+#folia-panel .cover-window button[aria-label^="查看轨迹"],
+#folia-panel button[aria-label="上一周期"],
+#folia-panel button[aria-label="下一周期"]{
+  color:transparent;
+  position:relative}
+#folia-panel .cover-window button[aria-label^="立即播放"]::before,
+#folia-panel .cover-window button[aria-label^="加入队列"]::before,
+#folia-panel .cover-window button[aria-label^="查看轨迹"]::before,
+#folia-panel button[aria-label="上一周期"]::before,
+#folia-panel button[aria-label="下一周期"]::before{
+  content:'';position:absolute;left:50%;top:50%;width:13px;height:13px;
+  transform:translate(-50%,-50%);pointer-events:none;
+  background-color:var(--fp-mask-ink);
+  -webkit-mask:var(--mi-mask) center/contain no-repeat;
+  mask:var(--mi-mask) center/contain no-repeat}
+
+#folia-panel .cover-window button[aria-label^="立即播放"]{
+  --mi-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 5 19 12 8 19Z'/%3E%3C/svg%3E")}
+#folia-panel .cover-window button[aria-label^="加入队列"]{
+  --mi-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M12 5v14'/%3E%3C/svg%3E")}
+#folia-panel .cover-window button[aria-label^="查看轨迹"]{
+  --mi-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17 17 7M7 7h10v10'/%3E%3C/svg%3E")}
+#folia-panel button[aria-label="上一周期"]{
+  --mi-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-7-7 7-7'/%3E%3C/svg%3E")}
+#folia-panel button[aria-label="下一周期"]{
+  --mi-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 7-7-7-7'/%3E%3C/svg%3E")}
+
+/* ---------- 封面采集层 ----------
+ * 模组靠它把当前封面缩成 dataURL 存进档案目录。层本身必须完全隐形、不吃事件：
+ * 它只是给模组一个能放 canvas 的挂载点，不参与视觉。 */
+.folia-panel-stage{position:fixed;inset:0;z-index:1;pointer-events:none;
+  contain:strict;overflow:hidden}
+.fp-stage-layer{position:absolute;inset:0;pointer-events:none;opacity:0;overflow:hidden}
+.fp-stage-layer canvas{display:block}
+
+@media (max-width:760px){
+  #folia-panel{padding:12px}
+  .fp-box{width:100%;height:100%;border-radius:14px}
+  .fp-sum-bottom{grid-template-columns:auto 1fr;gap:14px}
+  .fp-sum-side{grid-column:1 / -1;align-items:flex-start;text-align:left}
+}

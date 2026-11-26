@@ -415,6 +415,12 @@ function foliaWorldSanitizeModeForWallpaper() {
 
 function foliaWorldSetMode(id) {
   if (!getFoliaMode(id)) return;
+  /* 2026-11-23：样式卡片常显但未开启时禁用 —— CSS 的 pointer-events:none 只挡真实指针，
+     键盘/脚本调用仍会改存档，这里补一道语义拦截。 */
+  if (!foliaWorld.active) {
+    if (typeof showToast === 'function') showToast('先打开上方的「开启 Folia 世界」');
+    return;
+  }
   /* 壁纸模式下禁止切到整屏场景样式（花火/町景/雾笺/凝彩）：面板置灰之外再兜一层，
    * 免得快捷键、脚本或旧存档把桌面切成一块不透明场景。 */
   if (typeof foliaModeBlockedInWallpaper === 'function' && foliaModeBlockedInWallpaper(id)) {
@@ -450,6 +456,10 @@ function foliaWorldSetMode(id) {
 function foliaWorldSetBackground(id) {
   var bg = getFoliaBackground(id);
   if (!bg) return;
+  if (!foliaWorld.active) {
+    if (typeof showToast === 'function') showToast('先打开上方的「开启 Folia 世界」');
+    return;
+  }
   var changed = foliaWorld.background !== bg.id;
   foliaWorld.background = bg.id;
   if (changed && foliaWorld.active) foliaWorldApplyBackground();
@@ -565,12 +575,20 @@ function foliaWorldTickBackground(ctx) {
  * Folia 激活中用户换壁纸：applyCustomBackground / requestWallpaperEngineVideoPlayback
  * 的播放点有 foliaWorldActive() 守卫，不会把视频重新拉起来（退出时统一恢复）。 */
 var foliaWorldVideoPauseState = { custom: false, engine: false };
+// 同一次暂停只记录一次（见 foliaWorldPauseWallpaperVideos 的注释）
+var foliaWorldVideosPauseHeld = false;
 
 function foliaWorldPauseWallpaperVideos() {
   var cv = document.getElementById('custom-bg-video');
   var wv = document.getElementById('wallpaper-engine-video');
-  foliaWorldVideoPauseState.custom = !!(cv && !cv.paused);
-  foliaWorldVideoPauseState.engine = !!(wv && !wv.paused);
+  /* 同一次世界会话只在第一次暂停时记录当时的播放状态。暂停被重入时若继续用
+   * 当前状态覆盖，第二次会记成 false（此时视频已经 paused），退出世界时就不再
+   * resume → 壁纸停在暂停帧。 */
+  if (!foliaWorldVideosPauseHeld) {
+    foliaWorldVideoPauseState.custom = !!(cv && !cv.paused);
+    foliaWorldVideoPauseState.engine = !!(wv && !wv.paused);
+    foliaWorldVideosPauseHeld = true;
+  }
   try { if (cv && !cv.paused) cv.pause(); } catch (_) {}
   try { if (wv && !wv.paused) wv.pause(); } catch (_) {}
   // 同步内置壁纸的玻璃镜像循环：Folia 盖住壁纸时不再每帧上传纹理
@@ -584,6 +602,7 @@ function foliaWorldResumeWallpaperVideos() {
   var wasEngine = foliaWorldVideoPauseState.engine;
   foliaWorldVideoPauseState.custom = false;
   foliaWorldVideoPauseState.engine = false;
+  foliaWorldVideosPauseHeld = false;
   var cv = document.getElementById('custom-bg-video');
   var wv = document.getElementById('wallpaper-engine-video');
   /* custom 走 applyCustomBackground 重入：Folia 激活中换过壁纸也能按当前选择正确拉起。 */

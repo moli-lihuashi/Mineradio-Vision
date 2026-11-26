@@ -28,6 +28,11 @@ var updatePreviewState = {
   visible: false,
   open: false,
   status: 'idle',
+  // 关掉「启动时检查更新」后，手动打开面板要靠 checked 判断是否需要补一次检查
+  checked: false,
+  checking: false,
+  skippedStartupCheck: false,
+  autoDownloadedVersion: '',
   progress: 0,
   timer: null,
   pollTimer: null,

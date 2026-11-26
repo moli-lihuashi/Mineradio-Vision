@@ -1,3 +1,9 @@
+// 播客 DJ 本地整轨解码闸门（与 01-audio-beat-analysis 的分段阈值 420s 对齐）：
+// 整轨 path 的 PCM 峰值 ≈ 时长 × 采样率 × 声道 × 4B，7 分钟立体声 44.1kHz 约 148MB。
+// 超过闸门改走服务端 /api/podcast/dj-beatmap 流式锁拍，不再把整轨 PCM 搬进渲染进程。
+var PODCAST_DJ_LOCAL_DECODE_MAX_SEC = 420;
+var PODCAST_DJ_LOCAL_DECODE_MAX_BYTES = Math.round(PODCAST_DJ_LOCAL_DECODE_MAX_SEC * 1100 * 1000 / 8);
+
 function schedulePodcastDjAnalysis(songKey, audioUrl, token, durationSec) {
   cancelDjBeatAnalysisTimer();
   if (!songKey || !audioUrl) return;
@@ -417,21 +423,45 @@ async function analyzePodcastDjBeats(audioUrl, token, durationSec) {
     await yieldToIdle(520);
     if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
     durationSec = Math.max(0, Number(durationSec) || 0);
-    var preferServerAnalysis = /^https?:\/\//i.test(audioUrl || '') && (durationSec <= 0 || durationSec > 3300);
-    if (preferServerAnalysis) {
+    var isRemote = /^https?:\/\//i.test(audioUrl || '');
+    if (isRemote && !(durationSec > 0 && isFinite(durationSec))) {
+      // 时长未知时先探一次再决定走整轨还是后端：否则整轨解码是盲赌。
+      showBeatChip('DJ 探测时长…');
+      var probedSec = await probeAudioDurationSec(audioUrl, token);
+      if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
+      if (probedSec > 0) durationSec = probedSec;
+    }
+    // 整轨 decodeAudioData 的 PCM 峰值 ≈ duration × 采样率 × 声道 × 4B：
+    // 7 分钟立体声 44.1kHz 已约 148MB，30 分钟约 635MB，足以把渲染进程打到 OOM。
+    // 超过闸门不再本地整轨解码，远端音频改走服务端流式锁拍（长播客本来就是那条路）。
+    var localDecodeAllowed = durationSec > 0 && isFinite(durationSec) && durationSec <= PODCAST_DJ_LOCAL_DECODE_MAX_SEC;
+    if (!localDecodeAllowed) {
+      if (!isRemote) {
+        console.warn('[dj] 本地超长音频跳过整轨锁拍:', Math.round(durationSec), 's');
+        hideBeatChip();
+        return null;
+      }
       showBeatChip('DJ 长播客后端锁拍...');
       var serverData = await Mineradio.api.apiJson('/api/podcast/dj-beatmap?url=' + encodeURIComponent(audioUrl) + '&duration=' + encodeURIComponent(durationSec)).catch(function(){ return null; });
       if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
       if (serverData && serverData.ok && serverData.map) return serverData.map;
       console.warn('podcast DJ server analysis failed:', serverData && serverData.error);
       hideBeatChip();
-      if (durationSec <= 0 || durationSec > 3300) return null;
+      return null;
     }
-    var fetchAudioUrl = /^https?:\/\//i.test(audioUrl || '')
+    var fetchAudioUrl = isRemote
       ? await Mineradio.api.apiMediaProxyUrlAsync('/api/audio', { url: audioUrl })
       : audioUrl;
     var resp = await (Mineradio.api.apiFetch || fetch)(fetchAudioUrl);
     if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
+    // 体量兜底：时长元数据不可信 / 服务端给错时，content-length 是 arrayBuffer() 之前最后一道闸。
+    var contentLength = Number(resp.headers && resp.headers.get('content-length')) || 0;
+    if (contentLength > PODCAST_DJ_LOCAL_DECODE_MAX_BYTES) {
+      console.warn('[dj] 跳过异常体积的音频响应:',
+        (contentLength / 1048576).toFixed(1), 'MB >', (PODCAST_DJ_LOCAL_DECODE_MAX_BYTES / 1048576).toFixed(0), 'MB');
+      hideBeatChip();
+      return null;
+    }
     var ab = await resp.arrayBuffer();
     if (token !== djBeatMapToken || !djMode.active) { hideBeatChip(); return null; }
 

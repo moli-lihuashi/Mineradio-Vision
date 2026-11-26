@@ -1,17 +1,20 @@
 /* =============================================================================
- * 设置页 + 三条杠主菜单（2026-11-23）
+ * 设置页 + 三条杠主菜单
  *
- * 背景：三条杠弹层原本塞了淡入淡出 / 10 段均衡 / 变速 / 歌曲过渡 / 定时 / 休息提醒，
- * 视觉控制台的「高级」页又塞了画质、GPU 节流、内存压缩、缓存目录、输出设备。
- * 两处都是「常用操作」与「一年调一次」混在一起，越加越臃肿。
+ * 2026-11-23：三条杠弹层里那些参数（淡入淡出 / 均衡器 / 变速 / 歌曲过渡 / 定时 /
+ * 休息提醒）与视觉控制台「高级」页（画质 / GPU / 内存 / 缓存 / 输出）统一搬进
+ * #settings-modal，控件沿用原 DOM（id / onclick / aria 不变）。
  *
- * 这次按酷狗音乐的做法拆开：
- *   · 三条杠 = 扁平主菜单，一行一个入口，只放开关与跳转；
- *   · 设置 = 独立覆盖层，顶部 tab + 分组，承接所有低频参数。
+ * 2026-11-25：设置页外壳与控件按 Folia 的组件语言重做 ——
+ *   · 左侧分组导航（界面 / 音乐 / 应用），图标 + 32px 行高；
+ *   · 右侧内容：页标题 + 说明，然后是「小标题 + 卡片」的分组；
+ *   · 卡片内一行一项，行间 1px 细线（左右缩进 14px），行高 46–52px，
+ *     标签在左、控件在右；分段控件放不下时独占一行落在标签下方；
+ *   · 开关从「色片 chip」改成 34×20 的轨道 + 圆钮，选中用强调色填充；
+ *   · 分段控件从「描边方块」改成 3px 内衬的胶囊，选中块用 --st-fill2 抬起。
  *
- * 控件本身不重写：搬过去的 .fx-slider / .fx-toggle / .fx-seg 仍是原来那批 DOM，
- * id 与事件绑定原样保留。样式依靠把 fx-glass.css / prismal-chrome.css 里的
- * #fx-panel 前缀扩成 :is(#fx-panel,#settings-modal) 来共享（见那两个文件）。
+ * 这些规则只作用于 #settings-modal（以及必要的 #skin-popover 共享规则），
+ * 视觉控制台 #fx-panel 里那套小尺寸控件保持原样。
  * ========================================================================== */
 
 /* ---------- 三条杠主菜单：快捷图标行 ---------- */
@@ -19,15 +22,15 @@
 #player-quick-menu-popover{width:276px;padding:12px 12px 10px}
 .qm-shortcuts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;margin:-2px 0 6px}
 .qm-shortcut{display:flex;flex-direction:column;align-items:center;gap:7px;padding:9px 1px 7px;
-  border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.60);
+  border:0;border-radius:12px;background:transparent;color:var(--st-t2);
   font-family:inherit;font-size:10px;font-weight:600;letter-spacing:0;white-space:nowrap;cursor:pointer;
   transition:background .18s,color .18s}
-.qm-shortcut:hover{background:rgba(255,255,255,.06);color:#fff}
+.qm-shortcut:hover{background:var(--st-fill);color:var(--st-t1)}
 .qm-shortcut-ico{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:rgba(224,250,255,.78);
+  border:1px solid var(--st-line);background:var(--st-well);color:var(--st-t2);
   transition:border-color .2s,background .2s,color .2s,box-shadow .2s}
 .qm-shortcut-ico svg{width:17px;height:17px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-.qm-shortcut:hover .qm-shortcut-ico{border-color:rgba(255,255,255,.24);color:#fff}
+.qm-shortcut:hover .qm-shortcut-ico{border-color:var(--st-line2);color:var(--st-t1)}
 .qm-shortcut.on .qm-shortcut-ico{border-color:rgba(0,245,212,.44);background:rgba(0,245,212,.13);color:#d6fff8;
   box-shadow:0 0 16px rgba(0,245,212,.18)}
 .qm-shortcut.on{color:rgba(214,255,248,.92)}
@@ -38,37 +41,36 @@
  * （同 .fx-slider[hidden] 那个坑）——未登录时「退出登录」必须真的收起来。 */
 .qm-item[hidden]{display:none!important}
 .qm-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:0;border-radius:10px;
-  background:transparent;color:rgba(255,255,255,.80);font-family:inherit;font-size:12.5px;
+  background:transparent;color:var(--st-t1);font-family:inherit;font-size:12.5px;
   cursor:pointer;text-align:left;transition:background .16s,color .16s}
-.qm-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.qm-item:hover{background:var(--st-fill);color:var(--st-t1)}
 .qm-item-ico{width:16px;height:16px;flex:0 0 auto;opacity:.66;display:block;fill:none;stroke:currentColor;
   stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .qm-item:hover .qm-item-ico{opacity:.95}
 .qm-item-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.qm-item small{font-size:10px;color:rgba(255,255,255,.36);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.qm-item small{font-size:10px;color:var(--st-t3);flex:0 0 auto;font-variant-numeric:tabular-nums}
 .qm-chev{width:13px;height:13px;flex:0 0 auto;opacity:.30;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .qm-item:hover .qm-chev{opacity:.6}
 .qm-list + .qm-list{margin-top:2px}
-.qm-list-foot .qm-item{color:rgba(255,255,255,.62);font-size:12px}
+.qm-list-foot .qm-item{color:var(--st-t2);font-size:12px}
 .qm-list-foot .qm-item:hover{color:rgba(255,140,150,.96);background:rgba(255,83,103,.10)}
 
 /* 定时关闭收进一行，点开才铺开原有的整套控件（DOM 沿用 quick menu 里那套） */
 .qm-sleep-fold > summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;
-  padding:9px 10px;border-radius:10px;color:rgba(255,255,255,.80);font-size:12.5px;
+  padding:9px 10px;border-radius:10px;color:var(--st-t1);font-size:12.5px;
   transition:background .16s,color .16s}
 .qm-sleep-fold > summary::-webkit-details-marker{display:none}
-.qm-sleep-fold > summary:hover{background:rgba(255,255,255,.07);color:#fff}
-.qm-sleep-fold > summary small{margin-left:auto;font-size:10px;color:rgba(0,245,212,.76);font-variant-numeric:tabular-nums}
+.qm-sleep-fold > summary:hover{background:var(--st-fill);color:var(--st-t1)}
+.qm-sleep-fold > summary small{margin-left:auto;font-size:10px;color:var(--st-accent);font-variant-numeric:tabular-nums}
 .qm-sleep-fold > summary .qm-chev{transition:transform .2s}
 .qm-sleep-fold[open] > summary .qm-chev{transform:rotate(90deg)}
-.qm-sleep-fold[open] > summary{background:rgba(255,255,255,.05);color:#fff}
+.qm-sleep-fold[open] > summary{background:var(--st-fill);color:var(--st-t1)}
 .qm-sleep-body{padding:4px 4px 2px}
 .qm-sleep-body .quick-menu-section-title{display:none}
 
-/* ---------- 设置页 / 皮肤面板：共用的一套「终端克制」外观 ----------
- * 参照 Claude Code 的界面语言：暖黑底、1px 细边、小圆角、不用发光，
- * 层级靠间距与明度差，数字和英文标识走等宽。
- * 这些变量挂在两个覆盖层上（不是 :root），不会漏到主界面。 */
+/* ---------- 共用变量（设置页 / 皮肤面板） ----------
+ * 皮肤面板仍用 --panel-* 那套「终端克制」令牌；设置页改用 Folia 的 --st-*，
+ * 两套都挂在各自覆盖层上，不落到 :root。 */
 #settings-modal,#skin-popover{
   --panel-line:rgba(255,255,255,.085);
   --panel-line-strong:rgba(255,255,255,.16);
@@ -82,7 +84,310 @@
   --panel-radius-sm:9px;
 }
 
-/* ---------- 设置页：遮罩与外框 ---------- */
+/* Folia 色板：窗口 / 侧栏 / 卡片三层底色 + 三档文字 + 两档填充。
+ * 设置页与皮肤弹层共用同一套（2026-11-25 起皮肤面板也改用 Folia 语言），
+ * 令牌只在这里定义一次，避免两边各抄一份之后漂掉。 */
+:is(#settings-modal, #skin-popover, .modal, #player-quick-menu-popover){
+  --st-win:#1a1a1d;
+  --st-side:#141416;
+  --st-card:#232327;
+  --st-raise:#2f2f35;
+  --st-t1:rgba(255,255,255,.94);
+  --st-t2:rgba(255,255,255,.62);
+  --st-t3:rgba(255,255,255,.42);
+  --st-line:rgba(255,255,255,.08);
+  --st-line2:rgba(255,255,255,.16);
+  --st-fill:rgba(255,255,255,.07);
+  --st-fill2:rgba(255,255,255,.12);
+  --st-track:rgba(255,255,255,.26);
+  --st-knob:#ececee;
+  --st-accent:#00f5d4;
+  --st-warn:#e3a949;
+  --st-ok:#56c98d;
+  --st-dur:.16s;
+  /* 输入框/凹槽底、滚动条、开关与滑块的高光，浅色下都要反过来 */
+  --st-well:rgba(255,255,255,.045);
+  --st-well2:rgba(255,255,255,.07);
+  --st-scroll:rgba(255,255,255,.13);
+  --st-scrollHover:rgba(255,255,255,.26);
+  --st-slider-track:rgba(255,255,255,.14);
+  --st-knob-bg:rgba(255,255,255,.18);
+  --st-knob-line:rgba(255,255,255,.42);
+  --st-switch-inset:inset 0 1px 0 rgba(255,255,255,.55);
+  --st-page-shadow:0 28px 72px rgba(0,0,0,.52);
+}
+
+/* 浅色：只换令牌，不改结构。深色是默认，浅色由 html[data-theme="light"] 打开。
+ * --panel-* 那套也一起映射过来，皮肤面板里那些老规则（宠物库、关闭按钮）跟着自动适配。 */
+html[data-theme="light"] :is(#settings-modal, #skin-popover, .modal, #player-quick-menu-popover){
+  --st-win:#f7f7f9;
+  --st-side:#efeff2;
+  --st-card:#ffffff;
+  --st-raise:#f3f3f6;
+  --st-t1:rgba(22,22,26,.90);
+  --st-t2:rgba(22,22,26,.66);
+  --st-t3:rgba(22,22,26,.46);
+  --st-line:rgba(22,22,26,.10);
+  --st-line2:rgba(22,22,26,.20);
+  --st-fill:rgba(22,22,26,.05);
+  --st-fill2:rgba(22,22,26,.10);
+  --st-track:rgba(22,22,26,.18);
+  --st-knob:#ffffff;
+  --st-accent:#00a894;
+  --st-warn:#b8791a;
+  --st-ok:#2f8f63;
+  --st-well:rgba(22,22,26,.04);
+  --st-well2:rgba(22,22,26,.06);
+  --st-scroll:rgba(22,22,26,.16);
+  --st-scrollHover:rgba(22,22,26,.28);
+  --st-slider-track:rgba(22,22,26,.14);
+  --st-knob-bg:#ffffff;
+  --st-knob-line:rgba(22,22,26,.22);
+  --st-switch-inset:inset 0 1px 0 rgba(255,255,255,.9);
+  --st-page-shadow:0 20px 56px rgba(20,20,24,.20);
+  --panel-line:rgba(22,22,26,.10);
+  --panel-line-strong:rgba(22,22,26,.20);
+  --panel-bg:#efeff2;
+  --panel-bg-2:#ffffff;
+  --panel-ink:rgba(22,22,26,.90);
+  --panel-ink-2:rgba(22,22,26,.66);
+  --panel-ink-3:rgba(22,22,26,.46);
+}
+/* 小标题（.fx-section-label 等）在 playlist.css:197 被一条全局 !important 钉成白色，
+ * 深色下没问题，浅色会直接消失。这里只对浅色补一条同权重的覆盖。 */
+html[data-theme="light"] :is(#settings-modal, #skin-popover) .fx-section-label,
+html[data-theme="light"] :is(#settings-modal, #skin-popover) .pa-section-title,
+html[data-theme="light"] :is(#settings-modal, #skin-popover) .pl-section-label,
+html[data-theme="light"] :is(#settings-modal, #skin-popover) .quick-menu-section-title{
+  color:rgba(22,22,26,.82)!important;text-shadow:none!important;
+}
+/* ---------- 弹窗（.modal / AI 歌单）：从设置页点开的，浅色下也要跟着换 ----------
+ * .modal 已在上面被并入令牌作用域，所以里面可以直接用 --st-*。
+ * AI 歌单那套（home-insight.css 的 .ai-playlist-*）原来是写死的深色玻璃，这里逐项覆盖。 */
+/* glass.css 对 .modal 的 background / border-color / box-shadow 也带 !important，
+ * 浅色必须同权重才盖得住（跟 #toast 同一个坑）。 */
+html[data-theme="light"] .modal{
+  background:linear-gradient(180deg,#ffffff,#f6f6f8)!important;
+  border-color:rgba(22,22,26,.12)!important;
+  color:rgba(22,22,26,.90);
+  box-shadow:0 26px 80px rgba(20,20,24,.22),0 0 0 1px rgba(22,22,26,.04)!important;
+}
+html[data-theme="light"] .modal h2{color:rgba(22,22,26,.92)}
+html[data-theme="light"] .modal .desc{color:rgba(22,22,26,.60)}
+/* .modal-btn 也在 glass.css 的按钮 !important 清单里，三件套都要同权重覆盖 */
+html[data-theme="light"] .modal-btn{
+  background:var(--st-fill)!important;border-color:var(--st-line2)!important;color:var(--st-t1)!important;
+}
+html[data-theme="light"] .modal-btn:hover{
+  background:var(--st-fill2)!important;border-color:rgba(22,22,26,.28)!important;
+}
+html[data-theme="light"] .modal-btn.primary{
+  background:#0aa892!important;border-color:#0aa892!important;color:#ffffff!important;
+}
+html[data-theme="light"] .modal-btn.primary:hover{
+  background:#079481!important;border-color:#079481!important;
+}
+
+html[data-theme="light"] .ai-playlist-modal{
+  background:#ffffff!important;border-color:rgba(22,22,26,.12)!important;color:rgba(22,22,26,.90);
+}
+html[data-theme="light"] .ai-playlist-header h2{color:rgba(22,22,26,.92)}
+html[data-theme="light"] .ai-playlist-config-toggle{
+  background:var(--st-fill);border-color:var(--st-line);color:var(--st-t2);
+}
+html[data-theme="light"] .ai-playlist-config-toggle:hover{background:var(--st-fill2);color:var(--st-t1)}
+html[data-theme="light"] .ai-playlist-config-status{color:var(--st-t3)}
+html[data-theme="light"] .ai-playlist-config-status.configured{color:#0a8f7d}
+html[data-theme="light"] .ai-playlist-config-panel{background:var(--st-well);border-color:var(--st-line)}
+html[data-theme="light"] .ai-playlist-config-row label{color:var(--st-t2)}
+html[data-theme="light"] .ai-playlist-config-row input,
+html[data-theme="light"] .ai-playlist-prompt{
+  background:#ffffff;border-color:var(--st-line2);color:var(--st-t1);
+}
+html[data-theme="light"] .ai-playlist-config-row input::placeholder,
+html[data-theme="light"] .ai-playlist-prompt::placeholder{color:var(--st-t3)}
+html[data-theme="light"] .ai-playlist-config-hint{color:var(--st-t3)}
+html[data-theme="light"] .ai-playlist-chips button{
+  background:var(--st-fill);border-color:var(--st-line);color:var(--st-t2);
+}
+html[data-theme="light"] .ai-playlist-chips button:hover{
+  background:rgba(10,168,146,.10);border-color:rgba(10,168,146,.34);color:#0a8f7d;
+}
+/* 歌单名输入框是内联样式（color:#fff，改不动），浅色下只能靠 !important 盖，
+ * 否则用户输入的文字是白的、看不见。 */
+html[data-theme="light"] #ai-playlist-save-name{
+  background:#ffffff!important;border-color:var(--st-line2)!important;color:var(--st-t1)!important;
+}
+html[data-theme="light"] #ai-playlist-save-name::placeholder{color:var(--st-t3)!important}
+html[data-theme="light"] .ai-playlist-loading,
+html[data-theme="light"] .ai-playlist-empty{color:var(--st-t3)}
+html[data-theme="light"] .ai-playlist-item:hover{background:var(--st-fill)}
+html[data-theme="light"] .ai-playlist-item-title{color:rgba(22,22,26,.90)}
+html[data-theme="light"] .ai-playlist-item-artist{color:var(--st-t2)}
+html[data-theme="light"] .ai-playlist-item-reason{color:var(--st-t3)}
+html[data-theme="light"] .ai-playlist-item-index{color:rgba(10,143,125,.75)}
+html[data-theme="light"] .ai-playlist-item-btn{
+  border-color:rgba(10,168,146,.30);background:rgba(10,168,146,.08);color:#0a8f7d;
+}
+html[data-theme="light"] .ai-playlist-item-btn:hover{background:rgba(10,168,146,.16)}
+html[data-theme="light"] .ai-playlist-error{
+  background:rgba(200,40,40,.06);border-color:rgba(200,40,40,.22);color:#b03030;
+}
+
+/* ---------- 三条杠快捷菜单：浅色 ----------
+ * 容器在 index.css 里是写死的深底（rgba(10,11,14,.92)），这里换掉；
+ * .qm-shortcut.on 的青色光晕在浅色下要收掉，否则发灰。 */
+html[data-theme="light"] .player-quick-menu-popover{
+  background:rgba(252,252,254,.97)!important;
+  border-color:rgba(22,22,26,.10)!important;
+  box-shadow:0 18px 44px rgba(20,20,24,.20)!important;
+}
+html[data-theme="light"] .qm-shortcut.on .qm-shortcut-ico{
+  border-color:rgba(10,168,146,.45);background:rgba(10,168,146,.12);color:#0a6f61;box-shadow:none;
+}
+html[data-theme="light"] .qm-shortcut.on{color:#0a6f61}
+/* 「应用工具」这类分组小标题在 index.css:131 写死成 rgba(255,255,255,.92)，浅色下会消失 */
+html[data-theme="light"] #player-quick-menu-popover .quick-menu-section-title{color:rgba(22,22,26,.60)!important}
+html[data-theme="light"] .qm-list-foot .qm-item:hover{background:rgba(200,40,40,.08);color:#b03030}
+
+/* ---------- 播放页「歌曲过渡」：琥珀金配色在浅色下要压深 ----------
+ * 这套颜色（shell.css 的 .tt-*）是为深色底设计的 #ffdca6 / rgba(255,186,94,…)，
+ * 换到白底就成了浅黄字，几乎看不见。浅色下保留「金缝」的辨识度，但把明度压到可读区间。 */
+/* 存储页的数值用的是荧光青 rgba(--fc-accent-rgb,.86)（fx-panel.css:337），
+ * 白底上对比度只有 1.4:1，换成深青。 */
+html[data-theme="light"] #settings-modal .cache-storage-row b,
+html[data-theme="light"] #settings-modal .cache-storage-head span:last-child{color:#0a8f7d}
+html[data-theme="light"] #settings-modal .tt-caption{color:rgba(140,92,18,.90)}
+/* 说明行与复位按钮继承的是琥珀色，白底上看不见 */
+html[data-theme="light"] #settings-modal .tt-caption-row{color:var(--st-t2)}
+html[data-theme="light"] #settings-modal #track-transition-desc{color:rgba(140,92,18,.88)}
+html[data-theme="light"] #settings-modal .tt-reset{
+  background:var(--st-fill);border-color:var(--st-line);color:#8a5a12;
+}
+/* 预览舞台本身是「金色光缝打在黑底上」的效果画布，黑底保留；只把描边换成浅色可辨的线 */
+html[data-theme="light"] #settings-modal .tt-scene{border-color:var(--st-line2)}
+html[data-theme="light"] #settings-modal .tt-status{color:rgba(140,92,18,.80)}
+html[data-theme="light"] #settings-modal .tt-param-note{color:var(--st-t3)}
+html[data-theme="light"] #settings-modal .tt-card{
+  border-color:var(--st-line);background:var(--st-card);color:var(--st-t2);
+}
+html[data-theme="light"] #settings-modal .tt-card:hover{background:var(--st-raise);border-color:var(--st-line2);color:var(--st-t1)}
+html[data-theme="light"] #settings-modal .tt-card .tt-label{color:var(--st-t1)}
+html[data-theme="light"] #settings-modal .tt-card small{color:var(--st-t2)}
+/* 「未开启」时整套卡片降到 62% 透明，在深色下是压暗、在白底上就接近消失；
+ * 浅色下抬到 78%，靠「没有金色选中环」区分状态而不是靠透明。 */
+html[data-theme="light"] #settings-modal .track-transition-fold.tt-off .tt-card{opacity:.78}
+html[data-theme="light"] #settings-modal .tt-card.active{
+  border-color:rgba(176,112,24,.62);background:rgba(255,186,94,.18);color:#6f4a10;
+  box-shadow:inset 0 0 0 1px rgba(176,112,24,.28);
+}
+html[data-theme="light"] #settings-modal .tt-card.active .tt-icon{filter:none}
+html[data-theme="light"] #settings-modal .tt-card.active small{color:rgba(111,74,16,.78)}
+html[data-theme="light"] #settings-modal .track-transition-fold.tt-off .tt-card.active{
+  border-color:rgba(176,112,24,.34);background:rgba(255,186,94,.10);box-shadow:none;
+}
+html[data-theme="light"] #settings-modal .tt-choice button{
+  border-color:var(--st-line);background:var(--st-well);color:var(--st-t2);
+}
+html[data-theme="light"] #settings-modal .tt-choice button:hover{background:var(--st-fill2);color:var(--st-t1)}
+html[data-theme="light"] #settings-modal .tt-choice button.active{
+  border-color:rgba(176,112,24,.55);background:rgba(255,186,94,.18);color:#6f4a10;
+}
+html[data-theme="light"] #settings-modal .tt-legacy-row{border-top-color:var(--st-line)}
+html[data-theme="light"] #settings-modal #track-transition-toggle.on .dot{background:#b0701a;box-shadow:none}
+
+/* ---------- 音频页 EQ 预设卡（平坦/流行/摇滚/人声）----------
+ * 深色下未选中是 .58 白、选中是蓝底白字；浅色沿用 --st-t2 会变成 #8b 灰，
+ * 而选中态落成 --st-fill2 的灰块，蓝色的 EQ 身份丢了。浅色按「白卡 + 蓝环」重做。 */
+html[data-theme="light"] #settings-modal .audio-tuning-presets button{color:rgba(22,22,26,.72)}
+html[data-theme="light"] #settings-modal .audio-tuning-presets button:hover{color:rgba(22,22,26,.90)}
+html[data-theme="light"] #settings-modal .audio-tuning-presets button .at-preset-wave i{background:rgba(22,22,26,.16)}
+html[data-theme="light"] #settings-modal .audio-tuning-presets button:hover .at-preset-wave i{background:rgba(22,22,26,.28)}
+html[data-theme="light"] #settings-modal .audio-tuning-presets button.active{
+  background:#ffffff;border-color:rgba(63,142,222,.55);
+  box-shadow:inset 0 0 0 1px rgba(63,142,222,.26);color:#1f4f86;
+}
+html[data-theme="light"] #settings-modal .audio-tuning-presets button.active .at-preset-wave i{background:#3f8ede}
+
+/* 输出设备那排小按钮（刷新 / 面板）：fx-panel.css 里是白字 + 半透明深底，浅色下整块消失 */
+html[data-theme="light"] #settings-modal .audio-output-section .quality-output-refresh{
+  border-color:var(--st-line);background:var(--st-fill);color:var(--st-t1);
+}
+html[data-theme="light"] #settings-modal .audio-output-section .quality-output-refresh:hover{
+  background:var(--st-fill2);border-color:var(--st-line2);color:var(--st-t1);
+}
+
+/* ---------- 搜索「结果面板」浅色 ----------
+ * 只改结果面板（#search-results）；搜索框与分类胶囊用户明确要求保持深色玻璃。
+ * 面板底色 / 描边 / 阴影 / 滤镜在 glass.css:31 那组 !important 里，必须同权重覆盖；
+ * 行内文字与按钮（.song-action-btn / .add-btn）也在 glass 的按钮 !important 清单里。 */
+html[data-theme="light"] #search-results{
+  background:rgba(252,252,254,.97)!important;
+  border-color:rgba(22,22,26,.10)!important;
+  box-shadow:0 16px 40px rgba(20,20,24,.16)!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+html[data-theme="light"] #search-results::-webkit-scrollbar-thumb{background:var(--st-scroll)}
+html[data-theme="light"] #search-results::-webkit-scrollbar-thumb:hover{background:var(--st-scrollHover)}
+html[data-theme="light"] #search-results .search-result{border-bottom-color:rgba(22,22,26,.07)}
+html[data-theme="light"] #search-results .search-result:hover{background:rgba(10,168,146,.08)}
+html[data-theme="light"] #search-results .search-result img{background:rgba(22,22,26,.06)}
+html[data-theme="light"] #search-results .search-result-title{color:rgba(22,22,26,.92)}
+html[data-theme="light"] #search-results .search-result-meta{color:rgba(22,22,26,.55)}
+/* glass.css:194 给 .search-artist-link 设了 color:rgba(255,255,255,.92)!important，
+ * 浅色下不补 !important 就是白字白底 —— 搜「晴天」时歌手名看不见就是这个。 */
+html[data-theme="light"] #search-results .search-artist-link{color:#0a6f61!important}
+html[data-theme="light"] #search-results .search-artist-link:hover{color:#075e53!important}
+html[data-theme="light"] #search-results .tag-podcast{background:rgba(22,22,26,.07);color:rgba(22,22,26,.60)}
+html[data-theme="light"] #search-results .song-action-btn{
+  background:var(--st-fill)!important;border-color:var(--st-line)!important;
+  color:rgba(22,22,26,.62)!important;box-shadow:none!important;
+}
+html[data-theme="light"] #search-results .song-action-btn:hover{
+  background:var(--st-fill2)!important;color:rgba(22,22,26,.92)!important;
+}
+html[data-theme="light"] #search-results .song-action-btn.liked{
+  color:#d0355a!important;border-color:rgba(208,53,90,.32)!important;
+}
+html[data-theme="light"] #search-results .add-btn{
+  background:var(--st-fill)!important;border-color:var(--st-line)!important;color:rgba(22,22,26,.62)!important;
+}
+html[data-theme="light"] #search-results .add-btn:hover{
+  background:rgba(10,168,146,.12)!important;border-color:rgba(10,168,146,.34)!important;color:#0a6f61!important;
+}
+html[data-theme="light"] #search-results .search-empty,
+html[data-theme="light"] #search-results .search-empty-text{color:rgba(22,22,26,.55)}
+html[data-theme="light"] #search-results .search-empty-shimmer{
+  background:linear-gradient(90deg,rgba(22,22,26,.05),rgba(22,22,26,.10),rgba(22,22,26,.05));
+}
+html[data-theme="light"] #search-results .search-retry-btn{
+  background:var(--st-fill);border-color:var(--st-line);color:rgba(22,22,26,.80);
+}
+html[data-theme="light"] #search-results .podcast-result-head{
+  background:transparent;border-bottom-color:rgba(22,22,26,.07);
+}
+html[data-theme="light"] #search-results .podcast-back-btn{
+  background:var(--st-fill);border-color:var(--st-line);color:rgba(22,22,26,.62);
+}
+html[data-theme="light"] #search-results .search-load-more{
+  padding:6px 16px;border-radius:9px;border:1px solid var(--st-line);background:var(--st-fill);
+  color:rgba(22,22,26,.80);font-family:inherit;font-size:12px;cursor:pointer;
+}
+html[data-theme="light"] #search-results .search-load-more:hover{background:var(--st-fill2);border-color:var(--st-line2)}
+
+/* 提示条（#toast）是全局浮层，不在这两个面板里，但既然是「跟着主题走」就要一起换：
+ * 深色下是深底白字，浅色下改成浅底深字。
+ * 这里必须带 !important：glass.css 与 playlist.css 对 #toast 的 background /
+ * border-color / box-shadow 都写了 !important 的深色玻璃，不加同权重就永远输。 */
+html[data-theme="light"] #toast{
+  background:rgba(252,252,254,.97)!important;
+  border-color:rgba(22,22,26,.12)!important;
+  color:rgba(22,22,26,.90)!important;
+  box-shadow:0 10px 28px rgba(20,20,24,.16)!important;
+}
+
+/* ---------- 覆盖层与外框 ---------- */
 /* 层级：压过 quick menu / 皮肤弹层（620）与视觉控制台（18），
  * 但要低于 about / update 这类 .modal-mask —— 它们默认 z-index:50，
  * 所以设置页打开时把 modal-mask 抬到 900，否则「完整构建溯源」会被盖住看不见。 */
@@ -92,182 +397,542 @@
   opacity:0;pointer-events:none;transition:opacity .18s ease}
 body.settings-page-open #settings-modal{opacity:1;pointer-events:auto}
 /* 设置页是 fixed 覆盖层，外层不该跟着滚：一旦 document 能滚，
- * 定位到某个控件时会把「标题 + tab」顶出可视区，底部还露出窗口底色。 */
+ * 定位到某个控件时会把「标题」顶出可视区，底部还露出窗口底色。 */
 body.settings-page-open{overflow:hidden}
 body.settings-page-open .modal-mask{z-index:900}
 body.settings-page-open #toast{z-index:920}
 
-.settings-shell{width:min(1080px,94vw);height:min(744px,90vh);display:flex;flex-direction:column;
-  border-radius:var(--panel-radius);border:1px solid var(--panel-line);overflow:hidden;
-  background:var(--panel-bg);
-  box-shadow:0 28px 72px rgba(0,0,0,.52);
+/* 外壳：Folia 的两栏网格（顶栏横跨，左侧导航，右侧内容）。 */
+.settings-shell{width:min(1120px,94vw);height:min(768px,90vh);display:grid;
+  grid-template-columns:214px minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:"head head" "nav body";
+  border-radius:var(--panel-radius);border:1px solid var(--st-line);overflow:hidden;
+  background:var(--st-win);
+  box-shadow:var(--st-page-shadow);
   transform:translateY(10px);
   transition:transform .24s cubic-bezier(.2,.8,.3,1)}
 body.settings-page-open .settings-shell{transform:none}
 
-.settings-head{flex:0 0 auto;display:flex;align-items:flex-end;gap:18px;padding:22px 28px 14px}
+.settings-head{grid-area:head;display:flex;align-items:center;gap:16px;
+  padding:14px 18px 14px 20px;border-bottom:1px solid var(--st-line)}
+.settings-head-title{display:flex;flex-direction:column;gap:3px;min-width:0}
 .settings-kicker{font-family:var(--panel-mono);font-size:9px;font-weight:500;letter-spacing:1.6px;
-  color:var(--panel-ink-3);margin-bottom:6px;text-transform:uppercase}
-.settings-title{margin:0;font-size:19px;line-height:1.2;font-weight:640;letter-spacing:.2px;color:var(--panel-ink)}
+  color:var(--st-t3);text-transform:uppercase;line-height:1}
+.settings-title{margin:0;font-size:15px;line-height:1.2;font-weight:640;letter-spacing:.2px;color:var(--st-t1)}
 .settings-head-spacer{flex:1 1 auto}
-.settings-search{position:relative;width:232px;flex:0 0 auto}
-.settings-search input{width:100%;height:32px;border-radius:var(--panel-radius-sm);padding:0 30px 0 29px;
-  border:1px solid var(--panel-line);background:rgba(255,255,255,.028);
-  color:var(--panel-ink);font-family:inherit;font-size:12px;outline:none;
-  transition:border-color .16s,background .16s}
-.settings-search input::placeholder{color:var(--panel-ink-3)}
-.settings-search input:focus{border-color:var(--panel-line-strong);background:rgba(255,255,255,.05)}
+.settings-search{position:relative;width:236px;flex:0 0 auto}
+.settings-search input{width:100%;height:30px;border-radius:8px;padding:0 30px 0 29px;
+  border:1px solid var(--st-line);background:var(--st-well);
+  color:var(--st-t1);font-family:inherit;font-size:12px;outline:none;
+  transition:border-color var(--st-dur),background var(--st-dur)}
+.settings-search input::placeholder{color:var(--st-t3)}
+.settings-search input:focus{border-color:var(--st-line2);background:var(--st-well2)}
 .settings-search-ico{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;
-  color:var(--panel-ink-3);pointer-events:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+  color:var(--st-t3);pointer-events:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .settings-search-clear{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:22px;height:22px;
   display:none;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;
-  color:var(--panel-ink-3);cursor:pointer;font-size:14px;line-height:1;padding:0}
-.settings-search-clear:hover{background:rgba(255,255,255,.07);color:var(--panel-ink)}
+  color:var(--st-t3);cursor:pointer;font-size:14px;line-height:1;padding:0}
+.settings-search-clear:hover{background:var(--st-fill);color:var(--st-t1)}
 .settings-search.has-value .settings-search-clear{display:flex}
-.settings-close{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;
-  border:1px solid var(--panel-line);border-radius:var(--panel-radius-sm);background:transparent;
-  color:var(--panel-ink-2);cursor:pointer;transition:background .16s,color .16s,border-color .16s}
-.settings-close:hover{background:rgba(255,255,255,.06);border-color:var(--panel-line-strong);color:var(--panel-ink)}
+.settings-close{flex:0 0 auto;width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--st-line);border-radius:8px;background:transparent;
+  color:var(--st-t2);cursor:pointer;transition:background var(--st-dur),color var(--st-dur),border-color var(--st-dur)}
+.settings-close:hover{background:var(--st-fill);border-color:var(--st-line2);color:var(--st-t1)}
 .settings-close svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 
-.settings-tabs{flex:0 0 auto;display:flex;gap:0;padding:0 22px;overflow-x:auto;
-  border-bottom:1px solid var(--panel-line);scrollbar-width:none}
-.settings-tabs::-webkit-scrollbar{height:0}
-.settings-tab{position:relative;padding:9px 13px 11px;border:0;background:transparent;
-  color:var(--panel-ink-3);font-family:inherit;font-size:12.5px;font-weight:500;letter-spacing:.1px;
-  cursor:pointer;white-space:nowrap;transition:color .16s}
-.settings-tab:hover{color:var(--panel-ink-2)}
-.settings-tab.active{color:var(--panel-ink);font-weight:640}
-.settings-tab.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;
-  border-radius:1px;background:#00f5d4}
+/* ---------- 左侧导航（Folia 的 side list） ---------- */
+.settings-tabs{grid-area:nav;display:flex;flex-direction:column;gap:1px;
+  padding:10px 8px 16px;background:var(--st-side);border-right:1px solid var(--st-line);
+  overflow-y:auto;overflow-x:hidden;scrollbar-width:none}
+.settings-tabs::-webkit-scrollbar{width:0}
+.settings-nav-group{padding:12px 10px 5px;font-size:11px;line-height:1.4;color:var(--st-t3);
+  letter-spacing:.2px;user-select:none}
+.settings-tab{display:flex;align-items:center;gap:10px;width:100%;height:32px;flex:0 0 auto;
+  padding:0 10px;border:0;border-radius:8px;background:transparent;
+  color:var(--st-t2);font-family:inherit;font-size:13px;font-weight:400;letter-spacing:0;
+  cursor:pointer;text-align:left;white-space:nowrap;transition:background var(--st-dur),color var(--st-dur)}
+.settings-tab svg{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.72}
+.settings-tab:hover{background:var(--st-fill);color:var(--st-t1)}
+.settings-tab.active{background:var(--st-fill2);color:var(--st-t1);font-weight:600}
+.settings-tab.active svg{opacity:1}
+/* 旧版的青色下划线在侧栏里没有意义 */
+.settings-tab.active::after{display:none}
 
-.settings-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 28px 40px}
-.settings-body::-webkit-scrollbar{width:8px}
-.settings-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.13);border-radius:999px;border:2px solid transparent;background-clip:content-box}
-.settings-body:hover::-webkit-scrollbar-thumb{background:rgba(255,255,255,.24);background-clip:content-box}
+/* ---------- 内容区 ---------- */
+.settings-body{grid-area:body;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 30px 44px}
+.settings-body::-webkit-scrollbar{width:10px}
+.settings-body::-webkit-scrollbar-thumb{background:var(--st-scroll);border-radius:999px;border:3px solid transparent;background-clip:content-box}
+.settings-body:hover::-webkit-scrollbar-thumb{background:var(--st-scrollHover);background-clip:content-box}
 
-.settings-page{display:none;max-width:780px}
+.settings-page{display:none;max-width:812px;margin:0 auto}
 .settings-page.active{display:block}
 
-.settings-group{margin-bottom:26px}
+/* 页标题：Folia 的 PageHeader（标题 + 一行说明） */
+.settings-page-head{padding:22px 2px 2px}
+.settings-page-title{margin:0;font-size:17px;line-height:1.3;font-weight:640;letter-spacing:.1px;color:var(--st-t1)}
+.settings-page-sub{margin:6px 0 0;font-size:12px;line-height:1.65;color:var(--st-t2)}
+
+/* ---------- 分组 = 小标题 + 卡片 ---------- */
+.settings-group{margin:22px 0 0}
 .settings-group:last-child{margin-bottom:0}
-/* 分组标题走等宽的克制写法：小号、宽字距、低对比，不跟内容抢注意力 */
-.settings-group-title{font-family:var(--panel-mono);font-size:10px;font-weight:500;letter-spacing:1.1px;
-  color:rgba(255,255,255,.46);margin:0 0 9px;text-transform:uppercase}
-.settings-group-note{font-size:10.5px;line-height:1.65;color:var(--panel-ink-3);margin-top:8px}
-.settings-group-body > .fx-section-label:first-child{margin-top:0}
+.settings-group-title{margin:0 0 8px;padding:0 2px;font-size:12.5px;font-weight:600;
+  letter-spacing:.2px;color:var(--st-t2);text-transform:none;font-family:inherit}
+.settings-group-body{position:relative;background:var(--st-card);border-radius:12px;
+  box-shadow:0 0 0 1px var(--st-line);overflow:hidden;padding:0}
+.settings-group-note{margin:9px 2px 0;font-size:11.5px;line-height:1.7;color:var(--st-t3)}
 
-/* 「关于」页的三行事实 + 两个按钮（这两组之前没有任何样式，是裸 div） */
-.settings-fact{display:flex;align-items:baseline;gap:16px;min-height:34px;padding:7px 0;
-  border-bottom:1px solid rgba(255,255,255,.055)}
-.settings-fact:last-of-type{border-bottom:0}
-.settings-fact > span{flex:0 0 108px;font-size:11.5px;color:var(--panel-ink-2)}
-.settings-fact > b{flex:1 1 auto;min-width:0;font-family:var(--panel-mono);font-size:11.5px;font-weight:500;
-  color:var(--panel-ink);font-variant-numeric:tabular-nums;word-break:break-all}
-.settings-actions{display:flex;gap:9px;margin-top:14px}
+/* 卡片里一行一项：行间的 1px 细线画在「下一个块」的顶边，左右各缩进 14px。
+ * 标签（.fx-section-label / .pa-section-title）与它下面的控件属于同一项，
+ * 所以标签后面的那个块不再画线。 */
+.settings-group-body > *{position:relative}
+.settings-group-body > * + *::before{content:'';position:absolute;left:14px;right:14px;top:0;height:1px;
+  background:var(--st-line);pointer-events:none;z-index:0}
+.settings-group-body > .fx-section-label + *::before,
+.settings-group-body > .pa-section-title + *::before,
+.settings-group-body > .quick-menu-section-title + *::before,
+.settings-group-body > summary + *::before{display:none}
 
-/* 组标题已经承担了「窗口 / 淡入淡出 / 歌曲过渡」这类小标题，
-   组里第一行再冒一个同名 section-label 就重复了。 */
-.settings-group-body > .fx-section-label:first-child,
-.settings-group-body > .quick-menu-section-title:first-child{display:none}
+/* 第一行的小标题照常显示：性能页的「直播 / 后台」、内存页的「内存压缩 / Mem Reduct」
+ * 都不是组标题的重复，而是这一项自己的名字。真正的重复标题直接删 DOM。 */
 
-/* 设置页里不折叠：点进来就是要改参数，再点一次 summary 只是多一道门槛。
-   summary 里的 *_summary 文案仍在 DOM 里，三条杠菜单的摘要照旧读得到。 */
+/* ---------- 行标签 ---------- */
+#settings-modal .fx-section-label{margin:0;padding:15px 16px 0;font-family:inherit;
+  font-size:13.5px;font-weight:500;line-height:1.4;letter-spacing:0;text-transform:none;color:var(--st-t1)}
+#settings-modal .fx-label-scope{margin-left:6px;font-size:10.5px;font-weight:400;color:var(--st-t3)}
+#settings-modal .pa-section-title{margin:0;padding:15px 16px 0;font-size:13.5px;font-weight:500;
+  color:var(--st-t1);letter-spacing:0;text-transform:none}
+#settings-modal .quick-menu-section-title{margin:0;padding:15px 16px 0;font-size:13.5px;font-weight:500;
+  color:var(--st-t1);letter-spacing:0}
+
+/* ---------- 开关：轨道 + 圆钮 ---------- */
+/* 保留 .fx-toggle / .dot 结构：toggleFx() 与 06b 都按 id 与 .dot 读写状态。 */
+#settings-modal .fx-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  min-height:0;width:100%;padding:13px 16px;border:0;border-radius:0;background:transparent;
+  font-family:inherit;font-size:13.5px;font-weight:400;color:var(--st-t1);cursor:pointer;
+  transition:background var(--st-dur)}
+#settings-modal .fx-toggle:hover{background:var(--st-fill)}
+#settings-modal .fx-toggle.on{color:var(--st-t1);background:transparent;border-color:transparent}
+#settings-modal .fx-toggle > span:first-child{flex:1 1 auto;min-width:0;padding:0;overflow:visible;
+  text-overflow:clip;white-space:normal;line-height:1.45}
+#settings-modal .fx-toggle .dot{position:relative;flex:0 0 auto;width:34px;height:20px;border-radius:999px;
+  background:var(--st-track);box-shadow:none;transition:background var(--st-dur)}
+#settings-modal .fx-toggle .dot::after{content:'';position:absolute;left:2px;top:2px;width:16px;height:16px;
+  border-radius:50%;background:var(--st-knob);box-shadow:0 1px 2px rgba(0,0,0,.35);
+  transition:transform var(--st-dur) cubic-bezier(.2,.8,.3,1),background var(--st-dur)}
+#settings-modal .fx-toggle.on .dot{background:var(--st-accent)}
+#settings-modal .fx-toggle.on .dot::after{transform:translateX(14px);background:#0b1a18;box-shadow:none}
+/* 开发锁定的开关：整体降透明度，不画装饰 */
+#settings-modal .fx-toggle.dev-locked{opacity:.5;background:transparent}
+#settings-modal .fx-toggle.dev-locked .dot{background:var(--st-track)}
+
+/* 开关组：设置页一律单列（444px 的面板才需要两列） */
+#settings-modal .fx-toggle-grid{display:grid;grid-template-columns:1fr;gap:0}
+#settings-modal .fx-toggle-grid > .fx-toggle + .fx-toggle::before{content:'';position:absolute;
+  left:14px;right:14px;top:0;height:1px;background:var(--st-line);pointer-events:none}
+/* ::before 可能被上面的「清掉开关伪元素」规则压掉，这里再用 inset 阴影兜一层，
+ * 保证同一张卡片里的开关行之间始终有 1px 细线。 */
+#settings-modal .fx-toggle-grid > .fx-toggle:not(:first-child){box-shadow:inset 0 1px 0 var(--st-line)!important}
+#settings-modal .fx-toggle-grid > .fx-toggle.fx-toggle-primary{grid-column:auto}
+
+/* 开关组的行分隔线：::before 被上面「清掉开关伪元素」的 !important 规则占住了，
+ * 这里用 inset 阴影补一条 1px 线，保证「播放行为」这种连续开关行之间有线。
+ * 放在复位块之前也生效 —— 这条特异性 (1,3,0) 高于复位块的 (1,1,0)。 */
+#settings-modal .settings-group-body > .fx-toggle + .fx-toggle{box-shadow:inset 0 1px 0 var(--st-line)!important}
+
+/* ---------- 滑块行：标签在左，轨道与数值在右 ---------- */
+#settings-modal .fx-slider{display:flex;align-items:center;gap:14px;min-height:0;margin:0;
+  padding:12px 16px;border:0;border-radius:0;background:transparent}
+#settings-modal .fx-slider:hover{background:var(--st-fill)}
+#settings-modal .fx-slider label{flex:1 1 auto;min-width:0;font-size:13.5px;color:var(--st-t1);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .fx-slider input[type=range]{flex:0 0 190px;width:190px;margin:0}
+#settings-modal .fx-slider output{flex:0 0 54px;text-align:right;font-family:var(--panel-mono);
+  font-size:11.5px;color:var(--st-t2);font-variant-numeric:tabular-nums}
+
+/* 淡入淡出 / 变速 / 过渡参数这些「自己画格子」的行，统一按同一套行样式排 */
+#settings-modal .fade-control-row,
+#settings-modal .at-control-row,
+#settings-modal .tt-param-row{display:flex;align-items:center;gap:14px;margin:0;padding:12px 16px;
+  border:0;border-radius:0;background:transparent}
+#settings-modal .fade-control-row label,
+#settings-modal .at-control-row label,
+#settings-modal .tt-param-row label{flex:1 1 auto;min-width:0;font-size:13.5px;color:var(--st-t1)}
+#settings-modal .fade-control-row input[type=range],
+#settings-modal .at-control-row input[type=range],
+#settings-modal .tt-param-row input[type=range]{flex:0 0 190px;width:190px;margin:0}
+#settings-modal .fade-control-row span,
+#settings-modal .at-control-row span,
+#settings-modal .tt-param-row span{flex:0 0 54px;text-align:right;font-family:var(--panel-mono);
+  font-size:11.5px;color:var(--st-t2);font-variant-numeric:tabular-nums}
+
+/* ---------- 分段控件：内衬胶囊 ---------- */
+#settings-modal .fx-seg{display:flex;gap:2px;margin:10px 14px 14px;padding:3px;
+  border:0;border-radius:9px;background:var(--st-fill);overflow:hidden}
+#settings-modal .fx-seg button{flex:1 1 0;min-width:0;padding:6px 8px;border:0;border-radius:7px;
+  background:transparent;color:var(--st-t2);font-family:inherit;font-size:12px;font-weight:400;
+  letter-spacing:0;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background var(--st-dur),color var(--st-dur)}
+#settings-modal .fx-seg button:hover{background:var(--st-fill);color:var(--st-t1)}
+#settings-modal .fx-seg button.active{background:var(--st-fill2)!important;color:var(--st-t1)!important;
+  font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.35)!important}
+/* fx-glass.css 给 .fx-seg 加的那层 135deg 白高光会盖住选中块，设置页不要 */
+#settings-modal .fx-seg::before{display:none!important}
+/* 7 档帧率这种长条：设置页宽度够，一排放得下就不要再折行。
+ * 444px 的面板里它是 4 列 grid（prismal-chrome 还让「跟随屏幕」占满第一行），
+ * 设置页改成 flex，grid-column 在 flex 容器里自然失效。 */
+#settings-modal .foreground-fps-seg{display:flex;grid-template-columns:none;
+  gap:2px;margin:10px 14px 14px;padding:3px;border-radius:9px}
+#settings-modal .memory-mask-seg{margin:10px 14px 14px}
+#settings-modal .break-reminder-interval-seg{margin:10px 14px 14px}
+
+/* 无标签、直接落在卡片里的小控件，自己补一条顶线 */
+#settings-modal .settings-group-body > .fx-seg::before{content:'';position:absolute;
+  left:14px;right:14px;top:0;height:1px;background:var(--st-line);pointer-events:none}
+
+/* ---------- 选择框 ---------- */
+#settings-modal .fx-select,
+#settings-modal select{width:100%;max-width:100%;margin:10px 14px 14px;padding:8px 11px;
+  border:1px solid var(--st-line);border-radius:8px;background:var(--st-fill);
+  color:var(--st-t1);font-family:inherit;font-size:12.5px;outline:none}
+#settings-modal .fx-select option{background:#1d1d20;color:#fff}
+#settings-modal #playback-output-device{margin:10px 14px 6px}
+
+/* ---------- 通用行内小件 ---------- */
+#settings-modal .fx-sub{font-size:11.5px;line-height:1.6;color:var(--st-t3);font-variant-numeric:tabular-nums}
+#settings-modal .audio-tuning-hint,
+#settings-modal .playback-advanced-hint{padding:2px 16px 14px;font-size:11.5px;line-height:1.7;color:var(--st-t3)}
+#settings-modal .fx-mini-btn{flex:0 0 auto;width:auto;height:28px;padding:0 14px;border:1px solid var(--st-line);border-radius:7px;
+  background:var(--st-fill);color:var(--st-t1);font-family:inherit;font-size:12px;cursor:pointer;
+  transition:background var(--st-dur),border-color var(--st-dur)}
+#settings-modal .fx-mini-btn:hover{background:var(--st-fill2);border-color:var(--st-line2)}
+#settings-modal .fx-mini-btn.ghost{background:transparent}
+
+/* 播放高级里的预设 / 动作行 */
+#settings-modal .playback-speed-presets{display:flex;gap:6px;margin:0 14px 14px;padding-left:0}
+#settings-modal .playback-speed-presets button{flex:1 1 0;height:28px;border:1px solid var(--st-line);
+  border-radius:7px;background:transparent;color:var(--st-t2);font-family:inherit;font-size:11.5px;cursor:pointer}
+#settings-modal .playback-speed-presets button:hover{background:var(--st-fill);color:var(--st-t1)}
+#settings-modal .playback-speed-presets button.active{background:var(--st-fill2);color:var(--st-t1);font-weight:600}
+#settings-modal .playback-output-actions{display:flex;gap:8px;margin:0 14px 12px}
+#settings-modal .playback-output-actions button{height:28px;padding:0 12px;border:1px solid var(--st-line);
+  border-radius:7px;background:transparent;color:var(--st-t2);font-family:inherit;font-size:12px;cursor:pointer}
+#settings-modal .playback-output-actions button:hover{background:var(--st-fill);color:var(--st-t1)}
+#settings-modal .pa-status{padding:0 16px 12px;font-size:11.5px;color:var(--st-t3)}
+
+/* 均衡器预设卡：保留「频谱柱 + 名称」的原始结构，只换成设置页的描边与底色。
+ * 这里不能给 button 定高 —— 它内部还有 34px 的波形区，定高会把名字挤掉。 */
+#settings-modal .audio-tuning-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;margin:14px}
+#settings-modal .audio-tuning-presets button{min-height:74px;border:1px solid var(--st-line);
+  border-radius:10px;background:transparent;color:var(--st-t2);font-family:inherit;font-size:11.5px;
+  cursor:pointer;transition:background var(--st-dur),border-color var(--st-dur),color var(--st-dur)}
+#settings-modal .audio-tuning-presets button:hover{background:var(--st-fill);border-color:var(--st-line2);color:var(--st-t1)}
+#settings-modal .audio-tuning-presets button.active{border-color:var(--st-line2);background:var(--st-fill2);color:var(--st-t1);font-weight:600}
+
+/* 折叠区内部的并列 toggle：给它们之间的 1px 线，否则三行开关糊成一坨 */
+#settings-modal .quick-menu-toggle + .quick-menu-toggle{box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .fx-section-label + .quick-menu-toggle{box-shadow:inset 0 1px 0 var(--st-line)}
+
+/* 均衡器频段架：竖向推子，保持原样但要给它一点内边距 */
+#settings-modal .at-eq-rack{margin:6px 14px 10px}
+
+/* ---------- 折叠区（过渡 / 调音 / 播放高级） ----------
+ * 设置页里不折叠：点进来就是要改参数，再点一次 summary 只是多一道门槛。
+ * summary 里的 *_summary 文案仍在 DOM 里，三条杠菜单的摘要照旧读得到。 */
 #settings-modal #audio-tuning-fold > summary,
 #settings-modal #playback-advanced-fold > summary,
 #settings-modal #track-transition-fold > summary{display:none}
+#settings-modal .track-transition-body,
+#settings-modal .playback-advanced-body,
+#settings-modal .audio-tuning-body{padding:0}
 
-/* 桌面歌词参数常显：主开关在视觉控制台，这边只负责调，
-   不能因为开关没开就整页空白（原面板里那套 dl-on/dl-off 收起逻辑在设置页不适用）。 */
+/* 过渡风格卡（四张）在设置页放宽一点 */
+#settings-modal .tt-cards{margin:4px 14px 14px}
+#settings-modal .tt-scene{margin:0}
+#settings-modal .tt-caption-row{padding:0 16px 8px}
+#settings-modal .tt-caption{padding:0 16px 10px}
+#settings-modal .tt-status{padding:0 16px 10px}
+#settings-modal .tt-choice-row{padding:10px 16px 0}
+#settings-modal .tt-legacy-row{margin:0 14px 14px}
+#settings-modal .tt-param-note{padding:2px 16px 10px}
+
+/* 播放高级里那几个 quick-menu-toggle 也按行排 */
+#settings-modal .quick-menu-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  width:100%;min-height:0;padding:13px 16px;border:0;border-radius:0;background:transparent;
+  font-family:inherit;font-size:13.5px;font-weight:400;color:var(--st-t1);text-align:left;cursor:pointer;
+  transition:background var(--st-dur)}
+#settings-modal .quick-menu-toggle:hover{background:var(--st-fill)}
+#settings-modal .quick-menu-toggle > span:first-child{display:flex;flex-direction:column;gap:2px;
+  flex:1 1 auto;min-width:0;font-size:13.5px;color:inherit}
+#settings-modal .quick-menu-toggle small{font-size:11px;font-weight:400;color:var(--st-t3)}
+#settings-modal .quick-menu-toggle .dot{position:relative;flex:0 0 auto;width:34px;height:20px;
+  border-radius:999px;background:var(--st-track);box-shadow:none;transition:background var(--st-dur)}
+#settings-modal .quick-menu-toggle .dot::after{content:'';position:absolute;left:2px;top:2px;width:16px;height:16px;
+  border-radius:50%;background:var(--st-knob);box-shadow:0 1px 2px rgba(0,0,0,.35);
+  transition:transform var(--st-dur) cubic-bezier(.2,.8,.3,1),background var(--st-dur)}
+#settings-modal .quick-menu-toggle.on{color:var(--st-t1);background:transparent}
+#settings-modal .quick-menu-toggle.on .dot{background:var(--st-accent)}
+#settings-modal .quick-menu-toggle.on .dot::after{transform:translateX(14px);background:#0b1a18}
+#settings-modal .tt-legacy-toggle{color:var(--st-t2)}
+
+/* 桌面歌词 / 壁纸那两组滑块与分段（DOM 结构不动） */
 #settings-modal .fx-dl-settings{display:block}
+#settings-modal .wallpaper-settings-group{margin:0;padding:0;border-top:1px solid var(--st-line)}
 
-/* lyrics.css 的窄窗媒体查询会把 .fx-toggle-grid 压成 1 列，那条是给 444px 的
-   视觉控制台写的；设置页宽得多，保持两列。 */
-#settings-modal .fx-toggle-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+/* 缓存 / 内存 / 输出设备这些自绘面板：收进卡片里当一块内容 */
+#settings-modal .cache-storage-panel{padding:14px 16px 16px}
+/* 这两个按钮在 444px 面板里靠 flex:1 撑满两列，设置页里会被拉成两根长条 */
+#settings-modal .cache-storage-actions{display:flex;gap:8px;margin:10px 0 14px}
+#settings-modal .cache-storage-actions .fx-mini-btn{flex:0 0 auto;width:auto;min-width:92px;
+  min-height:28px;padding:0 14px;font-size:11.5px}
+#settings-modal .cache-storage-row{font-size:12px;color:var(--st-t2)}
+#settings-modal .cache-storage-row b{font-size:11.5px}
+#settings-modal .cache-storage-head{color:var(--st-t2);font-size:12.5px}
+#settings-modal .cache-storage-path{font-size:10.5px;color:var(--st-t3)}
+#settings-modal .cache-storage-path.small{font-size:10px}
+#settings-modal .cache-storage-note{padding:0 0 2px}
+#settings-modal .memory-action-row{padding:4px 16px 16px;margin:0}
+#settings-modal .memory-status-chip{margin:12px 16px 0;border-radius:8px;background:var(--st-fill);
+  border:1px solid var(--st-line);color:var(--st-t1)}
+#settings-modal .memory-status-sub{padding:6px 16px 0;margin:0}
+#settings-modal .audio-output-section{padding:12px 16px 16px;border:0;background:transparent}
+#settings-modal .audio-output-list{max-height:none}
+#settings-modal .quality-output-head{color:var(--st-t2)}
+#settings-modal #perf-dashboard-body{padding:14px 16px;margin:0;opacity:1!important;color:var(--st-t2)}
+#settings-modal #gpu-throttle-reason{padding:2px 16px 10px;margin:0;opacity:1!important;color:var(--st-t3)}
 
-/* 选中态在设置页里要更明确：这里没有 prismal 镜片，只靠 .085 的底色几乎看不出来。
-   · playlist.css 那条 .fx-seg button.active 带 !important，所以这里也必须带；
-   · fx-glass.css 给 .fx-seg 加了一层 135deg 白色高光 ::before（inset:0），
-     它压在 static 的按钮上面 —— 不把选中项提到 z-index:1，青色底会被这层灰白盖掉。
-   强度按面板的克制基调收过：底色 .20 → .14，描边 .40 → .30，去掉发光。 */
-#settings-modal .fx-seg button.active{position:relative;z-index:1;
-  background:rgba(0,245,212,.14)!important;color:#e9fffb!important;font-weight:640;
-  box-shadow:inset 0 0 0 1px rgba(0,245,212,.30)!important}
+/* 休息提醒的状态行 */
+#settings-modal .break-reminder-status{margin:0;padding:12px 16px 0;font-size:12px;color:var(--st-t2)}
+#settings-modal .break-reminder-panel-row{justify-content:flex-start;margin:0;padding:10px 14px 14px}
+#settings-modal .break-reminder-panel-row .fx-mini-btn{flex:0 0 auto;min-width:96px}
 
-/* 面板里不要 .fx-seg 那层 135deg 白高光（fx-glass.css 加的 inset:0 伪元素）：
-   它盖在按钮上，会让选中项看成一块灰白渐变，把强调色压没。视觉控制台里保留它，
-   因为那边按钮更小、需要那点体积感。 */
-#settings-modal .fx-seg::before,
-#skin-popover .fx-seg::before{display:none!important}
+/* 「关于」页的三行事实 + 按钮 */
+#settings-modal .settings-fact{display:flex;align-items:center;gap:16px;min-height:46px;padding:11px 16px;
+  border:0}
+#settings-modal .settings-fact > span{flex:0 0 108px;font-size:12px;color:var(--st-t2)}
+#settings-modal .settings-fact > b{flex:1 1 auto;min-width:0;font-family:var(--panel-mono);font-size:11.5px;
+  font-weight:500;color:var(--st-t1);font-variant-numeric:tabular-nums;word-break:break-all;text-align:right}
+#settings-modal .settings-actions{display:flex;gap:9px;margin:0;padding:4px 16px 14px}
 
-/* 开关的「亮起」在 444px 的面板里是块小色片，放到 1000px 宽的设置页就是一大片青。
-   面板里收敛成浅底 + 细边，圆点保持实色即可表达状态。 */
-#settings-modal .fx-toggle.on,
-#skin-popover .fx-toggle.on{
-  background:rgba(0,245,212,.075)!important;
-  border-color:rgba(0,245,212,.22)!important;
-  color:rgba(214,255,248,.92)!important;
-  box-shadow:none!important;
-}
-#settings-modal .fx-toggle.on::after,
-#skin-popover .fx-toggle.on::after{
-  background:#00f5d4!important;box-shadow:none!important;
-}
-#settings-modal .fx-toggle.on::before,
-#skin-popover .fx-toggle.on::before{display:none!important}
+/* 卡片里的裸说明（关于页「数据」那段带 inline margin-top:0） */
+#settings-modal .settings-group-body > .settings-group-note{margin:0;padding:14px 16px;color:var(--st-t2)}
 
-/* 面板里的控件比 444px 的视觉控制台宽裕，圆角统一收小一档、数字走等宽 */
-#settings-modal .fx-slider,
-#skin-popover .fx-slider,
-#settings-modal .fx-toggle,
-#skin-popover .fx-toggle,
-#settings-modal .fx-seg,
-#skin-popover .fx-seg,
-#settings-modal .lyric-color-row,
-#skin-popover .lyric-color-row{border-radius:var(--panel-radius-sm)}
-#settings-modal .fx-slider output,
-#skin-popover .fx-slider output,
-#settings-modal .fx-sub,
-#skin-popover .fx-sub{font-variant-numeric:tabular-nums}
+/* ---------- 入口行（跳转类） ---------- */
+#settings-modal .st-link-row{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:13px 16px;cursor:pointer;transition:background var(--st-dur)}
+#settings-modal .st-link-row:hover{background:var(--st-fill)}
+#settings-modal .st-link-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+#settings-modal .st-link-label{font-size:13.5px;color:var(--st-t1)}
+#settings-modal .st-link-hint{font-size:11.5px;line-height:1.5;color:var(--st-t3)}
+#settings-modal .st-link-chev{width:16px;height:16px;flex:0 0 auto;color:var(--st-t3);
+  fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
-/* 三条杠菜单的摘要数字也用等宽，换行时不跳字宽 */
-.qm-item small,.qm-sleep-fold > summary small,#player-quick-menu-popover .quick-menu-section-title{
-  font-variant-numeric:tabular-nums}
-
-/* 三条杠里「应用工具」这个分组标题紧贴上一项，给点呼吸 */
-.player-quick-menu-popover .quick-menu-section-title{margin:10px 0 6px}
-
-/* 休息提醒的状态行与预览按钮：不要被拉成整行 */
-#settings-modal .break-reminder-status{margin-top:8px}
-#settings-modal .break-reminder-panel-row{justify-content:flex-start}
-#settings-modal .break-reminder-panel-row .fx-mini-btn{flex:0 0 auto;min-width:96px;padding:0 16px}
-
-/* 搜索命中：临时高亮整行，滚到视野中间后自动褪掉 */
+/* ---------- 搜索命中 ---------- */
 .settings-hit{animation:settings-hit-pulse 1.6s ease-out 1}
 @keyframes settings-hit-pulse{
   0%{box-shadow:0 0 0 2px rgba(0,245,212,.55),0 0 26px rgba(0,245,212,.28)}
   100%{box-shadow:0 0 0 2px rgba(0,245,212,0),0 0 0 rgba(0,245,212,0)}
 }
-.settings-empty{padding:34px 4px;color:rgba(255,255,255,.34);font-size:12px;line-height:1.7}
+.settings-empty{padding:34px 4px;color:var(--st-t3);font-size:12px;line-height:1.7}
 
 /* 搜索结果面板：贴在搜索框下方 */
-.settings-search-results{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:3;
-  max-height:320px;overflow-y:auto;padding:6px;border-radius:12px;
-  border:1px solid rgba(157,184,207,.22);background:rgba(12,15,19,.98);
-  box-shadow:0 20px 46px rgba(0,0,0,.5)}
+.settings-search-results{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:6;
+  max-height:330px;overflow-y:auto;padding:6px;border-radius:10px;
+  border:1px solid var(--st-line2);background:#1d1d21;
+  box-shadow:0 20px 46px rgba(0,0,0,.55)}
 .settings-search-results[hidden]{display:none}
-.settings-search-result{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;border:0;border-radius:8px;
-  background:transparent;color:rgba(255,255,255,.78);font-family:inherit;font-size:11.5px;cursor:pointer;text-align:left}
-.settings-search-result:hover{background:rgba(255,255,255,.08);color:#fff}
-.settings-search-result small{margin-left:auto;font-size:9.5px;color:rgba(255,255,255,.32);flex:0 0 auto}
+.settings-search-result{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;border:0;border-radius:7px;
+  background:transparent;color:var(--st-t1);font-family:inherit;font-size:12px;cursor:pointer;text-align:left}
+.settings-search-result:hover{background:var(--st-fill2)}
+.settings-search-result small{margin-left:auto;font-size:10px;color:var(--st-t3);flex:0 0 auto}
 
-/* 窄窗口：设置页铺满，缩边距 */
-@media (max-width:820px){
-  #settings-modal{padding:0}
-  .settings-shell{width:100vw;height:100vh;border-radius:0;border:0}
-  .settings-head{padding:20px 18px 12px}
-  .settings-tabs{padding:0 12px}
-  .settings-body{padding:16px 18px 36px}
-  .settings-search{width:170px}
-  #settings-modal .fx-toggle-grid{grid-template-columns:1fr}
+/* ---------- 皮肤面板仍需的共享规则 ---------- */
+#skin-popover .fx-seg::before{display:none!important}
+#skin-popover .fx-toggle.on{background:rgba(0,245,212,.075)!important;border-color:rgba(0,245,212,.22)!important;
+  color:rgba(214,255,248,.92)!important;box-shadow:none!important}
+#skin-popover .fx-toggle.on::after{background:#00f5d4!important;box-shadow:none!important}
+#skin-popover .fx-toggle.on::before{display:none!important}
+#skin-popover .fx-slider,
+#skin-popover .fx-toggle,
+#skin-popover .fx-seg,
+#skin-popover .lyric-color-row{border-radius:var(--panel-radius-sm)}
+#skin-popover .fx-slider output,
+#skin-popover .fx-sub{font-variant-numeric:tabular-nums}
+
+/* 三条杠菜单的摘要数字也用等宽，换行时不跳字宽 */
+.qm-item small,.qm-sleep-fold > summary small,#player-quick-menu-popover .quick-menu-section-title{
+  font-variant-numeric:tabular-nums}
+.player-quick-menu-popover .quick-menu-section-title{margin:10px 0 6px}
+
+/* ---------- 压掉 GooseHyperGlass 那套 !important 玻璃皮 ----------
+ * fx-glass.css / glass.css 给 :is(#fx-panel,#settings-modal,#skin-popover) 下的
+ * .fx-slider / .fx-toggle / .fx-seg / .fx-mini-btn / .fx-select 都写了带 !important 的
+ * 渐变底、0.5px 描边、内阴影与 backdrop-filter，还有 :hover/:active 的强调值。
+ * 视觉控制台（444px 面板）需要那点体积感，设置页要的是 Folia 的平面行 ——
+ * 这里对同一批属性做同级的 !important 复位，否则前面的行样式全是白写。 */
+#settings-modal .fx-slider,
+#settings-modal .fx-toggle,
+#settings-modal .fx-seg,
+#settings-modal .fx-mini-btn,
+#settings-modal .fx-select,
+#settings-modal .lyric-color-row{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  transform:none!important;
 }
+#settings-modal .fx-seg{background:var(--st-fill)!important}
+/* glass.css 给 .fx-seg button 也写了 !important 的黑底 + 1px 描边，
+ * 不清掉的话每一档都还是一个带边框的小方块，胶囊感出不来。 */
+#settings-modal .fx-seg button{background:transparent!important;border:0!important;
+  box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  color:var(--st-t2)!important;font-weight:400}
+#settings-modal .fx-seg button:hover{background:var(--st-fill)!important;color:var(--st-t1)!important}
+#settings-modal .fx-seg button.active{background:var(--st-fill2)!important;color:var(--st-t1)!important;
+  font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.35)!important}
+#settings-modal .fx-mini-btn{background:var(--st-fill)!important;border:1px solid var(--st-line)!important}
+#settings-modal .fx-mini-btn.ghost{background:transparent!important}
+/* 底色换了但字色还留着 fx-panel 的 #fff —— 浅色下就是白字白底，下拉框整个看不见 */
+#settings-modal .fx-select{background:var(--st-fill)!important;border:1px solid var(--st-line)!important;
+  color:var(--st-t1)!important}
+#settings-modal .fx-select option{background:var(--st-card);color:var(--st-t1)}
+#settings-modal .fx-toggle:hover,
+#settings-modal .fx-slider:hover,
+#settings-modal .fx-mini-btn:hover,
+#settings-modal .fx-seg:hover,
+#settings-modal .fx-select:hover{transform:none!important}
+#settings-modal .fx-toggle:hover{background:var(--st-fill)!important;border:0!important;box-shadow:none!important}
+#settings-modal .fx-slider:hover{background:var(--st-fill)!important;border:0!important;box-shadow:none!important}
+#settings-modal .fx-seg:hover{background:var(--st-fill)!important;border:0!important;box-shadow:none!important}
+#settings-modal .fx-mini-btn:hover{background:var(--st-fill2)!important;border:1px solid var(--st-line2)!important}
+#settings-modal .fx-toggle:active,
+#settings-modal .fx-slider:active,
+#settings-modal .fx-seg:active,
+#settings-modal .fx-mini-btn:active{transform:none!important}
+/* 开关的行底不能跟着 on 态染色：那会在整行铺一块青。
+ * fx-panel.css 的 .fx-toggle.on::before / ::after 还画着一层高光与色点，
+ * 设置页的开关已经有自己的轨道，这两个伪元素必须收掉。 */
+#settings-modal .fx-toggle::before,
+#settings-modal .fx-toggle::after{content:none!important;display:none!important}
+#settings-modal .fx-toggle.on{background:transparent!important;color:var(--st-t1)!important;
+  border:0!important;box-shadow:none!important}
+#settings-modal .fx-toggle.on:hover{background:var(--st-fill)!important}
+
+/* .fx-slider 那条旧规则带 :not(.fx-fire-slider-row)，特异性比普通的
+ * #settings-modal .fx-slider 高一档（1,2,0），必须再抬一级才压得住。 */
+#settings-modal #settings-body .fx-slider{
+  display:flex!important;align-items:center;gap:14px;min-height:0;margin:0;
+  padding:12px 16px!important;border:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;transform:none!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+#settings-modal #settings-body .fx-slider:hover{background:var(--st-fill)!important}
+#settings-modal #settings-body .fx-slider label{flex:1 1 auto;min-width:0;
+  font-size:13.5px;color:var(--st-t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal #settings-body .fx-slider input[type=range]{flex:0 0 190px;width:190px;margin:0}
+#settings-modal #settings-body .fx-slider output{flex:0 0 54px;text-align:right;
+  font-family:var(--panel-mono);font-size:11.5px;color:var(--st-t2);font-variant-numeric:tabular-nums}
+#settings-modal #settings-body .fx-slider::before{content:none!important;display:none!important}
+
+/* ---------- 滑块：设置页统一一套皮肤（青色填充 + 胶囊滑块） ----------
+ * 视觉控制台与音量条沿用 prismal 的蓝色；设置页的强调色是青的，和开关保持一致。
+ * 这里覆盖的范围比 .fx-slider 更大：淡入淡出 / 变速 / 均衡 / 过渡参数那几排
+ * 用的是 .fade-control-row / .at-control-row / .tt-param-row，原来根本没被画皮肤，
+ * 落到浏览器默认滑块（轨道几乎没有填充色）——这就是「条没有颜色」的来源。
+ * 伪元素规则要压过 prismal-chrome.css 的 :is(...) 版本，所以用两级 id。 */
+#settings-modal #settings-body input[type=range]:not(.at-eq-range){
+  -webkit-appearance:none;appearance:none;height:26px;background:transparent;outline:none;margin:0}
+#settings-modal #settings-body input[type=range]:not(.at-eq-range)::-webkit-slider-runnable-track{
+  height:4px;border-radius:999px;
+  background:
+    linear-gradient(90deg,rgba(0,245,212,.92),rgba(0,245,212,.58)) 0/var(--prism-fill,0%) 100% no-repeat,
+    var(--st-slider-track)}
+#settings-modal #settings-body input[type=range]:not(.at-eq-range)::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:28px;height:18px;margin-top:-7px;
+  border-radius:999px;background:var(--st-knob-bg);
+  border:1px solid var(--st-knob-line);
+  box-shadow:var(--st-switch-inset),0 1px 3px rgba(0,0,0,.35);
+  cursor:grab;transition:transform .18s ease}
+#settings-modal #settings-body input[type=range]:not(.at-eq-range):active::-webkit-slider-thumb{
+  transform:scale(1.12);cursor:grabbing}
+#settings-modal #settings-body input[type=range]:not(.at-eq-range):focus-visible::-webkit-slider-thumb{
+  box-shadow:var(--st-switch-inset),0 0 0 2px rgba(0,245,212,.45)}
+
+/* ---------- 交互页：热键只读预览（由 31-settings-page.js 渲染） ---------- */
+#settings-modal .st-hk-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr);
+  gap:12px;align-items:center;padding:11px 16px;min-height:46px}
+#settings-modal .st-hk-row + .st-hk-row{box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .st-hk-head{padding-bottom:8px;min-height:0}
+#settings-modal #hotkey-overview > .st-hk-row:first-child{box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .st-hk-head .st-hk-name,
+#settings-modal .st-hk-head .st-hk-key{font-size:11px;color:var(--st-t3);font-weight:400}
+#settings-modal .st-hk-name{font-size:13px;color:var(--st-t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .st-hk-key{font-family:var(--panel-mono);font-size:11.5px;color:var(--st-t2);
+  text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .st-hk-key.empty{color:var(--st-t3)}
+#settings-modal .st-hk-key.conflict{color:var(--st-warn)}
+#settings-modal .st-hk-empty{padding:16px;font-size:12px;color:var(--st-t3)}
+
+/* ---------- 音源页：平台状态行（由 31-settings-page.js 渲染） ---------- */
+#settings-modal .st-src-list{display:block}
+#settings-modal .st-src-row{display:flex;align-items:center;gap:12px;padding:12px 16px;
+  min-height:56px;transition:background var(--st-dur)}
+#settings-modal .st-src-row:hover{background:var(--st-fill)}
+#settings-modal .st-src-row + .st-src-row{box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .st-src-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;
+  background:var(--st-track);box-shadow:0 0 0 3px var(--st-fill)}
+#settings-modal .st-src-dot.on{background:var(--st-ok);box-shadow:0 0 0 3px rgba(86,201,141,.14)}
+#settings-modal .st-src-dot.pending{background:var(--st-warn);box-shadow:0 0 0 3px rgba(227,169,73,.14)}
+#settings-modal .st-src-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+#settings-modal .st-src-name{font-size:13.5px;color:var(--st-t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .st-src-hint{font-size:11.5px;line-height:1.5;color:var(--st-t3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .st-src-actions{flex:0 0 auto;display:flex;align-items:center;gap:6px}
+#settings-modal .st-src-actions .fx-mini-btn{flex:0 0 auto;width:auto;min-width:64px;
+  height:26px;padding:0 11px;font-size:11.5px}
+#settings-modal .st-src-empty{padding:16px;font-size:12px;color:var(--st-t3)}
+
+/* ---------- 窄窗口：导航折成顶部横向条 ---------- */
+@media (max-width:880px){
+  #settings-modal{padding:0}
+  .settings-shell{width:100vw;height:100vh;border-radius:0;border:0;
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:auto auto minmax(0,1fr);
+    grid-template-areas:"head" "nav" "body"}
+  .settings-head{padding:12px 14px}
+  .settings-search{width:170px}
+  .settings-tabs{flex-direction:row;gap:2px;padding:8px 10px;overflow-x:auto;overflow-y:hidden;
+    border-right:0;border-bottom:1px solid var(--st-line)}
+  .settings-nav-group{display:none}
+  .settings-tab{width:auto;flex:0 0 auto}
+  .settings-body{padding:0 18px 36px}
+  #settings-modal .fx-slider input[type=range],
+  #settings-modal .fade-control-row input[type=range],
+  #settings-modal .at-control-row input[type=range],
+  #settings-modal .tt-param-row input[type=range]{flex:1 1 120px;width:auto}
+}
+
+/* ---------- AI 页：文本字段行 ---------- */
+#settings-modal .st-field{display:flex;align-items:center;gap:14px;padding:12px 16px;min-height:48px}
+#settings-modal .st-field + .st-field{box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .st-field-label{flex:0 0 92px;font-size:13px;color:var(--st-t1)}
+#settings-modal .st-field-value{flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--st-t2);
+  text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings-modal .st-field-value.is-error{color:var(--st-warn)}
+#settings-modal .st-field-value.is-ok{color:var(--st-ok)}
+#settings-modal .st-input{flex:1 1 auto;min-width:0;height:30px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--st-line);background:var(--st-well);color:var(--st-t1);
+  font-family:inherit;font-size:12.5px;outline:none;transition:border-color .16s,background .16s}
+#settings-modal .st-input::placeholder{color:var(--st-t3)}
+#settings-modal .st-input:focus{border-color:var(--st-line2);background:var(--st-well2)}
+#settings-modal .st-actions{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px 14px;
+  box-shadow:inset 0 1px 0 var(--st-line)}
+#settings-modal .st-actions .fx-mini-btn{flex:0 0 auto;width:auto;min-width:88px}
+
+/* 主题范围说明：跟在分段下面的一行小字，不要卡片里那根分隔线 */
+#settings-modal .fx-hint-note{position:relative;padding:2px 16px 10px;margin-top:-2px;
+  font-size:11px;line-height:1.65;color:var(--st-t3)}
+#settings-modal .fx-hint-note::before{content:none!important}

@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../css/index.css?v=3.0.1-lxui">
+<link rel="stylesheet" href="../css/02-visual/visual.css?v=3.0.1-hoverfix">
+<link rel="stylesheet" href="../css/02-home/home.css?v=3.0.2-petwhite">
+<link rel="stylesheet" href="../css/05-playback/playback.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/05-playback/netease-features.css?v=1.0.0">
+<link rel="stylesheet" href="../css/08-account/account.css?v=3.0.3-spotify">
+<link rel="stylesheet" href="../css/07-fx/fx-panel.css?v=3.0.2-fpsgroups">
+<link rel="stylesheet" href="../css/12-folia/folia-world.css?v=0.1.0-skeleton">
+<link rel="stylesheet" href="../css/06-lyrics/playlist.css?v=3.0.1-hoverfix">
+<link rel="stylesheet" href="../css/06-fx/glass.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/06-lyrics/lyrics.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/06-fx/fx-glass.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/06-fx/prismal-chrome.css?v=3.0.13-nofire">
+<link rel="stylesheet" href="../css/07-fx/fx-particle-fire-lock.css?v=3.2.24-lock">
+<link rel="stylesheet" href="../css/10-shell/shell.css?v=3.0.3-spotify">
+<link rel="stylesheet" href="../css/10-shell/wallpaper-stage.css?v=2.3.1-host-cast-round">
+<link rel="stylesheet" href="../css/05-playback/home-insight.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/07-fx/lyric-shader-market.css?v=3.0.0-modular">
+<link rel="stylesheet" href="../css/07-fx/fx-liquid-glass.css?v=1.0.0-cssglass">
+<link rel="stylesheet" href="../css/06-fx/glass-folia.css?v=1.0.0-foliacss">
+<link rel="stylesheet" href="../css/10-shell/settings-page.css?v=1.0.0-settings">
+<link rel="stylesheet" href="../css/10-shell/skin-page.css?v=1.0.0-skin">
+<link rel="stylesheet" href="../css/10-shell/eq-rack.css?v=1.0.0-eqrack">
+<style>
+  html,body{overflow:auto;height:auto;background:#2a2b30}
+  body{padding:24px;display:flex;justify-content:center;align-items:flex-start}
+  #settings-modal{position:static;opacity:1!important;pointer-events:auto!important;padding:0;background:transparent;backdrop-filter:none}
+  .settings-shell{transform:none!important}
+  .settings-page{display:none!important}
+  .settings-page[data-settings-page="desktop-lyrics"]{display:block!important}
+</style></head>
+<body class="settings-page-open">
+<div id="settings-modal" aria-hidden="true" onclick="closeSettingsPageIfMask(event)">
+  <div class="settings-shell" role="dialog" aria-modal="true" aria-label="设置">
+    <header class="settings-head">
+      <div>
+        <div class="settings-kicker">MINERADIO</div>
+        <h2 class="settings-title">设置</h2>
+      </div>
+      <div class="settings-head-spacer"></div>
+      <div class="settings-search" id="settings-search-wrap">
+        <svg class="settings-search-ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.6 16.6 21 21"/></svg>
+        <input id="settings-search-input" type="search" placeholder="搜索设置项" autocomplete="off" spellcheck="false" aria-label="搜索设置项">
+        <button type="button" class="settings-search-clear" onclick="clearSettingsSearch()" aria-label="清除搜索">&times;</button>
+        <div id="settings-search-results" class="settings-search-results" hidden></div>
+      </div>
+      <button type="button" class="settings-close" onclick="closeSettingsPage()" aria-label="关闭设置">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <!-- 左侧分组导航（Folia 的 side list）：一行一个分区，图标 + 名称，分组标题只做分隔。
+         按钮仍带 data-settings-tab，31-settings-page.js 的点击委托与 tab 切换逻辑不变。 -->
+    <nav class="settings-tabs" id="settings-tabs" role="navigation" aria-label="设置分区">
+      <div class="settings-nav-group">界面</div>
+      <button type="button" class="settings-tab active" data-settings-tab="general">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg>
+        <span>通用</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="performance">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4.2-4.2"/><circle cx="12" cy="16" r="1.6"/></svg>
+        <span>性能</span>
+      </button>
+      <div class="settings-nav-group">音乐</div>
+      <button type="button" class="settings-tab" data-settings-tab="playback">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M10.2 8.6l5.4 3.4-5.4 3.4z"/></svg>
+        <span>播放</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="audio">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l4 3.4V6.6L7 10H4z"/><path d="M15.4 9.2a4 4 0 0 1 0 5.6"/><path d="M18 6.8a7.4 7.4 0 0 1 0 10.4"/></svg>
+        <span>音频</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="desktop-lyrics">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16"/><path d="M4 12h11"/><path d="M4 17.5h7.5"/></svg>
+        <span>歌词</span>
+      </button>
+      <div class="settings-nav-group">应用</div>
+      <button type="button" class="settings-tab" data-settings-tab="storage">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8V6"/><path d="M5 12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8"/></svg>
+        <span>存储</span>
+      </button>
+      <button type="button" class="settings-tab" data-settings-tab="about">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.4"/><circle cx="12" cy="8.2" r="1" fill="currentColor" stroke="none"/></svg>
+        <span>关于</span>
+      </button>
+    </nav>
+    <div class="settings-body" id="settings-body">
+
+      <section class="settings-page active" data-settings-page="general">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">通用</h3>
+          <p class="settings-page-sub">启动方式、窗口行为、休息提醒，以及账号与外观入口。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">启动</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle" id="t-startupAutoplay" onclick="toggleStartupAutoplay()" title="打开播放器后自动接着上次暂停的那首、那个进度继续播"><span>启动时自动播放</span><span class="dot"></span></div>
+            <div class="fx-toggle" id="t-startupFastSkip" onclick="toggleStartupFastSkip()" title="跳过启动动画与预热等待，先把界面放出来再补渲染"><span>秒启动（跳过启动动画）</span><span class="dot"></span></div>
+            <div class="fx-section-label">继续播放位置</div>
+            <div class="fx-seg" id="startup-resume-mode-seg" role="group" aria-label="继续播放位置" title="启动恢复上次播放时，从暂停处接着播还是从曲首开始">
+              <button type="button" data-startup-resume-mode="resume" class="active">按上次进度</button>
+              <button type="button" data-startup-resume-mode="beginning">从头开始</button>
+            </div>
+          </div>
+          <div class="settings-group-note">「启动时自动播放」只影响启动与恢复；切壁纸模式时的一次性续播走自己的通道，不会替你打开这个开关。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">窗口</div>
+          <div class="settings-group-body">
+            <div class="fx-section-label">最小化按钮</div>
+            <div class="fx-seg" id="close-behavior-seg" title="点击最小化按钮时的行为；右上角关闭按钮始终完全退出播放器（含全部后台进程）">
+              <button data-close-behavior="exit">最小化到任务栏</button>
+              <button data-close-behavior="tray">后台托盘</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">休息提醒</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle on" id="t-breakReminderEnabled" onclick="toggleBreakReminderEnabled()" title="连续聆听累计到间隔后，整屏浮出一层休息提示；暂停满 10 分钟视为已经休息，计数归零"><span>久听休息提醒</span><span class="dot"></span></div>
+            <div class="fx-section-label">提醒间隔</div>
+            <div class="fx-seg break-reminder-interval-seg" id="break-reminder-interval-seg" role="group" aria-label="休息提醒间隔" title="连续聆听多久后提醒一次">
+              <button type="button" data-break-reminder-interval="30" onclick="setBreakReminderInterval(30)">30 分</button>
+              <button type="button" data-break-reminder-interval="45" onclick="setBreakReminderInterval(45)">45 分</button>
+              <button type="button" data-break-reminder-interval="60" class="active" onclick="setBreakReminderInterval(60)">60 分</button>
+              <button type="button" data-break-reminder-interval="90" onclick="setBreakReminderInterval(90)">90 分</button>
+            </div>
+            <div id="break-reminder-status" class="break-reminder-status">暂停中 · 播放后开始计时</div>
+            <div class="break-reminder-panel-row">
+              <button class="fx-mini-btn ghost" type="button" onclick="previewBreakReminder()">预览提示</button>
+            </div>
+          </div>
+          <div class="settings-group-note">连续聆听累计到间隔后整屏浮出提示；暂停满 10 分钟视为已休息，计数归零。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">账号与外观</div>
+          <div class="settings-group-body">
+            <div class="st-link-row" onclick="onUserBtnClick()" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">账号与登录</div>
+                <div class="st-link-hint">酷狗 / QQ / 网易云 / 汽水 / Spotify 的登录状态与会话</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="st-link-row" onclick="openSkinPage('heart')" role="button" tabindex="0">
+              <div class="st-link-main">
+                <div class="st-link-label">皮肤与外观</div>
+                <div class="st-link-hint">红心动效、收藏演出、桌面宠物、控制条频谱、挂件与液态玻璃</div>
+              </div>
+              <svg class="st-link-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="playback">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">播放</h3>
+          <p class="settings-page-sub">切歌过渡、淡入淡出、变速与播放行为。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">淡入淡出</div>
+          <div class="settings-group-body">
+  <div class="fade-control-row">
+    <label for="fade-in-slider">淡入</label>
+    <input id="fade-in-slider" type="range" min="0" max="3" step="0.05" value="0.46" aria-label="音乐淡入秒数">
+    <span id="fade-in-value">0.46s</span>
+  </div>
+  <div class="fade-control-row">
+    <label for="fade-out-slider">淡出</label>
+    <input id="fade-out-slider" type="range" min="0" max="3" step="0.05" value="0.42" aria-label="音乐淡出秒数">
+    <span id="fade-out-value">0.42s</span>
+  </div>
+          </div>
+          <div class="settings-group-note">切歌时按这里的时长做音频淡变；数值越大越柔和，0 为硬切。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">播放行为</div>
+          <div class="settings-group-body">
+            <div class="fx-toggle" id="t-preventSleep" onclick="togglePreventSleep()" title="播放期间阻止系统关闭显示器、进入睡眠；暂停或停止后自动解除"><span>播放时阻止系统休眠</span><span class="dot"></span></div>
+          </div>
+          <div class="settings-group-note">只在真正出声时生效（暂停、切歌间隙不占用）；关掉后一切交给 Windows 的电源计划。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">歌曲过渡</div>
+          <div class="settings-group-body">
+  <details id="track-transition-fold" class="track-transition-fold tt-off">
+    <summary><span>歌曲过渡</span><small id="track-transition-summary">待开启 · 无缝过渡</small></summary>
+    <div class="track-transition-body">
+      <!-- 每种模式一张 Canvas：19-track-transition-art.js 收编了四份独立 HTML 的
+           逐像素算法（高斯光晕 / 点阵摩尔纹 / 磨砂噪点 / 弧形接缝），
+           切模式只换 active，不重建 DOM，也不加载任何图片或网络资源。 -->
+      <div id="track-transition-scene" class="tt-scene" data-mode="seamless">
+        <!-- index.html「交晖」：两枚椭圆交叠，统一紫白 → 混音过渡 -->
+        <canvas class="tt-scene-art" id="track-transition-art-mix" data-scene="mix" aria-hidden="true"></canvas>
+        <!-- golden-rings.html「光环」：两环相接 → 渐进过渡 -->
+        <canvas class="tt-scene-art" id="track-transition-art-gradual" data-scene="gradual" aria-hidden="true"></canvas>
+        <!-- golden-divider.html「光缝」：竖向接缝 → 无缝过渡 -->
+        <canvas class="tt-scene-art active" id="track-transition-art-seamless" data-scene="seamless" aria-hidden="true"></canvas>
+        <!-- golden-band.html「光带」：上下弧线 → 立体声转场 -->
+        <canvas class="tt-scene-art" id="track-transition-art-stereo" data-scene="stereo" aria-hidden="true"></canvas>
+      </div>
+
+      <div class="tt-caption-row">
+        <span id="track-transition-desc">过滤曲尾空白，声音不间断（开启后生效）</span>
+        <button type="button" id="track-transition-reset" class="tt-reset" onclick="resetTrackTransitionParams()" title="把当前模式的两个参数恢复默认" aria-label="恢复默认参数">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>
+        </button>
+        <button type="button" id="track-transition-preview" class="tt-preview" onclick="previewTrackTransition()" title="用合成音试听当前过渡效果，不影响正在播放的歌曲" aria-label="试听歌曲过渡">▶</button>
+      </div>
+
+      <!-- 参数行：四组静态 DOM，18 按选中模式显隐并回填数值。
+           全部真实作用于 08 的淡变 / 声像 getter，不是装饰性滑块。 -->
+      <div id="track-transition-params" class="tt-params">
+        <div class="tt-param-group is-hidden" id="tt-group-mix" data-param-mode="mix">
+          <div class="tt-param-row">
+            <label for="tt-p-mix-durationSec">过渡时长</label>
+            <input id="tt-p-mix-durationSec" type="range" min="0.4" max="8" step="0.1" value="2.4" oninput="setTrackTransitionParam('mix','durationSec',this.value)" aria-label="混音过渡时长秒数">
+            <span id="tt-p-mix-durationSec-v">2.4s</span>
+          </div>
+          <div class="tt-choice-row">
+            <span>淡变曲线</span>
+            <div class="tt-choice">
+              <button type="button" id="tt-p-mix-curve-equal-power" class="active" onclick="setTrackTransitionParam('mix','curve','equal-power')" aria-pressed="true">等功率</button>
+              <button type="button" id="tt-p-mix-curve-linear" onclick="setTrackTransitionParam('mix','curve','linear')" aria-pressed="false">线性</button>
+            </div>
+          </div>
+          <div class="tt-param-note">淡出与淡入按 2400 / 1100ms 的基准比例同步缩放</div>
+        </div>
+        <div class="tt-param-group is-hidden" id="tt-group-gradual" data-param-mode="gradual">
+          <div class="tt-param-row">
+            <label for="tt-p-gradual-durationSec">渐进时长</label>
+            <input id="tt-p-gradual-durationSec" type="range" min="0" max="12" step="0.5" value="0" oninput="setTrackTransitionParam('gradual','durationSec',this.value)" aria-label="渐进过渡时长秒数">
+            <span id="tt-p-gradual-durationSec-v">跟随设置</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-gradual-inRatio">淡入比例</label>
+            <input id="tt-p-gradual-inRatio" type="range" min="20" max="100" step="5" value="80" oninput="setTrackTransitionParam('gradual','inRatio',this.value)" aria-label="新曲淡入占渐进时长比例">
+            <span id="tt-p-gradual-inRatio-v">80%</span>
+          </div>
+          <div class="tt-param-note">0 表示跟随上方「淡入淡出」里你自己设的时长</div>
+        </div>
+        <div class="tt-param-group" id="tt-group-seamless" data-param-mode="seamless">
+          <div class="tt-param-row">
+            <label for="tt-p-seamless-tailMs">曲尾收尾</label>
+            <input id="tt-p-seamless-tailMs" type="range" min="0" max="1500" step="50" value="0" oninput="setTrackTransitionParam('seamless','tailMs',this.value)" aria-label="曲末收尾淡出毫秒">
+            <span id="tt-p-seamless-tailMs-v">0ms</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-seamless-headMs">新曲微淡入</label>
+            <input id="tt-p-seamless-headMs" type="range" min="0" max="300" step="10" value="0" oninput="setTrackTransitionParam('seamless','headMs',this.value)" aria-label="新曲起播微淡入毫秒">
+            <span id="tt-p-seamless-headMs-v">0ms</span>
+          </div>
+          <div class="tt-param-note">两项都为 0 时是纯曲末交接；调大可盖住 MP3 尾帧与硬切爆音</div>
+        </div>
+        <div class="tt-param-group is-hidden" id="tt-group-stereo" data-param-mode="stereo">
+          <div class="tt-param-row">
+            <label for="tt-p-stereo-durationSec">转场时长</label>
+            <input id="tt-p-stereo-durationSec" type="range" min="0.5" max="6" step="0.1" value="2.2" oninput="setTrackTransitionParam('stereo','durationSec',this.value)" aria-label="立体声转场时长秒数">
+            <span id="tt-p-stereo-durationSec-v">2.2s</span>
+          </div>
+          <div class="tt-param-row">
+            <label for="tt-p-stereo-panPct">声像幅度</label>
+            <input id="tt-p-stereo-panPct" type="range" min="0" max="100" step="5" value="85" oninput="setTrackTransitionParam('stereo','panPct',this.value)" aria-label="左右声道扫动幅度百分比">
+            <span id="tt-p-stereo-panPct-v">85%</span>
+          </div>
+          <div class="tt-param-note">当前曲扫向一侧、新曲从另一侧扫回你设定的 balance</div>
+        </div>
+      </div>
+      <div id="track-transition-caption" class="tt-caption">曲尾 0ms · 新曲 0ms</div>
+
+      <div id="track-transition-cards" class="tt-cards">
+        <button type="button" id="track-transition-card-mix" class="tt-card" data-mode="mix" onclick="selectTrackTransitionMode('mix')" aria-pressed="false" title="长等功率淡出 / 淡入，两段能量接成一片">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="9" cy="12" r="5.6"/><circle cx="15" cy="12" r="5.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
+          <span class="tt-label">混音过渡</span><small>能量不断层</small>
+        </button>
+        <button type="button" id="track-transition-card-gradual" class="tt-card" data-mode="gradual" onclick="selectTrackTransitionMode('gradual')" aria-pressed="false" title="曲末淡出 + 新曲淡入，时长可调">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.5 5 10.5 12 3.5 19Z"/><path d="M20.5 5 13.5 12 20.5 19Z"/><path d="M12 5v14" opacity=".55"/></svg>
+          <span class="tt-label">渐进过渡</span><small>柔和淡变</small>
+        </button>
+        <button type="button" id="track-transition-card-seamless" class="tt-card" data-mode="seamless" onclick="selectTrackTransitionMode('seamless')" aria-pressed="false" title="预载下一首，曲末立刻交接，曲尾 / 新曲淡入可调">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M11 7.5a4.5 4.5 0 0 0 0 9"/><path d="M13 7.5a4.5 4.5 0 0 1 0 9"/><path d="M9.5 12h5"/></svg>
+          <span class="tt-label">无缝过渡</span><small>零重叠</small>
+        </button>
+        <button type="button" id="track-transition-card-stereo" class="tt-card" data-mode="stereo" onclick="selectTrackTransitionMode('stereo')" aria-pressed="false" title="左右声道渐变衔接，沉浸式转场">
+          <svg class="tt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M3.5 10v4M7.2 7v10M10.9 8.5v7M14.6 8.5v7M18.3 7v10M22 10v4" opacity=".95"/></svg>
+          <span class="tt-label">立体声转场</span><small>沉浸式</small>
+        </button>
+      </div>
+      <button type="button" id="track-transition-toggle" class="quick-menu-toggle" onclick="toggleTrackTransition()" aria-pressed="false" title="开启后按所选风格与参数编排曲末交接；关闭时既有播放行为完全不变"><span>启用歌曲过渡<small>曲末交接 · 全程不重叠</small></span><span class="dot"></span></button>
+      <div id="track-transition-status" class="tt-status">关闭 · 不影响现有播放</div>
+      <div class="tt-legacy-row">
+        <button type="button" id="quick-menu-automix-toggle" class="quick-menu-toggle tt-legacy-toggle" onclick="toggleCuefieldAutoMix()" aria-pressed="false" title="Cuefield 是独立第二音源的双轨提前混音，与上面的「混音过渡」不是同一套实现；开启时歌曲过渡会暂时让路"><span>实验 · Cuefield 双轨混音<small id="quick-menu-automix-status">默认关闭</small></span><span class="dot"></span></button>
+      </div>
+      <div class="audio-tuning-hint">四种过渡各自有独立光效、图标与可调参数；试听会用当前参数合成两段音，真实切歌始终串行、不会叠音。参数语义对齐开源 Gapless-5 的淡入/淡出分离与等功率曲线、Tone.js CrossFade 的混合比；浏览器 &lt;audio&gt; 无法裁编码延迟，故不提供酷狗那种负值「歌曲间隔」。下方「Cuefield 双轨混音」是另一套提前叠入的实验功能，与「混音过渡」不同。</div>
+    </div>
+  </details>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">播放高级</div>
+          <div class="settings-group-body">
+  <details id="playback-advanced-fold" class="playback-advanced-fold">
+    <summary><span>播放高级</span><small id="playback-advanced-summary">1.00x · 保持音调</small></summary>
+    <div class="playback-advanced-body">
+      <div class="pa-section-title">变速不变调</div>
+      <div class="at-control-row">
+        <label for="playback-speed-range">速度</label>
+        <input id="playback-speed-range" type="range" min="0.5" max="2" step="0.05" value="1" aria-label="播放速度倍率">
+        <span id="playback-speed-value">1.00x</span>
+      </div>
+      <div id="playback-speed-presets" class="playback-speed-presets">
+        <button type="button" data-rate="0.75">0.75x</button>
+        <button type="button" data-rate="1" class="active">1.0x</button>
+        <button type="button" data-rate="1.25">1.25x</button>
+        <button type="button" data-rate="1.5">1.5x</button>
+      </div>
+      <button type="button" id="playback-preserve-pitch-toggle" class="quick-menu-toggle on" aria-pressed="true" title="开启时变速不变调；关闭后速度变化会带着音调一起升降"><span>保持音调</span><span class="dot"></span></button>
+
+      <div class="pa-section-title">曲末淡出与无缝预载</div>
+      <div class="at-control-row">
+        <label for="playback-lookahead-range">曲末</label>
+        <input id="playback-lookahead-range" type="range" min="0.5" max="6" step="0.1" value="1.8" aria-label="曲末提前淡出排程窗口秒数">
+        <span id="playback-lookahead-value">1.8s</span>
+      </div>
+      <div class="at-control-row">
+        <label for="playback-lead-range">预载</label>
+        <input id="playback-lead-range" type="range" min="5" max="60" step="1" value="18" aria-label="无缝衔接提前预载秒数">
+        <span id="playback-lead-value">18s</span>
+      </div>
+
+      <div class="pa-section-title">输出设备</div>
+      <select id="playback-output-device" aria-label="音频输出设备"></select>
+      <div class="playback-output-actions">
+        <button type="button" id="playback-output-pick">选择设备…</button>
+        <button type="button" id="playback-output-default">跟随系统</button>
+      </div>
+      <div id="playback-output-status" class="pa-status">跟随系统默认设备</div>
+      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出不经过 Web Audio。</div>
+    </div>
+  </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="audio">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">音频</h3>
+          <p class="settings-page-sub">十段均衡、响度对齐与输出设备。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">均衡器与响度</div>
+          <div class="settings-group-body">
+  <details id="audio-tuning-fold" class="audio-tuning-fold">
+    <summary><span>音效调音</span><small id="audio-tuning-summary">平坦 · 响度+0.0dB</small></summary>
+    <div class="audio-tuning-body">
+      <button type="button" id="audio-tuning-eq-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningEq()" aria-pressed="true"><span>10 段均衡 / 前级</span><span class="dot"></span></button>
+      <button type="button" id="audio-tuning-replaygain-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningReplayGain()" aria-pressed="true" title="有 ReplayGain 标签时直接用标签；在线音源改用起播后的短窗响度自适应"><span>响度对齐</span><span class="dot"></span></button>
+      <button type="button" id="audio-tuning-anticlick-toggle" class="quick-menu-toggle on" onclick="toggleAudioTuningAntiClick()" aria-pressed="true" title="换源、跳转时 8ms 淡出 / 12ms 淡入，消除硬切爆音"><span>换源防爆音</span><span class="dot"></span></button>
+      <div id="audio-tuning-presets" class="audio-tuning-presets">
+        <button type="button" data-preset="flat" class="active" title="平坦"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">平坦</span></button>
+        <button type="button" data-preset="pop" title="流行"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">流行</span></button>
+        <button type="button" data-preset="rock" title="摇滚"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">摇滚</span></button>
+        <button type="button" data-preset="vocal" title="人声"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">人声</span></button>
+      </div>
+      <div id="audio-tuning-eq-rows"></div>
+      <div class="at-control-row">
+        <label for="at-preamp">前级</label>
+        <input id="at-preamp" type="range" min="-12" max="12" step="0.5" value="0" aria-label="前级增益分贝">
+        <span id="at-preamp-v">+0.0dB</span>
+      </div>
+      <div class="at-control-row">
+        <label for="at-balance">平衡</label>
+        <input id="at-balance" type="range" min="-100" max="100" step="1" value="0" aria-label="左右声道平衡">
+        <span id="at-balance-v">中</span>
+      </div>
+      <div class="audio-tuning-hint">31Hz–16kHz · ±12dB · 响度补偿上限 ±6dB</div>
+    </div>
+  </details>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">输出设备</div>
+          <div class="settings-group-body">
+      <div class="fx-section-label">输出接口</div>
+      <div class="audio-output-section" id="audio-output-panel">
+        <div class="quality-output-head"><span>播放输出设备</span><span class="quality-output-actions"><button class="quality-output-refresh" type="button"
+              onclick="refreshAudioOutputDevices(true)">刷新</button><button class="quality-output-refresh" type="button"
+              onclick="openAudioOutputWorkflowPanel()">面板</button></span></div>
+        <div id="audio-output-list" class="audio-output-list"></div>
+      </div>
+          </div>
+          <div class="settings-group-note">WASAPI 旁路输出不经过 Web Audio；变速后歌词进度仍会自动同步。</div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="desktop-lyrics">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">歌词</h3>
+          <p class="settings-page-sub">独立桌面歌词窗口的字号、行数、动效与帧率。主开关在三条杠菜单，或按 Alt+L。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">桌面歌词窗口</div>
+          <div class="settings-group-body">
+      <div class="fx-dl-settings" id="fx-desktop-lyrics-settings">
+        <div class="fx-slider"><label>桌面歌词大小</label><input id="fx-desktoplyricssize" type="range" min="0.45" max="1.55" step="0.01"><output></output></div>
+        <div class="fx-slider"><label>桌面歌词透明</label><input id="fx-desktoplyricsopacity" type="range" min="0.28" max="1" step="0.01"><output></output></div>
+        <div class="fx-section-label">桌面歌词行数</div>
+        <div class="fx-seg" id="desktop-lyrics-lines-seg">
+          <button data-desktop-lyrics-lines="1">单行</button>
+          <button data-desktop-lyrics-lines="3">3 行</button>
+          <button data-desktop-lyrics-lines="5">5 行</button>
+          <button data-desktop-lyrics-lines="7">7 行</button>
+          <button data-desktop-lyrics-lines="10">10 行</button>
+        </div>
+        <div class="fx-section-label">桌面歌词换行动效</div>
+        <div class="fx-seg" id="desktop-lyrics-motion-seg">
+          <button data-desktop-lyrics-motion="slide">上浮</button>
+          <button data-desktop-lyrics-motion="flip">3D 翻转</button>
+          <button data-desktop-lyrics-motion="float">呼吸</button>
+          <button data-desktop-lyrics-motion="none">静止</button>
+        </div>
+        <div class="fx-section-label">桌面歌词对齐</div>
+        <div class="fx-seg" id="desktop-lyrics-align-seg">
+          <button data-desktop-lyrics-align="center">居中</button>
+          <button data-desktop-lyrics-align="left">左对齐</button>
+          <button data-desktop-lyrics-align="right">右对齐</button>
+        </div>
+        <div class="fx-slider"><label>桌面歌词倾斜</label><input id="fx-desktoplyricstilt" type="range" min="-35" max="35" step="1"><output></output></div>
+        <div class="fx-section-label">桌面歌词帧率 <small class="fx-label-scope">只影响桌面歌词窗口</small></div>
+        <div class="fx-seg" id="desktop-lyrics-fps-seg">
+          <button data-desktop-lyrics-fps="24">24</button>
+          <button data-desktop-lyrics-fps="30">30</button>
+          <button data-desktop-lyrics-fps="60">60</button>
+          <button data-desktop-lyrics-fps="120">120</button>
+          <button data-desktop-lyrics-fps="0">无上限</button>
+        </div>
+      </div>
+      <!-- 壁纸设置整体一个容器：标题 / 帧率 / 透明度一起显隐。
+           原先标题和选项条分别设 hidden，容易出现「只露出一条没有标题的帧率条」，
+           被误认成桌面歌词帧率的第二行。 -->
+      <div id="wallpaper-settings-group" class="wallpaper-settings-group" hidden>
+        <div class="fx-section-label" id="wallpaper-settings-label">壁纸模式</div>
+        <div class="fx-section-label" id="wallpaper-fps-label">壁纸帧率 <small class="fx-label-scope">只影响壁纸窗口，与桌面歌词无关</small></div>
+        <div class="fx-seg" id="wallpaper-fps-seg">
+          <button data-wallpaper-fps="24">24</button>
+          <button data-wallpaper-fps="30">30</button>
+          <button data-wallpaper-fps="60">60</button>
+        </div>
+        <div class="fx-slider"><label>壁纸透明度</label><input id="fx-wallpaperopacity" type="range" min="0.35" max="1" step="0.01"><output></output></div>
+      </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="performance">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">性能</h3>
+          <p class="settings-page-sub">渲染策略、帧率上限、GPU 节流与内存压缩。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">渲染策略</div>
+          <div class="settings-group-body">
+      <div class="fx-section-label">直播 / 后台</div>
+      <div class="fx-seg" id="performance-background-seg" title="控制窗口隐藏、最小化或后台运行时的渲染策略">
+        <button data-performance-background="auto">自动优化</button>
+        <button data-performance-background="keep">保持运行</button>
+        <button data-performance-background="release">停止释放</button>
+      </div>
+      <div class="fx-section-label">画质档位</div>
+      <div class="fx-seg" id="performance-quality-seg" title="自动：按 CPU/内存选档；高配拉满，低配保流畅。也可手动锁定">
+        <button data-performance-quality="auto">自动</button>
+        <button data-performance-quality="eco">低</button>
+        <button data-performance-quality="balanced">中</button>
+        <button data-performance-quality="high">高</button>
+        <button data-performance-quality="ultra">超高</button>
+      </div>
+      <div class="fx-section-label">前台帧率上限</div>
+      <div class="fx-seg foreground-fps-seg" id="foreground-fps-seg" role="group" aria-label="前台帧率上限" title="以面板选择为准：跟随屏幕=垂直同步满帧；30/45/60 等为硬上限。画质档不会偷偷改帧率。">
+        <button data-foreground-fps="vsync">跟随屏幕</button>
+        <button data-foreground-fps="30">30</button>
+        <button data-foreground-fps="45">45</button>
+        <button data-foreground-fps="60">60</button>
+        <button data-foreground-fps="75">75</button>
+        <button data-foreground-fps="90">90</button>
+        <button data-foreground-fps="120">120</button>
+      </div>
+      <div class="fx-section-label">GPU 节流</div>
+      <div class="fx-seg" id="gpu-throttle-seg" role="group" aria-label="GPU 节流" title="电池/低端 GPU/高帧压时自动降到约 30fps 并关闭溢光；可强制开或关">
+        <button data-gpu-throttle="auto">自动</button>
+        <button data-gpu-throttle="on">开启</button>
+        <button data-gpu-throttle="off">关闭</button>
+      </div>
+      <div class="fx-sub" id="gpu-throttle-reason">状态：待命</div>
+      <div class="fx-toggle-grid">
+        <div class="fx-toggle" id="t-liveBackgroundKeep" onclick="toggleFx('liveBackgroundKeep')" title="开启后后台或最小化时保持视觉渲染，不进入低占用暂停"><span>直播后台保持</span><span class="dot"></span></div>
+      </div>
+      <div class="fx-section-label">音频输出</div>
+      <div class="fx-toggle-grid">
+        <div class="fx-toggle" id="t-wasapiOutput" onclick="toggleWasapiOutput()" title="WASAPI 旁路输出：绕过 Windows 音量合成直接驱动扬声器，延迟更低；异常时自动回退 WebAudio"><span>WASAPI 旁路输出</span><span class="dot"></span></div>
+      </div>
+          </div>
+          <div class="settings-group-note">画质档位按 CPU / 内存自动选档；帧率上限以本面板选择为准，画质档不会偷偷改帧率。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">运行状态</div>
+          <div class="settings-group-body">
+      <div class="fx-section-label">性能仪表盘</div>
+      <div class="fx-sub" id="perf-dashboard-body">FPS --</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">内存</div>
+          <div class="settings-group-body">
+      <div class="fx-section-label">内存压缩 / Mem Reduct</div>
+      <div class="memory-status-chip" id="memory-status-chip">系统内存读取中...</div>
+      <div class="fx-sub memory-status-sub" id="memory-status-sub">后台先压缩播放器进程；系统级释放可清工作集、修改页、待机页</div>
+      <div class="fx-toggle-grid">
+        <div class="fx-toggle" id="t-memoryAutoTrimApp" onclick="toggleFx('memoryAutoTrimApp')" title="最小化、托盘后台或深度后台时压缩 Mineradio / Electron 工作集"><span>自动压缩播放器</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-memoryAutoTrimOnBackground" onclick="toggleFx('memoryAutoTrimOnBackground')" title="只在最小化、隐藏或不可见后台触发自动压缩，前台播放不打断"><span>后台触发压缩</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-memoryAutoSystemTrim" onclick="toggleFx('memoryAutoSystemTrim')" title="按阈值和间隔启用系统级 Mem Reduct；默认不自动弹管理员权限"><span>系统级定时释放</span><span class="dot"></span></div>
+        <div class="fx-toggle" id="t-memorySystemAutoElevate" onclick="toggleFx('memorySystemAutoElevate')" title="完整释放工作集/修改页/待机页可能需要 UAC；关闭时只尝试当前权限可完成的部分"><span>需要时请求管理员</span><span class="dot"></span></div>
+      </div>
+      <div class="fx-section-label">系统释放范围</div>
+      <div class="fx-seg memory-mask-seg" id="memory-mask-seg" title="Mem Reduct 系统释放范围">
+        <button data-memory-mask="workingSet" class="active">工作集</button>
+        <button data-memory-mask="modifiedList" class="active">修改页</button>
+        <button data-memory-mask="standbyList" class="active">待机页</button>
+        <button data-memory-mask="standbyLow" class="active">低优先待机</button>
+      </div>
+      <div class="fx-slider"><label>定时释放(分)</label><input id="fx-memory-interval" type="range" min="5" max="180" step="1"><output></output></div>
+      <div class="fx-slider"><label>占用阈值(%)</label><input id="fx-memory-threshold" type="range" min="50" max="98" step="1"><output></output></div>
+      <div class="memory-action-row">
+        <button class="fx-mini-btn ghost" type="button" onclick="runAppMemoryTrim('manual')">压缩播放器</button>
+        <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(false)">系统释放</button>
+        <button class="fx-mini-btn ghost" type="button" onclick="runSystemMemoryPurge(true)">提权释放</button>
+          </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="storage">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">存储</h3>
+          <p class="settings-page-sub">缓存目录与各类占用的位置、大小。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">缓存目录</div>
+          <div class="settings-group-body">
+      <div class="cache-storage-panel" id="cache-storage-panel">
+        <div class="cache-storage-head"><span>统一缓存目录</span><span id="cache-storage-total">读取中...</span></div>
+        <code class="cache-storage-path" id="cache-storage-root">桌面版启动后读取</code>
+        <div class="cache-storage-actions">
+          <button class="fx-mini-btn ghost" type="button" onclick="chooseCacheDirectory()">更改目录</button>
+          <button class="fx-mini-btn ghost" type="button" onclick="refreshCacheSettings()">刷新占用</button>
+        </div>
+        <div class="cache-storage-row"><span>歌词 / 译文</span><b id="cache-storage-lyrics-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-lyrics-path">—</code>
+        <div class="cache-storage-row"><span>封面 / 网络 / 音频分片</span><b id="cache-storage-chromium-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-chromium-path">—</code>
+        <div class="cache-storage-row"><span>节奏分析</span><b id="cache-storage-beatmaps-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-beatmaps-path">—</code>
+        <div class="cache-storage-row"><span>更新包</span><b id="cache-storage-updates-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-updates-path">—</code>
+        <div class="cache-storage-row"><span>Wallpaper Engine 静音场景缓存</span><b id="cache-storage-wallpaper-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-wallpaper-path">—</code>
+        <div class="cache-storage-row muted"><span>设置与登录（固定）</span><b id="cache-storage-userdata-size">—</b></div>
+        <code class="cache-storage-path small" id="cache-storage-userdata-path">—</code>
+        <div class="fx-sub cache-storage-note" id="cache-storage-note">歌词立即切换；网络、节奏分析与更新包目录重启后切换。</div>
+      </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-settings-page="about">
+        <header class="settings-page-head">
+          <h3 class="settings-page-title">关于</h3>
+          <p class="settings-page-sub">版本、构建溯源与数据存放说明。</p>
+        </header>
+        <div class="settings-group">
+          <div class="settings-group-title">版本与更新</div>
+          <div class="settings-group-body">
+            <div class="settings-fact"><span>当前版本</span><b id="settings-about-version">&mdash;</b></div>
+            <div class="settings-fact"><span>构建 commit</span><b id="settings-about-commit">&mdash;</b></div>
+            <div class="settings-fact"><span>构建时间</span><b id="settings-about-built-at">&mdash;</b></div>
+            <div class="settings-actions">
+              <button class="fx-mini-btn" type="button" onclick="openUpdatePanel()">检查更新</button>
+              <button class="fx-mini-btn ghost" type="button" onclick="openAboutPanel()">完整构建溯源</button>
+            </div>
+          </div>
+          <div class="settings-group-note">版本与 GitHub Release 正文的「构建自 commit」应完全一致；不一致说明手里的安装包不是那次构建。</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">数据</div>
+          <div class="settings-group-body">
+            <div class="settings-group-note">账号、歌单与播放记录保存在本机；缓存可在「存储」页迁移。</div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+
+<script src="../../../public/js/modules/06-fx/05-prismal-chrome.js"></script>
+<script>
+  // prismal 的 boot 会 scan()，缺 #fx-panel 时它内部有守卫；这里只补一个手动同步
+  setTimeout(function () {
+    if (window.MineradioPrismalChrome) window.MineradioPrismalChrome.syncFills();
+  }, 400);
+</script>
+</body></html>

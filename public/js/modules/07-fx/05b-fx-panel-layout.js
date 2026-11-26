@@ -13,26 +13,10 @@ function syncFxPanelTabPill() {
   tabs.style.setProperty('--fx-tab-left', btn.offsetLeft + 'px');
   tabs.style.setProperty('--fx-tab-width', btn.offsetWidth + 'px');
 }
-/* 2026-11-23：Folia 的入口开关删了，改成「tab 即世界」——
- * 切到 Folia 页就进入，切走就退出。这是它现在唯一的进出门。
- * 用 typeof 兜住加载时序（12-folia 的运行时排在 07-fx 之后）。 */
-function syncFoliaWorldWithTab(prevTab, nextTab) {
-  if (prevTab === nextTab) return;
-  if (nextTab === 'folia') {
-    if (typeof foliaWorldEnter === 'function') {
-      try { foliaWorldEnter({ silent: true }); } catch (_) { }
-    }
-    return;
-  }
-  if (prevTab === 'folia' && typeof foliaWorldExit === 'function') {
-    try { foliaWorldExit({ silent: true }); } catch (_) { }
-  }
-}
 function setFxPanelTab(tab) {
   // 2026-11-23：「高级」页整块搬进设置页（性能 / 内存 / 缓存 / 输出），
   // 这里只剩五个视觉页；旧调用传 advanced 一律回落到预设页。
   var allowed = { presets:1, folia:1, appearance:1, lyrics:1, motion:1 };
-  var prevTab = fxPanelTab;
   fxPanelTab = allowed[tab] ? tab : 'presets';
   var panel = document.getElementById('fx-panel');
   if (panel) panel.setAttribute('data-active-tab', fxPanelTab);
@@ -53,7 +37,6 @@ function setFxPanelTab(tab) {
   }
   repositionFxFloatingPanels();
   if (fxPanelTab === 'motion') scheduleFxParticleFireRefresh();
-  syncFoliaWorldWithTab(prevTab, fxPanelTab);
   syncFxPanelTabPill();
   // 面板刚展开的那一帧按钮还没有宽度，等过渡走完再对准一次
   if (typeof requestAnimationFrame === 'function') {
@@ -151,6 +134,10 @@ function organizeFxPanel() {
    * 歌词样式 / 背景 / 参数设置都长在这个折叠区里，所以它们跟着 Folia 一起走。 */
   var foliaFoldNode = document.getElementById('fx-folia-fold');
   if (foliaFoldNode && pages.folia) pages.folia.appendChild(foliaFoldNode);
+  /* 液态玻璃参数块（2026-11-25 从皮肤面板搬回）：按 DOM 流向它会被分到预设页，
+     这里显式挂到「外观」页尾部 —— 玻璃属于观感，和画面基础放一起。 */
+  var liquidGlassBlock = document.getElementById('fx-liquidglass-block');
+  if (liquidGlassBlock && pages.appearance) pages.appearance.appendChild(liquidGlassBlock);
   /* 「插件市场」整块搬到「高级」页最前面。
    * 它原本按流向落在「外观」页，而外观页有 2000+px 高、它在离页首 1500px 的位置 ——
    * 面板又没有明显的锚点，用户按「高级 → 插件市场」找了两轮都没找到。
@@ -172,11 +159,6 @@ function organizeFxPanel() {
   if (!panel._fxTabPillResizeBound) {
     panel._fxTabPillResizeBound = true;
     window.addEventListener('resize', function () { syncFxPanelTabPill(); });
-  }
-  /* 存档恢复的 Folia：让 tab 反映实际世界，否则会停在「预设」页、
-   * 画面却已经是 Folia —— 用户再点一下「预设」就把世界关了。 */
-  if (fxPanelTab !== 'folia' && typeof foliaWorldActive === 'function') {
-    try { if (foliaWorldActive()) fxPanelTab = 'folia'; } catch (_) { }
   }
   panel._fxPanelOrganized = true;
   repairFxParticleCountPlacement();

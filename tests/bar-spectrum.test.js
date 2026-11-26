@@ -67,6 +67,14 @@ function runSlice(fns, ctxObj, callExpr) {
     barSpectrumTestData: null,
     barSpectrumShown: false,
     barSpectrumIdleFrames: 0,
+    /* 每帧热路径的 DOM / 画布 / 主题缓存（2026-11-25 性能回归：不再每帧查询/重建） */
+    barSpectrumBarEl: null,
+    barSpectrumCanvasEl: null,
+    barSpectrumCtx: null,
+    barSpectrumSize: { w: 0, h: 0 },
+    barSpectrumSizeObserver: null,
+    barSpectrumSizeObservedCanvas: null,
+    barSpectrumThemeCache: Object.create(null),
     barSpectrumClear: () => {},
     paintBarSpectrumSelection: () => {},
     fx: undefined,
@@ -301,6 +309,22 @@ test('⑧ pickBarSpectrum 写存档并即时生效，关闭时清空画布', () 
   assert.equal(cleared, 1, '关闭要立刻清空画布');
   assert.equal(runSlice(['barSpectrumNormalize', 'pickBarSpectrum'], base, "pickBarSpectrum('mirror')"), false, '已移除的样式不能选中');
   assert.equal(saved, 2, '非法值不能触发落盘');
+});
+
+/* ---------------------------------------------------------------- ⑫ 每帧开销 */
+test('⑫ tick 每帧不查 DOM / 不强制布局 / 不重建主题与渐变', () => {
+  const tickFn = extractFunction(engineSrc, 'barSpectrumTick');
+  assert.doesNotMatch(tickFn, /getBoundingClientRect/, '每帧 getBoundingClientRect 会强制同步布局（尺寸改走 ResizeObserver）');
+  assert.doesNotMatch(tickFn, /getElementById/, '每帧 DOM 查询必须走缓存（isConnected 校验后复用）');
+  assert.doesNotMatch(tickFn, /getContext/, '每帧 getContext 必须走缓存');
+
+  const themeFn = extractFunction(engineSrc, 'barSpectrumKgTheme');
+  assert.match(themeFn, /barSpectrumThemeCache\[mode\]/, '主题对象（含两个闭包）必须按 mode 缓存，不能每帧重建');
+  const barsFn = extractFunction(engineSrc, 'barSpectrumKgBars');
+  assert.match(barsFn, /theme\._grad/, '水平渐变必须缓存，只在宽度变化时重建');
+
+  const activeFn = extractFunction(engineSrc, 'barSpectrumActive');
+  assert.match(activeFn, /isConnected/, '缓存的 #bottom-bar 引用必须校验是否还在文档里');
 });
 
 /* ---------------------------------------------------------------- ⑨ FX 面板红心动效已删 */

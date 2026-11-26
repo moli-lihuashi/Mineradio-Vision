@@ -16,7 +16,7 @@ function getHomeHeroMp4Url() {
 function shouldDegradeHomeHeroVideo() {
   // 低配自动降级：GPU 节流开启 或 硬件并发 <= 4 或 prefers-reduced-motion
   if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) return true;
-  if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) return true;
+  if (prefersReducedMotionNow()) return true;
   if (typeof fx !== 'undefined' && fx && fx.gpuThrottle) return true;
   return false;
 }

@@ -23,20 +23,74 @@
   var MAX_LIFE_FRAMES = 240;   // 2s @60fps 安全上限，防止数值噪声永不停止
   var MAX_DT = 0.05;           // 切后台回来后 dt 钳制，避免发散
 
-  // ---- reduced motion ----
+  // ---- reduced motion：系统偏好 + 用户手动覆盖 ----
+  /* 这里成为「减少动效」的唯一判据：
+   *   auto（默认）= 跟随系统 prefers-reduced-motion；
+   *   reduce      = 无论系统怎么设都减少（给不想动系统设置的用户）。
+   * CSS 侧分两套、互不干扰：
+   *   系统级 —— 各文件原有的 @media (prefers-reduced-motion) 块原样保留；
+   *   手动级 —— <html class="reduce-motion"> 由这里的 applyReduceMotionClass() 挂上，
+   *             全局收紧规则写在 index.css 末尾（一条 nuke，不复制那 5 段规则）。 */
+  var REDUCE_MOTION_STORE_KEY = 'mineradio:motion-reduce:v1';
+  var _rmMode = (function () {
+    try { return localStorage.getItem(REDUCE_MOTION_STORE_KEY) === 'reduce' ? 'reduce' : 'auto'; } catch (_) { return 'auto'; }
+  })();
   var _rmCache = null;
-  function prefersReducedMotion() {
-    if (_rmCache != null) return _rmCache;
+
+  function systemPrefersReducedMotion() {
     try {
       var mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
-      _rmCache = !!(mq && mq.matches);
-    } catch (_) { _rmCache = false; }
+      return !!(mq && mq.matches);
+    } catch (_) { return false; }
+  }
+  function prefersReducedMotion() {
+    if (_rmMode === 'reduce') return true;
+    if (_rmCache != null) return _rmCache;
+    _rmCache = systemPrefersReducedMotion();
     return _rmCache;
+  }
+  function getReduceMotionMode() {
+    return _rmMode;
+  }
+  function applyReduceMotionClass() {
+    try {
+      var root = document.documentElement;
+      if (root && root.classList) root.classList.toggle('reduce-motion', _rmMode === 'reduce');
+    } catch (_) { }
+  }
+  function applyReduceMotionUi() {
+    var seg = document.getElementById('motion-reduce-seg');
+    if (!seg) return;
+    var btns = seg.querySelectorAll('button[data-motion-reduce]');
+    for (var i = 0; i < btns.length; i++) {
+      var active = btns[i].getAttribute('data-motion-reduce') === _rmMode;
+      btns[i].classList.toggle('active', active);
+      btns[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+  function setReduceMotionMode(mode) {
+    _rmMode = mode === 'reduce' ? 'reduce' : 'auto';
+    try { localStorage.setItem(REDUCE_MOTION_STORE_KEY, _rmMode); } catch (_) { }
+    _rmCache = null;
+    applyReduceMotionClass();
+    applyReduceMotionUi();
+    if (typeof window.showToast === 'function') {
+      try { window.showToast(_rmMode === 'reduce' ? '已减少界面动效' : '动效跟随系统设置'); } catch (_) { }
+    }
+    return _rmMode;
   }
   try {
     var _mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
-    if (_mq && _mq.addEventListener) _mq.addEventListener('change', function () { _rmCache = null; });
+    if (_mq && _mq.addEventListener) {
+      _mq.addEventListener('change', function () {
+        _rmCache = null;
+        /* 系统偏好变了：只重算缓存，不碰手动类（手动类只由用户设置决定） */
+        if (_rmMode === 'auto') applyReduceMotionClass();
+      });
+    }
   } catch (_) {}
+  /* 启动即落一次类：手动模式下要在首帧之前就对 */
+  applyReduceMotionClass();
 
   // ---- Tokens：Apple HIG 标准缓动 / 时长 / 弹簧预设 ----
   var EASE = {
@@ -495,6 +549,9 @@
     DURATION: DURATION,
     SPRING: SPRING,
     prefersReducedMotion: prefersReducedMotion,
+    getReduceMotionMode: getReduceMotionMode,
+    setReduceMotionMode: setReduceMotionMode,
+    applyReduceMotionUi: applyReduceMotionUi,
     springTo: springTo,
     tapPop: tapPop,
     springUiIn: springUiIn,
@@ -502,6 +559,14 @@
     springTap: springTap,
     springPopover: springPopover,
     releaseUiTransform: releaseUiTransform,
+    /* 掐断某个元素上正在进行的所有 spring 并归还内联样式。
+     * 液态面板动效（09-fx-panel-genie）接管 #fx-panel 前必须调它，
+     * 否则弹簧每帧写 transform，会和液态动画互相覆盖。 */
+    cancelUi: function (el) {
+      if (!el) return;
+      try { killAll(el, { release: true }); } catch (_) { }
+      releaseUiTransform(el);
+    },
     easedTo: easedTo,
     VelocityTracker: VelocityTracker,
     killSpring: killSpring,
@@ -509,3 +574,16 @@
     snapshot: snapshot
   };
 })();
+
+/* 全局便捷入口：其他模块（02-home / 05-playback / 10-shell）只要有动效降级判断，
+ * 一律调这个，不要再各自 matchMedia —— 否则手动「减少动效」会漏掉一片。 */
+function prefersReducedMotionNow() {
+  try {
+    if (window.MineradioMotion && typeof window.MineradioMotion.prefersReducedMotion === 'function') {
+      return !!window.MineradioMotion.prefersReducedMotion();
+    }
+  } catch (_) { }
+  try {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (_) { return false; }
+}

@@ -1,6 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
+const {
+  isBlockedAddress: isBlockedOutboundAddress,
+  isBlockedHostname: isBlockedOutboundHostname,
+} = require('./net-guard');
 
 // 媒体代理与 API 鉴权：
 //   · 出站 HTTP 只允许白名单 CDN（PROXY_MEDIA_HOST_SUFFIXES），并且**逐跳**复核重定向目标，
@@ -56,28 +60,14 @@ module.exports = function createMediaProxy(deps) {
     'toutiao.com',
   ];
 
+  // 私网/回环/链路本地/CGNAT/保留段的判定统一收口在 net-guard
+  // （此前这里漏了 100.64/10、0.0.0.0/8、组播与 IPv6 映射地址）。
   function isBlockedProxyAddress(address) {
-    const h = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
-    if (!h) return true;
-    if (isBlockedProxyHost(h)) return true;
-    if (h.includes(':')) {
-      if (h === '::1' || h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
-    }
-    if (/^169\.254\./.test(h)) return true;
-    return false;
+    return isBlockedOutboundAddress(address);
   }
 
   function isBlockedProxyHost(hostname) {
-    const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-    if (!h) return true;
-    if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
-    if (h === '0.0.0.0' || h === '::1') return true;
-    if (/^127(?:\.|$)/.test(h)) return true;
-    if (/^10(?:\.|$)/.test(h)) return true;
-    if (/^192\.168(?:\.|$)/.test(h)) return true;
-    if (/^172\.(?:1[6-9]|2\d|3[01])(?:\.|$)/.test(h)) return true;
-    if (h.endsWith('.internal') || h.endsWith('.lan')) return true;
-    return false;
+    return isBlockedOutboundHostname(hostname);
   }
 
   function isAllowedProxyMediaHost(hostname) {
@@ -182,6 +172,22 @@ module.exports = function createMediaProxy(deps) {
     return upstreamType || 'audio/mpeg';
   }
 
+  // 只声明本服务自身 origin（与 http-server 的 isOwnOrigin 同口径）。
+  // 原来固定 'Access-Control-Allow-Origin: *'：本机任何网页只要拿到 query token，
+  // 就能跨源读取音频响应。这里始终回显 http://<Host>：
+  //   · 同源播放（渲染进程 <audio crossOrigin="anonymous">）不受影响，不赌浏览器语义；
+  //   · 其它端口的本机网页 Origin 与之不匹配，CORS 检查直接失败。
+  function sameOriginCorsHeaders(res) {
+    try {
+      const req = res && res.req;
+      const host = String((req && req.headers && req.headers.host) || '');
+      if (!host) return null;
+      if (!/^(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(host)) return null;
+      return { 'Access-Control-Allow-Origin': 'http://' + host, 'Vary': 'Origin' };
+    } catch (_) {}
+    return null;
+  }
+
   function sendAudioBuffer(res, buffer, contentType, range) {
     /* 错误页 / JSON 报错不能当成音频下发给 <audio>（会变成 MEDIA_ERR_DECODE）。
      * 小于缓存阈值的完整音频只记诊断不阻断：试听片段、短音效是合法音源。 */
@@ -215,22 +221,20 @@ module.exports = function createMediaProxy(deps) {
         res.end();
         return;
       }
-      res.writeHead(206, {
+      res.writeHead(206, Object.assign({
         'Content-Type': contentType || 'audio/mp4',
-        'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes',
         'Content-Length': end - start + 1,
         'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
-      });
+      }, sameOriginCorsHeaders(res) || {}));
       res.end(buffer.subarray(start, end + 1));
       return;
     }
-    res.writeHead(200, {
+    res.writeHead(200, Object.assign({
       'Content-Type': contentType || 'audio/mp4',
-      'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes',
       'Content-Length': total,
-    });
+    }, sameOriginCorsHeaders(res) || {}));
     res.end(buffer);
   }
 

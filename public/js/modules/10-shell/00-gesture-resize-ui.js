@@ -556,6 +556,9 @@ var PEEK_HIDE_DELAY = 170;
 var peekTimers = { search:null, fx:null, pl:null };
 function setPeek(el, on, key) {
   if (!el) return;
+  /* fx 面板的液态动画接管期间，peek 不能插一脚：
+   * peek 会加 .peek 并再跑一次 springUiIn，两套 transform 会互相覆盖。 */
+  if (key === 'fx' && window.FxPanelGenie && window.FxPanelGenie.running()) return;
   if (immersiveMode && on && (key === 'search' || key === 'fx')) return;
   if (on && !diyPlayerMode && key === 'fx') return;
   if (!on && key === 'fx' && fxPanelPinned) return;
@@ -805,10 +808,12 @@ window.addEventListener('mousemove', throttle(function(e){
   if (ey < 66 || inSearchPanel || searchFocused || uploadTipOpen) setPeek(sa, true, 'search');
   else if (saOn && !emptyHomeActive) setPeek(sa, false, 'search');
   var inFxPanel = fpOn && ex >= fpRect.left - 24 && ex <= fpRect.right + 24 && ey >= fpRect.top - 24 && ey <= fpRect.bottom + 24;
-  var inFxFab = ex >= fabRect.left - 18 && ex <= fabRect.right + 18 && ey >= fabRect.top - 18 && ey <= fabRect.bottom + 18;
+  /* inFxFab（鼠标移到滑杆按钮上自动展开）已按用户要求删除：面板只由点击按钮开合。
+   * 这里只保留「指针已经在面板上、或停在面板与按钮之间的缝隙里」时维持显示，
+   * 否则鼠标一离开面板就自动收起。 */
   var inFxBridge = fpOn && ex >= Math.min(fpRect.left, fabRect.left) - 18 && ex <= W && ey >= fpRect.bottom - 10 && ey <= fabRect.bottom + 18;
-  if (!diyPlayerMode) inFxPanel = inFxFab = inFxBridge = false;
-  if (inFxFab || inFxPanel || inFxBridge) setPeek(fp, true, 'fx');
+  if (!diyPlayerMode) inFxPanel = inFxBridge = false;
+  if (inFxPanel || inFxBridge) setPeek(fp, true, 'fx');
   else if (fpOn && !fxPanelPinned) setPeek(fp, false, 'fx');
   var inQueueTrigger = isPlaylistEdgeTrigger(ex, ey, H);
   var inQueuePanel = ppOn && ex >= ppRect.left - 18 && ex <= ppRect.right + 24 && ey >= ppRect.top - 22 && ey <= ppRect.bottom + 22;

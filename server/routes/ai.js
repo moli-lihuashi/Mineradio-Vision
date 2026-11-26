@@ -154,6 +154,52 @@ function buildPlaylistPrompt(userPrompt, profile) {
   return { systemMsg, userMsg };
 }
 
+/* 月度听歌总结：把前端算好的统计摘要交给 LLM 写成一段话。
+ * 只传聚合数字（不是原始记录），prompt 明确要求不编造 —— 数据里没有的东西不许写。 */
+function buildListenSummaryPrompt(rangeDays, stats) {
+  const days = Math.max(1, Math.min(400, Number(rangeDays) || 30));
+  const systemMsg = [
+    '你是一位懂音乐也懂人的乐评人，为听歌数据写一份「听歌人格报告」。',
+    '',
+    '输出格式（严格遵守）：',
+    '1) 第一行是一个 6~12 字的人格标签，用 **加粗** 包裹，例如 **情绪过载的浪漫主义者**。不要用「音乐爱好者」「听歌达人」「音乐旅人」这类空词。',
+    '2) 然后用空行分隔 2~3 段，每段 55~90 字。每段开头用一个短句加粗引导，形如 **听觉上你吃两套**：后面接正文。',
+    '3) 最后可以有一句 40 字以内的收尾判断，不加粗。',
+    '',
+    '内容要求：',
+    '- 必须引用用户数据里**真实出现过的歌名或歌手名**（至少 2 个），并说明它体现了什么。',
+    '- 可以从歌名/歌手的气质做推断，但**绝对不许编造数据里没有出现的歌曲、歌手、专辑或数字**。',
+    '- 要有观点和比喻，可以适度锋利，但不要人身攻击、不要说教。',
+    '- 不要 emoji、不要列表符号、不要「总结：」这类引导语、不要 # 号标题。',
+    '- 若曲目数少于 10，要诚实点出「样本还小」，但仍要从这几首歌里读出气质，不许敷衍。'
+  ].join('\n');
+
+  const lines = [];
+  lines.push('统计区间：最近 ' + days + ' 天');
+  if (stats.totalText) lines.push('累计时长：' + String(stats.totalText).slice(0, 40));
+  lines.push('播放次数：' + (Number(stats.plays) || 0) + ' 次');
+  lines.push('不重复曲目：' + (Number(stats.songs) || 0) + ' 首；歌手 ' + (Number(stats.artists) || 0)
+    + ' 位；专辑 ' + (Number(stats.albums) || 0) + ' 张');
+  if (stats.newShare != null) lines.push('新遇见占比：' + Math.round((Number(stats.newShare) || 0) * 100) + '%');
+  if (stats.topShare != null) lines.push('头部集中度：' + Math.round((Number(stats.topShare) || 0) * 100) + '%');
+  if (Array.isArray(stats.topSongs) && stats.topSongs.length) {
+    lines.push('听过的歌（按时长降序，这是你能引用的全部曲目）：');
+    stats.topSongs.slice(0, 8).forEach(s => {
+      lines.push('- ' + String(s.name || '').slice(0, 60)
+        + (s.artist ? ' — ' + String(s.artist).slice(0, 40) : '')
+        + '（' + Math.round(Number(s.seconds) || 0) + ' 秒）');
+    });
+  }
+  if (Array.isArray(stats.topArtists) && stats.topArtists.length) {
+    lines.push('出现过的歌手：' + stats.topArtists.slice(0, 6).map(a => String(a).slice(0, 30)).join('、'));
+  }
+  if (stats.peakHour != null && Number.isFinite(Number(stats.peakHour))) {
+    lines.push('最集中的时段：' + (Number(stats.peakHour) + ':00') + ' 前后');
+  }
+  lines.push('直接输出报告正文，不要任何开场白。');
+  return { systemMsg, userMsg: lines.join('\n') };
+}
+
 function callLLM(baseUrl, apiKey, model, systemMsg, userMsg, opts) {
   opts = opts || {};
   assertSafeLlmBaseUrlSync(baseUrl); // 防线二：持久化里遗留的坏配置在发请求前拦截
@@ -176,7 +222,7 @@ function callLLM(baseUrl, apiKey, model, systemMsg, userMsg, opts) {
         'Authorization': 'Bearer ' + apiKey,
         'Content-Length': Buffer.byteLength(body),
       },
-      timeout: 30000,
+      timeout: opts.timeoutMs > 0 ? opts.timeoutMs : 30000,
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -364,11 +410,47 @@ module.exports = function register(ctx) {
   const { sendJSON, readRequestBody, cloudsearch, artist_top_song, mapSongRecord, handleKugouGuessLike } = ctx;
 
   return async function(req, res, url, pn) {
+/* 连接测试的错误分类：把 401/404/超时/域名解析分开，用户才知道该改哪一项。
+ * 统一返回 200 + { ok:false, code, message }，让前端 apiJson 不必处理异常分支。 */
+function describeAiTestError(err) {
+  const msg = String((err && err.message) || err || '');
+  if (/LLM API 40[13]/.test(msg)) return { code: 'BAD_KEY', message: '密钥无效或没有权限（401/403）' };
+  if (/LLM API 404/.test(msg)) return { code: 'NOT_FOUND', message: '地址或模型不存在（404），检查服务地址与模型 ID' };
+  if (/LLM API 429/.test(msg)) return { code: 'RATE_LIMIT', message: '请求过于频繁或额度不足（429）' };
+  if (/timeout|ETIMEDOUT/i.test(msg)) return { code: 'TIMEOUT', message: '请求超时（10 秒内没有响应）' };
+  if (/ENOTFOUND|EAI_AGAIN/.test(msg)) return { code: 'NETWORK', message: '域名解析失败，检查网络或服务地址' };
+  if (/ECONNREFUSED|ECONNRESET|EPIPE/.test(msg)) return { code: 'NETWORK', message: '连接被拒绝或中断' };
+  if (/地址|baseUrl|base URL|URL/i.test(msg)) return { code: 'BLOCKED', message: msg.slice(0, 160) };
+  return { code: 'OTHER', message: (msg.slice(0, 160) || '未知错误') };
+}
+
     // GET /api/ai/config — 查询配置状态（不回传密钥）
     if (pn === '/api/ai/config' && req.method === 'GET') {
       const cfg = readConfig();
       const hasKey = !!readSecret();
       sendJSON(res, { configured: hasKey, baseUrl: cfg.baseUrl, model: cfg.model });
+      return;
+    }
+
+    // POST /api/ai/test — 连接测试：只用**已保存**的配置发一次最小请求，不接受前端传地址
+    // （前端传 baseUrl 等于把「带密钥向任意地址发请求」的口子重新打开，SSRF 白名单就白做了）
+    if (pn === '/api/ai/test' && req.method === 'POST') {
+      const apiKey = readSecret();
+      if (!apiKey) { sendJSON(res, { ok: false, code: 'NO_KEY', message: '还没有保存 API Key' }); return; }
+      const cfg = readConfig();
+      if (!cfg.model) { sendJSON(res, { ok: false, code: 'NO_MODEL', message: '还没有填写模型 ID' }); return; }
+      const startedAt = Date.now();
+      try {
+        const content = await callLLM(cfg.baseUrl, apiKey, cfg.model, '你是连通性测试助手。', '只回一个字：OK', { maxTokens: 8, timeoutMs: 10000 });
+        sendJSON(res, {
+          ok: true,
+          model: cfg.model,
+          latencyMs: Date.now() - startedAt,
+          reply: String(content || '').slice(0, 40),
+        });
+      } catch (e) {
+        sendJSON(res, { ok: false, ...describeAiTestError(e) });
+      }
       return;
     }
 
@@ -390,6 +472,44 @@ module.exports = function register(ctx) {
         sendJSON(res, { ok: true, configured: !!readSecret() });
       } catch (e) {
         sendJSON(res, { error: e.message }, 500);
+      }
+      return;
+    }
+
+    // POST /api/ai/listen-summary — 月度听歌总结（只吃聚合统计，不碰原始记录）
+    if (pn === '/api/ai/listen-summary' && req.method === 'POST') {
+      const apiKey = readSecret();
+      if (!apiKey) { sendJSON(res, { ok: false, code: 'NO_KEY', message: '还没有保存 API Key，去「设置 → AI」填一个' }); return; }
+      const cfg = readConfig();
+      if (!cfg.model) { sendJSON(res, { ok: false, code: 'NO_MODEL', message: '还没有填写模型 ID' }); return; }
+
+      let body = {};
+      try { body = (await readRequestBody(req)) || {}; } catch (_) { body = {}; }
+      const stats = (body && typeof body.stats === 'object' && body.stats) || {};
+      /* 摘要来自前端，给个上限免得被塞进大段文本挤爆 token */
+      if (JSON.stringify(stats).length > 8000) {
+        sendJSON(res, { ok: false, code: 'TOO_LARGE', message: '统计数据过大' }, 413);
+        return;
+      }
+      try {
+        const { systemMsg, userMsg } = buildListenSummaryPrompt(body.range, stats);
+        /* 偶发空返回（实测 1/3 概率），重试一次再判失败 —— 比直接弹错给用户好 */
+        let summary = '';
+        let lastErr = null;
+        for (let attempt = 0; attempt < 2 && !summary; attempt++) {
+          try {
+            const content = await callLLM(cfg.baseUrl, apiKey, cfg.model, systemMsg, userMsg,
+              { timeoutMs: 75000, maxTokens: 1400, temperature: 0.7 });
+            summary = String(content || '').trim();
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (!summary) throw new Error(lastErr ? lastErr.message : '模型返回为空');
+        sendJSON(res, { ok: true, summary: summary.slice(0, 4000), model: cfg.model });
+      } catch (e) {
+        console.warn('[AI ListenSummary] failed:', e && e.message);
+        sendJSON(res, { ok: false, code: 'LLM_FAILED', message: String((e && e.message) || '生成失败') }, 502);
       }
       return;
     }

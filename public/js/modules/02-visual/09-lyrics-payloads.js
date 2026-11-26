@@ -1,6 +1,3 @@
-function normalizeStageLyricText(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim();
-}
 function normalizeStageLyricEntry(entry, fallbackRole) {
   if (typeof entry === 'string') entry = { text: entry };
   entry = entry || {};

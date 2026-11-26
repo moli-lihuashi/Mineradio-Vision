@@ -83,15 +83,23 @@ test('D2 关闭按钮 IPC 直接走 forceExitApp，不再只 win.close()', () =>
     '关闭按钮不得再依赖 win.close() 后等 window-all-closed');
 });
 
-test('D3 主窗口不再注册 close 拦截、不再 hide() 驻留', () => {
-  assert.ok(!/mainWindow\.on\(['"]close['"]/.test(MAIN),
-    'close 事件的 preventDefault + hide 是残留进程的头号成因');
-  assert.ok(!/mainWindow\.hide\(\)/.test(MAIN),
-    '主窗口 hide() 会让窗口消失但进程全留着');
-  /* 只针对「托盘驻留」这个组合，不做全文件 preventDefault 禁令：
-     窗口拖拽 / webContents 导航等合法场景也会用 preventDefault。 */
-  assert.ok(!/event\.preventDefault\(\)[\s\S]{0,400}?mainWindow\.hide\(\)/.test(MAIN),
-    'preventDefault + mainWindow.hide() 的托盘驻留组合必须彻底移除');
+test('D3 close 拦截只为「关闭到托盘」服务，且强制退出必须能穿透', () => {
+  /* 2026-11-25 起「关闭按钮」可由用户选：完全退出（默认）/ 隐藏到托盘。
+   * 旧版本之所以要彻底禁掉 close 拦截，是因为当时 hide() 之前**不建托盘**，
+   * 窗口和任务栏都没了、进程却全留着，用户没有任何找回的办法。
+   * 现在这条守卫守的是新契约，而不是「不许拦」：
+   *   ① 只有 closeAction === 'tray' 才拦；
+   *   ② 拦的时候必须先 createOrUpdateTray()，再 hide（顺序不能反）；
+   *   ③ forceQuitting 期间必须直接放行，否则托盘「退出」/ 关闭选「完全退出」都会被顶回去。 */
+  const closeHandler = sliceBlock(MAIN, "mainWindow.on('close'");
+  assert.ok(closeHandler, '必须存在 close 拦截（关闭到托盘依赖它）');
+  assert.match(closeHandler, /if \(forceQuitting\) return;/, '强制退出期间不能被拦');
+  assert.match(closeHandler, /closeAction !== 'tray'\) return;/, '只有选了托盘才拦');
+  const trayPos = closeHandler.indexOf('createOrUpdateTray()');
+  const hidePos = closeHandler.indexOf('mainWindow.hide()');
+  assert.ok(trayPos > 0, '隐藏前必须建托盘，否则用户找不回窗口');
+  assert.ok(hidePos > 0 && trayPos < hidePos, '顺序必须是先建托盘再隐藏');
+  assert.match(closeHandler, /event\.preventDefault\(\)/);
 });
 
 test('D4 forceExitApp 显式销毁所有 BrowserWindow', () => {
@@ -136,9 +144,24 @@ test('D9 「后台托盘」语义搬到最小化按钮，关闭按钮不再读 b
   assert.match(SHELL, /api\.close\(\)/);
 });
 
-test('D10 设置面板文案改成「最小化」，并明确关闭按钮始终完全退出', () => {
-  assert.match(RAW_INDEX, /<div class="fx-section-label">最小化窗口<\/div>/);
-  assert.match(RAW_INDEX, /关闭按钮始终完全退出播放器/);
+test('D10 最小化与关闭按钮的行为都可配置，关闭默认仍是完全退出', () => {
+  // 设置页：两个分段各有两项，关闭按钮默认选中 exit
+  assert.match(RAW_INDEX, /<div class="fx-section-label">最小化按钮<\/div>/);
+  assert.match(RAW_INDEX, /id="close-behavior-seg"/);
   assert.match(RAW_INDEX, /最小化到任务栏/);
+  assert.match(RAW_INDEX, /id="close-action-seg"/);
+  assert.match(RAW_INDEX, /<button data-close-action="exit" class="active"/);
+  assert.match(RAW_INDEX, /<button data-close-action="tray"/);
   assert.match(RAW_SETTINGS, /最小化行为/);
+  assert.match(RAW_SETTINGS, /关闭按钮: 隐藏到托盘/);
+  // 主进程：默认 exit；tray 时隐藏 + 建托盘，只有 exit 才走 forceExitApp
+  assert.match(MAIN, /let closeAction = 'exit'/);
+  assert.match(CLOSE_IPC, /if \(closeAction === 'tray'[\s\S]{0,220}?win\.hide\(\)/,
+    'tray 分支必须隐藏窗口而不是退出');
+  assert.match(CLOSE_IPC, /forceExitApp\('window-close-button'\)/, 'exit 分支保留强制退出兜底');
+  assert.match(MAIN, /mainWindow\.on\('close',[\s\S]{0,260}?event\.preventDefault\(\)/,
+    'Alt+F4 走 close 事件，tray 模式必须在那里拦下来');
+  // 偏好必须落盘，否则重启回到默认值
+  assert.match(RAW_SETTINGS, /mineradio:close-action:v1/);
+  assert.match(RAW_SETTINGS, /setCloseAction/);
 });

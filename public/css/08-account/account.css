@@ -720,3 +720,68 @@ html body #login-modal .folio-login .login-platform-list button .login-provider-
   #login-modal .folio-spotify-hero{flex-direction:column;align-items:flex-start}
 }
 
+
+/* =============================================================================
+ * 登录页：z-index 与浅色主题（2026-11-26）
+ *
+ * 1) 层级：改了也没用 —— #login-modal 在 .desktop-window-shell 里，那个壳有 transform，
+ *    自成层叠上下文，shell 内部再高的 z-index 都提不到 body 级（实测 690 仍被档案 680 盖住）。
+ *    真正的处理放在 showLoginModal 里：打开登录页先收档案。
+ * 2) 配色：account.css 通篇按「深色底 + 白字」写死，而 .dual-login-modal 自己的背景是
+ *    rgba(6,7,10,.34) + backdrop-blur；浅色主题下背后是浅色，白字直接消失。
+ *    这里只补浅色所需的那几处，深色不动。
+ * ========================================================================== */
+html[data-theme="light"] #login-modal .dual-login-modal{
+  /* 必须给实底：留透明就还是透出背后的浅色，白字问题照旧。
+     用 !important 是因为另有一条规则把它的背景设成了 transparent（实测 computed 为 rgba(0,0,0,0)）。 */
+  background-color:#f8f8fb!important;
+  background-image:radial-gradient(circle at 18% 10%,rgba(255,255,255,.96),transparent 42%),
+                   radial-gradient(circle at 78% 62%,rgba(120,90,208,.06),transparent 46%)!important;
+  border-color:rgba(22,22,26,.10);
+  box-shadow:0 26px 84px rgba(20,20,24,.20),inset 0 1px 0 rgba(255,255,255,.9)}
+html[data-theme="light"] #login-modal .login-platform-list,
+html[data-theme="light"] #login-modal .login-method-menu{
+  background:rgba(22,22,26,.04)!important;
+  border-color:rgba(22,22,26,.08)!important}
+html[data-theme="light"] #login-modal .login-intro{
+  border-color:rgba(22,22,26,.09);
+  background:linear-gradient(135deg,rgba(255,83,103,.06),rgba(244,210,138,.05),rgba(255,255,255,.55))}
+html[data-theme="light"] #login-modal .login-intro-title{color:rgba(22,22,26,.94)}
+html[data-theme="light"] #login-modal .login-intro-body{color:rgba(22,22,26,.62)}
+html[data-theme="light"] #login-modal .login-panel-head-status{color:rgba(22,22,26,.55)}
+html[data-theme="light"] #login-modal .login-panel-close{color:rgba(22,22,26,.55);border-color:rgba(22,22,26,.12);background:rgba(22,22,26,.04)}
+html[data-theme="light"] #login-modal .login-panel-close:hover{color:rgba(22,22,26,.92);background:rgba(22,22,26,.08)}
+
+html[data-theme="light"] #login-modal .login-platform-tabs{
+  border-color:rgba(22,22,26,.08);
+  background:rgba(22,22,26,.035)}
+html[data-theme="light"] #login-modal .login-platform-tabs button{color:rgba(22,22,26,.52)}
+html[data-theme="light"] #login-modal .login-platform-tabs button:hover{color:rgba(22,22,26,.82)}
+html[data-theme="light"] #login-modal .login-platform-list button b,
+html[data-theme="light"] #login-modal .login-platform-list.prism-lens-host button.active b{color:rgba(22,22,26,.92)!important}
+/* 状态小字的配色在 #login-modal .folio-login .login-platform-list button .login-provider-state
+ * 里（特异性 1,3,1，白 38%），只写 #login-modal .login-provider-state 压不住 —— 必须同链路同权重。 */
+html[data-theme="light"] #login-modal .folio-login .login-platform-list button .login-provider-state{
+  color:rgba(22,22,26,.55)}
+html[data-theme="light"] #login-modal .folio-login .login-platform-list button .login-provider-state.on{
+  color:#2b7a56}
+html[data-theme="light"] #login-modal .login-mode-node{color:rgba(22,22,26,.55)}
+html[data-theme="light"] #login-modal .login-mode-node.active{color:rgba(22,22,26,.94)}
+html[data-theme="light"] #login-modal .login-auth-copy h2,
+html[data-theme="light"] #login-modal #login-modal-title{color:rgba(22,22,26,.94)}
+html[data-theme="light"] #login-modal .desc{color:rgba(22,22,26,.60)}
+html[data-theme="light"] #login-modal #qr-status{color:rgba(22,22,26,.64)}
+
+html[data-theme="light"] #login-modal .qq-cookie-panel{
+  border-color:rgba(22,22,26,.10);background:rgba(22,22,26,.03)}
+html[data-theme="light"] #login-modal .qq-cookie-input{
+  border-color:rgba(22,22,26,.14);background:#fff;color:rgba(22,22,26,.86)}
+html[data-theme="light"] #login-modal .qq-cookie-note{color:rgba(22,22,26,.50)}
+html[data-theme="light"] #login-modal .login-account-card{
+  border-color:rgba(22,22,26,.10);background:#fff}
+html[data-theme="light"] #login-modal .login-account-name{color:rgba(22,22,26,.92)}
+html[data-theme="light"] #login-modal .login-account-meta{color:rgba(22,22,26,.55)}
+html[data-theme="light"] #login-modal .qr-shell.web-login-preview{
+  background:radial-gradient(circle at 50% 42%,rgba(191,214,107,.18),transparent 46%),rgba(22,22,26,.03);
+  border-color:rgba(22,22,26,.12);
+  box-shadow:0 16px 42px rgba(20,20,24,.12),inset 0 1px 0 rgba(255,255,255,.8)}

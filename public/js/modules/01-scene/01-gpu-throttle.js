@@ -14,12 +14,6 @@ var gpuThrottleState = {
   lastEvalAt: 0
 };
 
-function normalizeGpuThrottleMode(value) {
-  var mode = String(value || '').trim().toLowerCase();
-  if (mode === 'on' || mode === 'off' || mode === 'auto') return mode;
-  return (fxDefaults && fxDefaults.gpuThrottleMode) || 'auto';
-}
-
 function detectLowGpuRendererHint() {
   try {
     if (!renderer || !renderer.getContext) return false;

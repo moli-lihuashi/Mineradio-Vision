@@ -173,6 +173,7 @@ var classicPlayer = {
 };
 // 经典播放器歌词 DOM 缓存：避免每帧 querySelectorAll('.cp-lyric-line') 与 getElementById
 var _cpLyricsContainer = null;
+var _cpLyricsWrap = null;
 var _cpLyricLineEls = null;
 var _cpPlayerEl = null;
 // 歌词结束余韵状态：每首歌只触发一次，切歌时复位
@@ -305,6 +306,7 @@ function splitClassicLyricChars(lineEl, line) {
   if (!text || !line.words || !line.words.length || !line.charCount) {
     // 无逐字时间戳，不拆分，保持纯文本
     lineEl._cpSplit = false;
+    lineEl._cpChars = null;
     return;
   }
   lineEl.textContent = '';
@@ -317,6 +319,11 @@ function splitClassicLyricChars(lineEl, line) {
   }
   lineEl.appendChild(frag);
   lineEl._cpSplit = true;
+  // 缓存字符节点与高亮状态：updateClassicKaraokeProgress 每帧调用，
+  // 不能再对整行 querySelectorAll（会每次新建 NodeList）。
+  lineEl._cpChars = lineEl.querySelectorAll('.cp-char');
+  lineEl._cpSunEnd = 0;
+  lineEl._cpSingIdx = -1;
 }
 
 // 还原 active 行为纯文本（切歌时清理）
@@ -326,43 +333,66 @@ function unsplitClassicLyricChars(lineEl) {
   var line = (lyricsLines && idx >= 0 && idx < lyricsLines.length) ? lyricsLines[idx] : null;
   lineEl.textContent = (line && line.text) || '';
   lineEl._cpSplit = false;
+  lineEl._cpChars = null;
+  lineEl._cpSunEnd = 0;
+  lineEl._cpSingIdx = -1;
+}
+
+// 只写状态变化的字符：seek 后退会回退已唱区间，前进只补新增段。
+// 语义与原实现一致（唱完的加 cp-sung、正在唱的加 cp-singing 且不带 cp-sung）。
+function applyClassicKaraokeState(lineEl, chars, sungCount, singIdx) {
+  var len = chars.length;
+  if (sungCount > len) sungCount = len;
+  if (sungCount < 0) sungCount = 0;
+  if (singIdx >= len) singIdx = -1;
+  var prevSun = Number(lineEl._cpSunEnd) || 0;
+  if (prevSun > len) prevSun = len;
+  var prevSing = typeof lineEl._cpSingIdx === 'number' ? lineEl._cpSingIdx : -1;
+  if (prevSing !== singIdx) {
+    if (prevSing >= 0 && prevSing < len) chars[prevSing].classList.remove('cp-singing');
+    if (singIdx >= 0) chars[singIdx].classList.add('cp-singing');
+  }
+  if (sungCount > prevSun) {
+    for (var i = prevSun; i < sungCount; i++) {
+      if (i !== singIdx) chars[i].classList.add('cp-sung');
+    }
+  } else if (sungCount < prevSun) {
+    for (var j = sungCount; j < prevSun; j++) {
+      chars[j].classList.remove('cp-sung');
+    }
+  }
+  lineEl._cpSunEnd = sungCount;
+  lineEl._cpSingIdx = singIdx;
 }
 
 // 更新 active 行的逐字高亮进度
 function updateClassicKaraokeProgress(lineEl, line, nextLine, now) {
   if (!lineEl || !lineEl._cpSplit) return;
-  var chars = lineEl.querySelectorAll('.cp-char');
+  var chars = lineEl._cpChars || (lineEl._cpChars = lineEl.querySelectorAll('.cp-char'));
   if (!chars.length) return;
   if (line.words && line.words.length && line.charCount > 0) {
+    var len = chars.length;
     var charIdx = 0;
+    var singIdx = -1;
     for (var i = 0; i < line.words.length; i++) {
       var w = line.words[i];
       var ws = w.t;
       var we = w.t + Math.max(0.08, w.d || 0.24);
       var sungEnd = (now >= we) ? w.c1 : (now >= ws ? Math.floor(w.c0 + (w.c1 - w.c0) * ((now - ws) / Math.max(0.08, we - ws))) : w.c0);
-      for (; charIdx < sungEnd && charIdx < chars.length; charIdx++) {
-        chars[charIdx].classList.add('cp-sung');
-        chars[charIdx].classList.remove('cp-singing');
-      }
-      if (now >= ws && now < we) {
-        if (charIdx < chars.length) {
-          chars[charIdx].classList.add('cp-singing');
-          charIdx++;
-        }
-      }
+      if (sungEnd > charIdx) charIdx = Math.min(sungEnd, len);
+      if (now >= ws && now < we && charIdx < len) singIdx = charIdx;
     }
-    for (; charIdx < chars.length; charIdx++) {
-      chars[charIdx].classList.remove('cp-sung', 'cp-singing');
-    }
+    applyClassicKaraokeState(lineEl, chars, charIdx, singIdx);
   }
 }
 function updateClassicPlayerLyrics() {
   if (!classicPlayer.active) return;
   updateClassicPlayerVinylState();
-  // 缓存容器元素，避免每帧 getElementById
-  if (!_cpLyricsContainer) _cpLyricsContainer = document.getElementById('cp-lyrics');
+  // 缓存容器元素，避免每帧 getElementById（节点被重建时用 isConnected 兜底）
+  if (!_cpLyricsContainer || !_cpLyricsContainer.isConnected) _cpLyricsContainer = document.getElementById('cp-lyrics');
   var container = _cpLyricsContainer;
-  var wrap = document.getElementById('cp-lyrics-wrap');
+  if (!_cpLyricsWrap || !_cpLyricsWrap.isConnected) _cpLyricsWrap = document.getElementById('cp-lyrics-wrap');
+  var wrap = _cpLyricsWrap;
   if (!container || !wrap || !lyricsLines || !lyricsLines.length) return;
   var songKey = currentIdx + '_' + (playQueue[currentIdx] ? (playQueue[currentIdx].name || '') : '');
   if (songKey !== classicPlayer.lastSongKey) {

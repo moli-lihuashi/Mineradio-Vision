@@ -224,13 +224,13 @@ body.idle-guide-dragging #canvas-container{cursor:grabbing}
 
 /* ---------- 启动页（树枝生长 + 音符飘散） ---------- */
 @font-face{font-family:'Caveat';src:url('../vendor/fonts/Caveat-Variable.ttf') format('truetype');font-weight:400 700;font-display:block}
-#splash{position:fixed;inset:0;z-index:300;background:#eef4fc;display:flex;align-items:center;justify-content:center;pointer-events:auto;opacity:1;overflow:hidden;transition:opacity 500ms cubic-bezier(.16,1,.3,1),transform 1180ms cubic-bezier(.16,1,.3,1)}
+#splash{position:fixed;inset:0;z-index:300;background:#eef4fc;display:flex;align-items:center;justify-content:center;pointer-events:auto;opacity:1;overflow:hidden;transition:opacity 460ms cubic-bezier(.16,1,.3,1),transform 700ms cubic-bezier(.16,1,.3,1)}
 #splash::before{content:'';position:absolute;inset:0;z-index:0;background:transparent;pointer-events:none}
 #splash::after{content:'';position:absolute;inset:0;z-index:2;background:transparent;pointer-events:none}
 #splash.hide{pointer-events:none}
 #splash.ready{cursor:pointer}
 #splash.exiting{pointer-events:none;opacity:0;transform:scale(1.018)}
-#splash-gl{position:absolute;inset:0;z-index:1;width:100%;height:100%;opacity:1;background:#eef4fc;transition:opacity 1100ms cubic-bezier(.22,1,.36,1),transform 1100ms cubic-bezier(.22,1,.36,1)}
+#splash-gl{position:absolute;inset:0;z-index:1;width:100%;height:100%;opacity:1;background:#eef4fc;transition:opacity 640ms cubic-bezier(.22,1,.36,1),transform 700ms cubic-bezier(.22,1,.36,1)}
 #splash.exiting #splash-gl{opacity:.30;transform:scale(1.012)}
 .splash-content{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:16px;pointer-events:none;transform:translateY(4px);transition:opacity 680ms cubic-bezier(.22,1,.36,1),transform 860ms cubic-bezier(.22,1,.36,1)}
 .splash-wordmark{position:relative;display:flex;align-items:center;justify-content:center;height:clamp(110px,16vw,180px);min-width:min(74vw,760px);color:#ffffff;isolation:isolate}
@@ -401,4 +401,17 @@ body.idle-guide-dragging #canvas-container{cursor:grabbing}
 ::-webkit-scrollbar-corner { background: transparent }
 @supports not selector(::-webkit-scrollbar) {
   * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.14) transparent }
+}
+
+/* 手动「减少动效」（设置 → 性能 → 动效）。
+ * 系统级偏好由各文件原有的 @media (prefers-reduced-motion) 块负责，这里只处理
+ * 用户手动开启的情况：<html class="reduce-motion"> 由 00-state/14-motion-system.js 挂。
+ * 用一条全局收紧规则，而不是把 5 段 @media 规则复制一遍 —— 两份规则必然漂。 */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after{
+  animation-duration:.01ms!important;
+  animation-iteration-count:1!important;
+  transition-duration:.01ms!important;
+  scroll-behavior:auto!important;
 }

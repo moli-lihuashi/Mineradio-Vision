@@ -1119,7 +1119,7 @@ function playlistTrailStart(mark) {
   var kind = mark && mark.className && /is-(liked|collected)/.exec(mark.className);
   if (!kind || playlistTrailState && playlistTrailState.mark === mark) return;
   playlistTrailStop();
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (prefersReducedMotionNow()) return;
   try {
     var rect = mark.getBoundingClientRect();
     if (rect.width < 4) return;

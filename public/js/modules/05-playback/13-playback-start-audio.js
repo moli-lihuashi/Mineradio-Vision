@@ -434,6 +434,7 @@ async function playQueueAt(idx, opts) {
   safePlaybackStep('session-finalize', function(){ finalizeListenSession(false); });
   prepareLeaveHomeForPlayback({ unsuppress: !opts.preserveHomeState });
   currentIdx = idx;
+  noteShufflePlayedIndex(idx);
   safePlaybackStep('shelf-current-sync', function(){
     if (shelfManager && shelfManager.syncOpenContentToCurrent) shelfManager.syncOpenContentToCurrent(false);
   });
@@ -1269,6 +1270,80 @@ function drainTrackSwitches() {
   })();
   return trackSwitchDrain;
 }
+/* ===== 随机播放不重复（按轮次）=====
+ * 原行为：每次从「除当前曲外的全集」里随机抽一首，同一首很快会重复出现。
+ * 打开这个开关后改成按轮次抽：本轮已经播过的曲目不再入池，池子空了才开新一轮。
+ * 记录用「队列键」而不是索引 —— 队列插入/删除/重排时索引会漂，键不会。
+ * 同一首歌在同一队列里重复出现（少见）会被当成同一首，这是可接受的取舍。 */
+var SHUFFLE_NO_REPEAT_STORE_KEY = 'mineradio:shuffle-no-repeat:v1';
+var shuffleNoRepeatPreference = (function () {
+  try { return localStorage.getItem(SHUFFLE_NO_REPEAT_STORE_KEY) === 'true'; } catch (_) { return false; }
+})();
+/* 本轮已经播过的曲目键集合 */
+var shuffleRoundPlayedKeys = {};
+
+function shuffleRoundKeyForIndex(index) {
+  if (!playQueue || index < 0 || index >= playQueue.length) return '';
+  var song = playQueue[index];
+  if (!song) return '';
+  try {
+    if (typeof queueItemKey === 'function') {
+      var key = queueItemKey(song);
+      if (key) return String(key);
+    }
+  } catch (_) { }
+  return String(song.name || '') + '|' + String(song.artist || '');
+}
+function resetShuffleRound() {
+  shuffleRoundPlayedKeys = {};
+}
+function isShuffleNoRepeatEnabled() {
+  return !!shuffleNoRepeatPreference;
+}
+/* 一首歌真正开始播放时登记：手动点选、自动下一首、换源重试都会走到 playQueueAt */
+function noteShufflePlayedIndex(index) {
+  if (!shuffleNoRepeatPreference) return;
+  var key = shuffleRoundKeyForIndex(index);
+  if (key) shuffleRoundPlayedKeys[key] = true;
+}
+function shuffleRoundNextIndex() {
+  var i;
+  var pool = [];
+  for (i = 0; i < playQueue.length; i++) {
+    if (i === currentIdx) continue;
+    var key = shuffleRoundKeyForIndex(i);
+    if (key && shuffleRoundPlayedKeys[key]) continue;
+    pool.push(i);
+  }
+  if (!pool.length) {
+    /* 一轮播完了：清空记录，除当前曲外全部回到池子。
+     * 当前曲不再入池，避免「新一轮第一首又是刚播完的那首」。 */
+    shuffleRoundPlayedKeys = {};
+    for (i = 0; i < playQueue.length; i++) {
+      if (i !== currentIdx) pool.push(i);
+    }
+  }
+  if (!pool.length) return -1;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function applyShuffleNoRepeatUi() {
+  var node = document.getElementById('t-shuffleNoRepeat');
+  if (!node) return;
+  node.classList.toggle('on', !!shuffleNoRepeatPreference);
+  var dot = node.querySelector('.dot');
+  if (dot) dot.classList.toggle('on', !!shuffleNoRepeatPreference);
+}
+function toggleShuffleNoRepeat() {
+  shuffleNoRepeatPreference = !shuffleNoRepeatPreference;
+  try { localStorage.setItem(SHUFFLE_NO_REPEAT_STORE_KEY, String(shuffleNoRepeatPreference)); } catch (_) { }
+  resetShuffleRound();
+  applyShuffleNoRepeatUi();
+  if (typeof showToast === 'function') {
+    showToast(shuffleNoRepeatPreference
+      ? '随机播放不重复：一轮内每首只播一次'
+      : '随机播放不重复：已关闭（可能重复抽到同一首）');
+  }
+}
 /* 随机播放的「下一首」必须是另一首。
  * 旧实现直接在整条队列长度上取随机整数，有 1/length 概率抽中当前曲目本身：
  * 曲末 onended 触发后 playQueueAt(currentIdx) 把刚播完的这首从头
@@ -1277,6 +1352,8 @@ function drainTrackSwitches() {
  * 返回 -1 表示「没有别的曲目可去」（队列 <=1），由调用方绕回当前曲目。 */
 function shuffleNextTrackIndex() {
   if (playMode !== 'shuffle' || !playQueue || playQueue.length <= 1) return -1;
+  // 按轮次不重复：从本轮未播过的曲目里抽
+  if (shuffleNoRepeatPreference) return shuffleRoundNextIndex();
   var pool = [];
   for (var i = 0; i < playQueue.length; i++) {
     if (i !== currentIdx) pool.push(i);
@@ -1366,6 +1443,8 @@ function shuffleQueue() {
   // 重排只换顺序，正在播放的曲目必须原地保持身份：先记住它，重排后再按新位置回填索引。
   // 旧实现直接 currentIdx = 0，只要当前曲目不在首位，索引就和实际音频错位。
   var currentSong = currentIdx >= 0 && currentIdx < playQueue.length ? playQueue[currentIdx] : null;
+  // 手动洗牌 = 开新一轮：否则刚洗过的队列会沿用上一轮的已播记录，一半的歌被跳过
+  resetShuffleRound();
   for (var i = playQueue.length - 1; i > 0; i--) {
     var j = Math.floor(Math.random() * (i + 1));
     var tmp = playQueue[i]; playQueue[i] = playQueue[j]; playQueue[j] = tmp;
@@ -1507,6 +1586,8 @@ function cyclePlayMode() {
   var modes = ['loop', 'shuffle', 'single'];
   var idx = modes.indexOf(playMode);
   playMode = modes[(idx + 1) % modes.length];
+  // 进出随机模式都开新轮：从顺序播过来的那一轮记录没有意义
+  resetShuffleRound();
   updatePlayModeButton(true);
   showToast('播放模式: ' + playModeLabel(playMode));
 }
