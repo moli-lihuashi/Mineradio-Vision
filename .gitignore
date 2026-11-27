@@ -66,6 +66,11 @@ tmp/
 verification/
 screenshots/
 
+# 本地版式对照页（public/_*.html）：改设置页 / 面板 CSS 时临时渲染出来比对用的，
+# 不被任何代码引用，但因为在 public/ 下会被打进 asar（9 个约 570KB）。
+# 已入库的两个历史文件不受影响（gitignore 对已跟踪文件无效）。
+public/_*.html
+
 # Local agent workspace (CDP probes / session memory / test userdata) — 不随仓库发布
 .workbuddy/
 .smoke-appdata/

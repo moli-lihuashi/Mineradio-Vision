@@ -376,6 +376,19 @@ html[data-theme="light"] #search-results .search-load-more{
 }
 html[data-theme="light"] #search-results .search-load-more:hover{background:var(--st-fill2);border-color:var(--st-line2)}
 
+/* ---------- 十段 EQ / 空间推子的标签在浅色主题下的颜色 ----------
+ * 这些标签原本写死成 rgba(255,255,255,.56) / .42（深色面板用的），
+ * 换到浅色页面上等于白字白底 —— 频段名完全看不见，数值也要贴着看。 */
+html[data-theme="light"] .at-eq-freq { color: rgba(22,22,26,.62); }
+html[data-theme="light"] .at-eq-val { color: rgba(22,22,26,.50); }
+html[data-theme="light"] .at-eq-band.is-boost .at-eq-val { color: #1b6fd0; }
+html[data-theme="light"] .at-eq-band.is-cut .at-eq-val { color: rgba(22,22,26,.40); }
+html[data-theme="light"] .at-eq-rack {
+  border-color: rgba(22,22,26,.08);
+  background: rgba(22,22,26,.02);
+}
+html[data-theme="light"] .at-eq-slot::after { background: rgba(22,22,26,.12); }
+
 /* 提示条（#toast）是全局浮层，不在这两个面板里，但既然是「跟着主题走」就要一起换：
  * 深色下是深底白字，浅色下改成浅底深字。
  * 这里必须带 !important：glass.css 与 playlist.css 对 #toast 的 background /
@@ -936,3 +949,32 @@ body.settings-page-open .settings-shell{transform:none}
 #settings-modal .fx-hint-note{position:relative;padding:2px 16px 10px;margin-top:-2px;
   font-size:11px;line-height:1.65;color:var(--st-t3)}
 #settings-modal .fx-hint-note::before{content:none!important}
+
+/* ---------- 浅色：下拉框的选项列表（2026-11-26 用户报"播放设备浅字"） ----------
+ * #playback-output-device 是普通 <select>（没有 .fx-select 类），
+ * 而 option 的配色只有「#settings-modal .fx-select option{background:#1d1d20;color:#fff}」
+ * 那条硬编码深色 —— 它管不到这个 select。展开下拉时选项走 UA 默认，浅色下容易出白字。
+ * 这里统一给浅色下的 select/option 一个明确的浅底深字，并声明 color-scheme。 */
+html[data-theme="light"] #settings-modal select,
+html[data-theme="light"] #settings-modal .fx-select{
+  color-scheme:light;
+  color:var(--st-t1);
+  background:#fff;
+  border-color:var(--st-line)}
+html[data-theme="light"] #settings-modal select option,
+html[data-theme="light"] #settings-modal .fx-select option{
+  background:#fff;
+  color:rgba(22,22,26,.90)}
+
+/* ---------- 浅色：输出设备列表（2026-11-26 用户报"已连接看得见、设备名看不见"） ----------
+ * fx-panel.css:263 的 .audio-output-item{color:rgba(255,255,255,.64)} **没有 #fx-panel 前缀**，
+ * 所以在设置页里同样生效：浅底上设备名整行不可见，只剩 small 的淡青「已连接」。
+ * 同一文件里 .quality-output-head 也是白字，一并处理。 */
+html[data-theme="light"] #settings-modal .audio-output-section .quality-output-head{
+  color:var(--st-t3)}
+html[data-theme="light"] #settings-modal .audio-output-item{
+  border-color:var(--st-line);
+  background:var(--st-card);
+  color:var(--st-t1)}
+html[data-theme="light"] #settings-modal .audio-output-item.muted{color:var(--st-t3)}
+html[data-theme="light"] #settings-modal .audio-output-item small{color:#2b7a56}

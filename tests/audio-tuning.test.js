@@ -98,7 +98,7 @@ function createSandbox(overrides) {
   }
 
   // ---- AudioContext 桩 ----
-  const created = { biquad: [], gain: [], panner: [], compressor: [], analyser: [] };
+  const created = { biquad: [], gain: [], panner: [], compressor: [], analyser: [], splitter: [], merger: [], delay: [] };
   const meter = {
     kind: 'analyser',
     fftSize: 2048,
@@ -138,6 +138,23 @@ function createSandbox(overrides) {
       return n;
     },
     createAnalyser() { created.analyser.push(meter); return meter; },
+    /* 立体环绕级用到这三个：桩要跟真 Web Audio 一样能建出来，
+       否则整条链的既有断言会因为「ctx 缺方法」而不是「实现错了」失败。 */
+    createChannelSplitter() {
+      const n = makeNode('splitter', {});
+      created.splitter.push(n);
+      return n;
+    },
+    createChannelMerger() {
+      const n = makeNode('merger', {});
+      created.merger.push(n);
+      return n;
+    },
+    createDelay() {
+      const n = makeNode('delay', { delayTime: makeParam(0) });
+      created.delay.push(n);
+      return n;
+    },
   };
   const input = makeNode('input');
 
@@ -218,7 +235,7 @@ test('A1 install 建出 10 段 EQ，频点与酷狗 EQGain0..9 对齐，含 Nyqu
   assert.ok(c.eq.every((f) => f.Q.value === 1));
 });
 
-test('A2 链路顺序 input→EQ→preamp→loudness→limiter→antiClick→panner→exit', () => {
+test('A2 链路顺序 input→EQ→preamp→loudness→环绕→limiter→antiClick→panner→exit', () => {
   const s = createSandbox();
   const exit = s.install();
   const c = chainOf(s);
@@ -226,7 +243,15 @@ test('A2 链路顺序 input→EQ→preamp→loudness→limiter→antiClick→pan
   for (let i = 0; i < 9; i++) assert.ok(c.eq[i].outs.includes(c.eq[i + 1]));
   assert.ok(c.eq[9].outs.includes(c.preamp));
   assert.ok(c.preamp.outs.includes(c.loudness));
-  assert.ok(c.loudness.outs.includes(c.safetyLimiter));
+  /* 2026-11-26 起 loudness 与 limiter 之间多了立体环绕级（M/S + 侧声道反射）：
+     宽度拉满多出来的峰值必须先过限幅器，所以环绕在 limiter 之前。 */
+  const surroundSplitter = c.loudness.outs.find((n) => n && n.kind === 'splitter');
+  assert.ok(surroundSplitter, '响度之后应先进入环绕级的声道拆分');
+  const surroundMerger = c.surround.nodes.find((n) => n.kind === 'merger');
+  assert.ok(surroundMerger, '环绕级必须有声道合并');
+  /* 2026-11-26：合并之后还多了一级低音补偿（lowshelf），再进限幅器 */
+  assert.ok(surroundMerger.outs.includes(c.surround.bassComp), '合流后接低音补偿');
+  assert.ok(c.surround.bassComp.outs.includes(c.safetyLimiter), '补偿后进限幅器');
   assert.ok(c.safetyLimiter.outs.includes(c.antiClick), '防爆音必须在 limiter 之后');
   assert.ok(c.antiClick.outs.includes(c.panner));
   assert.equal(exit, c.panner);
@@ -256,10 +281,11 @@ test('A5 install 幂等：同 ctx/input 二次调用不重建任何节点', () =
   const s = createSandbox();
   const first = s.install();
   const before = s.created.biquad.length;
+  const beforeGain = s.created.gain.length;
   const second = s.install();
   assert.equal(second, first);
   assert.equal(s.created.biquad.length, before);
-  assert.equal(s.created.gain.length, 3); // preamp / loudness / antiClick
+  assert.equal(s.created.gain.length, beforeGain); // 二次调用不能再建 gain（环绕级也含 gain）
 });
 
 test('A6 换源重建音频图时只重接首段，不重建整链', () => {
@@ -270,7 +296,7 @@ test('A6 换源重建音频图时只重接首段，不重建整链', () => {
   const again = s.api.install(s.ctx, newInput);
   assert.equal(again, exit);
   assert.equal(chainOf(s), c);
-  assert.equal(s.created.biquad.length, 10);
+  assert.equal(s.created.biquad.length, 12); // 10 段 EQ + 环绕反射 highpass + 低音补偿 lowshelf
   assert.ok(!s.input.outs.includes(c.eq[0]), '旧 input 到首段的连边要断掉');
   assert.ok(!s.input.outs.includes(c.meter), '旧 input 到 meter 的连边要断掉');
   assert.ok(newInput.outs.includes(c.eq[0]));
@@ -296,7 +322,10 @@ test('A8 没有 StereoPanner / DynamicsCompressor 时链路仍完整降级', () 
   assert.equal(c.panner, null);
   assert.equal(c.safetyLimiter, null);
   assert.equal(exit, c.antiClick);
-  assert.ok(c.loudness.outs.includes(c.antiClick));
+  const merger = c.surround.nodes.find((n) => n.kind === 'merger');
+  assert.ok(c.loudness.outs.some((n) => n && n.kind === 'splitter'), '响度先进环绕级');
+  assert.ok(merger && merger.outs.includes(c.surround.bassComp), '合流后接低音补偿');
+  assert.ok(c.surround.bassComp.outs.includes(c.antiClick), '没有压缩器时补偿级直连 antiClick');
   assert.equal(s.api.getStatus().hasPanner, false);
   assert.equal(s.api.getStatus().hasLimiter, false);
   assert.equal(s.api.getStatus().eqBands, 10);
@@ -322,7 +351,7 @@ test('A10 initAudio 每次 new AudioContext：ctx 变化时先拆旧链再建，
   assert.ok(!s.input.outs.includes(oldChain.eq[0]), '旧 input 的首段连边要断掉');
   assert.ok(!s.input.outs.includes(oldChain.meter), '旧 meter 连边要断掉');
   assert.equal(oldChain.eq[0].outs.length, 0, '旧链节点输出要清空');
-  assert.equal(s.created.biquad.length, 20, '新链重新建了 10 段');
+  assert.equal(s.created.biquad.length, 24, '两条链各 10 段 EQ + 环绕 highpass + 低音补偿');
   assert.ok(newInput.outs.includes(fresh.eq[0]));
 });
 
@@ -669,4 +698,146 @@ test('E6 Cuefield AutoMix 不被本轮改动碰，gainNode 淡变基础层保持
     'function cancelTrackEndFade',
   ]) assert.ok(graphSource.includes(fn), '淡变基础层丢失 ' + fn);
   assert.ok(graphSource.includes('gainNode.gain.setValueCurveAtTime('), '等功率曲线不能回退');
+});
+
+// =============================================================================
+// B. 立体环绕：UI 开关 → 节点增益 这条路径必须真的通
+//    （用户实测「开了没区别」，先排除「点开关根本没写到节点上」）
+// =============================================================================
+test('B1 点开关后，环绕节点的宽度/反射增益真的变了', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  assert.ok(c.surround, '链上必须有环绕级');
+
+  // 开关默认关：中性
+  assert.equal(c.surround.width.gain.value, 1);
+  assert.equal(c.surround.g1.gain.value, 0);
+  assert.equal(c.surround.g2.gain.value, 0);
+
+  // 走 UI 同一条路径
+  s.sandbox.toggleAudioTuningSurround();
+
+  const sur = s.api.getSurround();
+  assert.equal(sur.enabled, true, '开关要打开');
+  assert.equal(sur.width, 1.3, '中性参数下打开时给默认宽度 130%');
+  assert.equal(sur.ambience, 0.12, '中性参数下打开时给默认反射 12%');
+  assert.equal(c.surround.width.gain.value, 1.3, '宽度增益必须写到节点上');
+  assert.ok(Math.abs(c.surround.g1.gain.value - 0.55 * 0.12) < 1e-6, '反射 1 路增益 0.55×ambience');
+  assert.ok(Math.abs(c.surround.g2.gain.value - 0.35 * 0.12) < 1e-6, '反射 2 路增益 0.35×ambience');
+});
+
+test('B2 再次关掉要回到严格中性', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  s.sandbox.toggleAudioTuningSurround();
+  s.sandbox.toggleAudioTuningSurround();
+  assert.equal(s.api.getSurround().enabled, false);
+  assert.equal(c.surround.width.gain.value, 1, '关闭必须回 1（M/S 重建才是恒等）');
+  assert.equal(c.surround.g1.gain.value, 0);
+  assert.equal(c.surround.g2.gain.value, 0);
+});
+
+test('B3 setSurround 会夹住越界值', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setSurround({ enabled: true, width: 9, ambience: 5 });
+  const sur = s.api.getSurround();
+  assert.equal(sur.width, 2, '宽度上限 200%');
+  assert.equal(sur.ambience, 1, '反射上限 100%');
+});
+
+// =============================================================================
+// C. 中置分离（人声 / 伴奏双推子）
+// =============================================================================
+test('C1 默认严格中性：mid/side = 1，低音补偿 0dB', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  assert.equal(c.surround.midGain.gain.value, 1);
+  assert.equal(c.surround.sideGain.gain.value, 1);
+  assert.equal(c.surround.bassComp.gain.value, 0, 'mid=100% 时不能有低频补偿');
+});
+
+test('C2 拉人声到 0：mid 增益归零，并补 +4dB 低频', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  s.api.setCenter({ mid: 0 });
+  assert.equal(c.surround.midGain.gain.value, 0);
+  assert.equal(c.surround.sideGain.gain.value, 1, '拉人声不该动伴奏');
+  assert.equal(c.surround.bassComp.gain.value, 4, 'mid=0 时低音补偿 +4dB');
+});
+
+test('C3 拉伴奏到 0：side 增益归零，人声不动', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  s.api.setCenter({ side: 0 });
+  assert.equal(c.surround.sideGain.gain.value, 0);
+  assert.equal(c.surround.midGain.gain.value, 1);
+});
+
+test('C4 setCenter 夹住越界值，且与 setSurround 互不干扰', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  s.api.setCenter({ mid: 9, side: -3 });
+  const cen = s.api.getCenter();
+  assert.equal(cen.mid, 2, '人声上限 200%');
+  assert.equal(cen.side, 0, '伴奏下限 0%');
+  s.api.setSurround({ enabled: true, width: 1.6, ambience: 0.3 });
+  assert.equal(s.api.getCenter().mid, 2, 'setSurround 不能改写人声推子');
+  assert.equal(c.surround.midGain.gain.value, 2);
+});
+
+// =============================================================================
+// D. 拖动推子不能压死主线程：input 必须走节流，且不做同步落盘
+// =============================================================================
+test('D1 空间推子的 input 处理不再同步写盘 / 全量刷新', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/modules/04-mood/01-audio-tuning.js'), 'utf8');
+  const bind = src.slice(src.indexOf('function bindSpatialSlider'), src.indexOf("bindSpatialSlider('at-center-mid'"));
+  assert.ok(bind.includes('scheduleApply()'), '音频写入要走每帧合并');
+  assert.ok(bind.includes('scheduleSave()'), '落盘要走合并');
+  assert.ok(!bind.includes('syncUi()'), '拖动时不能跑全量 syncUi（会回写所有控件）');
+  assert.ok(bind.includes("addEventListener('change'"), '松手时补一次落盘');
+});
+
+test('D2 syncUi 不回写正在拖动的控件', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/modules/04-mood/01-audio-tuning.js'), 'utf8');
+  assert.ok(src.includes('var active = global.document.activeElement'), '要取当前焦点控件');
+  for (const id of ['at-surround-width', 'at-surround-ambience', 'at-center-mid', 'at-center-side']) {
+    const varName = { 'at-surround-width': 'surW', 'at-surround-ambience': 'surA', 'at-center-mid': 'midEl', 'at-center-side': 'sideEl' }[id];
+    assert.ok(new RegExp(`if \\(${varName} && ${varName} !== active\\)`).test(src),
+      `${id} 的 value 回写必须跳过拖动中的元素`);
+  }
+  assert.ok(/if \(input && input !== active\)/.test(src), 'EQ 推子同理');
+});
+
+test('D3 调度器出错也要复位标志位，否则推子会永久失灵', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/modules/04-mood/01-audio-tuning.js'), 'utf8');
+  assert.ok(src.includes('function flush()'), '要有独立的 flush');
+  assert.ok(src.includes('finally 兜住') || /try \{ applyAll\(\); \} catch/.test(src), 'applyAll 必须被 try 包住');
+});
+
+test('D4 拖动空间推子：合并到下一帧才写参数，拖动过程不落盘', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  const slider = s.elements['at-center-mid'];
+  assert.ok(slider && slider._listeners.input && slider._listeners.input.length, '推子要绑上 input');
+
+  const storeBefore = JSON.stringify(s.store);
+
+  slider.fire('input', { target: { value: '0' } });
+  assert.equal(c.surround.midGain.gain.value, 1, '还没到下一帧，不应该立刻改音频参数');
+  assert.equal(JSON.stringify(s.store), storeBefore, '拖动过程不能同步写盘');
+
+  s.advance(20);           // 推进一帧，触发 flush
+  assert.equal(c.surround.midGain.gain.value, 0, '下一帧必须真的把参数写进去');
+  assert.equal(JSON.stringify(s.store), storeBefore, '一帧之后仍由 300ms 合并负责落盘');
+
+  slider.fire('change', { target: { value: '0' } });
+  assert.notEqual(JSON.stringify(s.store), storeBefore, '松手（change）要立刻落盘一次');
 });

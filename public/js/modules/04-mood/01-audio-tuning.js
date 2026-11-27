@@ -73,7 +73,14 @@
       eq: zeros(),
       preampDb: 0,
       balance: 0,
-      preset: 'flat'
+      preset: 'flat',
+      /* 立体环绕（默认关；width=1 / ambience=0 时与直通逐样本等价） */
+      surroundEnabled: false,
+      surroundWidth: 1,
+      surroundAmbience: 0,
+      /* 中置分离（人声 / 伴奏双推子）：1 = 原样，0 = 完全去掉 */
+      midGain: 1,
+      sideGain: 1
     };
   }
 
@@ -89,6 +96,11 @@
       }
       out.preampDb = clamp(raw.preampDb, -PREAMP_LIMIT_DB, PREAMP_LIMIT_DB);
       out.balance = clamp(raw.balance, -1, 1);
+      if (raw.surroundEnabled === true) out.surroundEnabled = true;
+      if (raw.surroundWidth != null) out.surroundWidth = clamp(raw.surroundWidth, 0, 2);
+      if (raw.surroundAmbience != null) out.surroundAmbience = clamp(raw.surroundAmbience, 0, 1);
+      if (raw.midGain != null) out.midGain = clamp(raw.midGain, 0, 2);
+      if (raw.sideGain != null) out.sideGain = clamp(raw.sideGain, 0, 2);
       // 'custom' 也要能回读：拖过 EQ 后预设名是 custom，否则刷新会显示「平坦」却是自定义曲线
       if (typeof raw.preset === 'string' && (PRESETS[raw.preset] || raw.preset === 'custom')) out.preset = raw.preset;
     } catch (_) {}
@@ -97,6 +109,30 @@
 
   function saveSettings() {
     try { global.localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (_) {}
+  }
+
+  /* ── 拖动期间的节流 ────────────────────────────────────────────────
+   * 推子拖动时 input 事件可达每秒上百次。原来每次都 saveSettings()（同步写盘）
+   * + applyAll()（十几处 AudioParam 排程）+ syncUi()（全量 DOM 回写），
+   * 在 Windows 上（Defender 扫 localStorage 文件）足以把主线程压死：
+   * 表现就是「界面卡住但音频照常播放」。
+   * 现在：写入每帧最多一次、落盘 300ms 合并；界面只更新被拖动的那一个控件。 */
+  var applyRaf = 0;
+  function scheduleApply() {
+    if (applyRaf) return;
+    var raf = global.requestAnimationFrame;
+    function flush() {
+      applyRaf = 0;
+      /* 用 try/finally 兜住：applyAll 一旦抛错就把标志位卡住，
+         之后拖动会永远不再生效（看起来像「推子失灵」），这条必须保证复位。 */
+      try { applyAll(); } catch (err) { try { console.warn('[AudioTuning] applyAll failed', err); } catch (_) {} }
+    }
+    applyRaf = raf ? raf(flush) : setTimeout(flush, 16);
+  }
+  var saveTimer = 0;
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () { saveTimer = 0; saveSettings(); }, 300);
   }
 
   var settings = readSettings();
@@ -139,6 +175,19 @@
     setParam(chain.preamp.gain, dbToLinear(settings.eqEnabled ? settings.preampDb : 0), ramp);
     setParam(chain.loudness.gain, dbToLinear(settings.replayGainEnabled ? runtime.appliedDb : 0), ramp);
     if (chain.panner) setParam(chain.panner.pan, settings.balance, ramp);
+    if (chain.surround) {
+      /* 关闭时把宽度拉回 1、反射归零 —— 这两个值下 M/S 重建与直通逐样本等价，
+         不需要断开/重连节点（重连会有一帧爆音）。 */
+      var surOn = !!settings.surroundEnabled;
+      setParam(chain.surround.width.gain, surOn ? settings.surroundWidth : 1, ramp);
+      setParam(chain.surround.g1.gain, surOn ? 0.55 * settings.surroundAmbience : 0, ramp);
+      setParam(chain.surround.g2.gain, surOn ? 0.35 * settings.surroundAmbience : 0, ramp);
+      /* 中置分离与人声/伴奏推子不受 surroundEnabled 控制：它们是独立的一组。
+         mid=side=1 时与直通等价；压低 mid 时按比例给低音补偿（0 → 0dB，0.5 → +2dB）。 */
+      setParam(chain.surround.midGain.gain, settings.midGain, ramp);
+      setParam(chain.surround.sideGain.gain, settings.sideGain, ramp);
+      setParam(chain.surround.bassComp.gain, (1 - settings.midGain) * 4, ramp);
+    }
     /* 故意不碰 antiClick.gain：它是 seek/换源的 8ms 短淡变，
        用户拖 EQ 或响度自适应收敛时都不能把它强行拉回 1。 */
   }
@@ -215,8 +264,67 @@
     for (var j = 0; j < eq.length; j++) { node.connect(eq[j]); node = eq[j]; }
     node.connect(preamp);
     preamp.connect(loudness);
-    if (safetyLimiter) { loudness.connect(safetyLimiter); safetyLimiter.connect(antiClick); }
-    else loudness.connect(antiClick);
+
+    /* ── 立体环绕：M/S 矩阵 + 侧声道早期反射 ──────────────────────────
+     * 只处理 side，mid（人声、bass）原地不动：
+     * 对两声道整体加延迟会触发 Haas 效应，幻象中心被拉偏（ViPER 差分环绕那人声偏左的老毛病）。
+     * 关闭态必须严格直通 —— width=1、ambience=0 时 outL/outR 与输入逐样本相同。
+     * 插在 loudness 之后、限幅器之前：宽度拉满时多出来的峰值由 safetyLimiter 兜住。 */
+    var surSplitter = ctx.createChannelSplitter(2);
+    var surMidL = ctx.createGain(); surMidL.gain.value = 0.5;
+    var surMidR = ctx.createGain(); surMidR.gain.value = 0.5;
+    var surSideL = ctx.createGain(); surSideL.gain.value = 0.5;
+    var surSideR = ctx.createGain(); surSideR.gain.value = -0.5;
+    var surMid = ctx.createGain(); surMid.gain.value = 1;
+    var surSide = ctx.createGain(); surSide.gain.value = 1;
+    var surWidth = ctx.createGain(); surWidth.gain.value = 1;
+    /* 中置分离双推子：mid=1/side=1 时与原信号完全一致 */
+    var surMidGain = ctx.createGain(); surMidGain.gain.value = 1;
+    var surSideGain = ctx.createGain(); surSideGain.gain.value = 1;
+    /* 压低 mid 会连带削掉居中定位的 bass（bass 基本都在 mid 里），用低架补偿找回来；
+       补偿量跟 midGain 联动，mid=100% 时补偿为 0dB，保证默认严格中性。 */
+    var surBassComp = ctx.createBiquadFilter();
+    surBassComp.type = 'lowshelf';
+    surBassComp.frequency.value = 120;
+    surBassComp.gain.value = 0;
+    var surHp = ctx.createBiquadFilter(); surHp.type = 'highpass'; surHp.frequency.value = 180; surHp.Q.value = 0.707;
+    var surD1 = ctx.createDelay(0.08); surD1.delayTime.value = 0.011;
+    var surD2 = ctx.createDelay(0.08); surD2.delayTime.value = 0.019;
+    var surG1 = ctx.createGain(); surG1.gain.value = 0;
+    var surG2 = ctx.createGain(); surG2.gain.value = 0;
+    var surInvert = ctx.createGain(); surInvert.gain.value = -1;
+    var surSum = ctx.createGain(); surSum.gain.value = 1;
+    var surSumNeg = ctx.createGain(); surSumNeg.gain.value = -1;
+    var surOutL = ctx.createGain();
+    var surOutR = ctx.createGain();
+    var surMerger = ctx.createChannelMerger(2);
+
+    loudness.connect(surSplitter);
+    surSplitter.connect(surMidL, 0);
+    surSplitter.connect(surMidR, 1);
+    surSplitter.connect(surSideL, 0);
+    surSplitter.connect(surSideR, 1);
+    surMidL.connect(surMid);
+    surMidR.connect(surMid);
+    surSideL.connect(surSide);
+    surSideR.connect(surSide);
+    surSide.connect(surWidth);
+    surWidth.connect(surSideGain);
+    surSideGain.connect(surSum);
+    surSideGain.connect(surHp);
+    surHp.connect(surD1); surD1.connect(surG1); surG1.connect(surSum);
+    surHp.connect(surD2); surD2.connect(surG2); surG2.connect(surInvert); surInvert.connect(surSum);
+    surMid.connect(surMidGain);
+    surMidGain.connect(surOutL);
+    surSum.connect(surOutL);
+    surMidGain.connect(surOutR);
+    surSum.connect(surSumNeg); surSumNeg.connect(surOutR);
+    surOutL.connect(surMerger, 0, 0);
+    surOutR.connect(surMerger, 0, 1);
+    surMerger.connect(surBassComp);
+
+    if (safetyLimiter) { surBassComp.connect(safetyLimiter); safetyLimiter.connect(antiClick); }
+    else surBassComp.connect(antiClick);
     // antiClick 必须在 limiter 之后：否则压缩器 release 会把 8ms 淡出的尾巴补响
     if (panner) antiClick.connect(panner);
     chain = {
@@ -229,6 +337,19 @@
       antiClick: antiClick,
       panner: panner,
       meter: meter,
+      surround: {
+        width: surWidth,
+        g1: surG1,
+        g2: surG2,
+        midGain: surMidGain,
+        sideGain: surSideGain,
+        bassComp: surBassComp,
+        delay1: surD1,
+        delay2: surD2,
+        nodes: [surSplitter, surMidL, surMidR, surSideL, surSideR, surMid, surSide,
+          surWidth, surMidGain, surSideGain, surBassComp, surHp, surD1, surD2,
+          surG1, surG2, surInvert, surSum, surSumNeg, surOutL, surOutR, surMerger]
+      },
       exit: panner || antiClick
     };
     connectMeter(inputNode);
@@ -242,6 +363,7 @@
     try { chain.input.disconnect(chain.eq[0]); } catch (_) {}
     disconnectMeter(chain.input);
     var nodes = chain.eq.concat([chain.preamp, chain.loudness, chain.safetyLimiter, chain.antiClick, chain.panner, chain.meter]);
+    if (chain.surround && chain.surround.nodes) nodes = nodes.concat(chain.surround.nodes);
     nodes.forEach(function (n) { if (n) { try { n.disconnect(); } catch (_) {} } });
     chain = null;
     analyserNode = null;
@@ -391,10 +513,73 @@
     toggleButton('audio-tuning-eq-toggle', settings.eqEnabled);
     toggleButton('audio-tuning-replaygain-toggle', settings.replayGainEnabled);
     toggleButton('audio-tuning-anticlick-toggle', settings.antiClickEnabled);
+    toggleButton('audio-tuning-surround-toggle', settings.surroundEnabled);
+    var active = global.document.activeElement;
+    var surW = el('at-surround-width');
+    var surWV = el('at-surround-width-v');
+    if (surW && surW !== active) {
+      surW.value = String(Math.round(settings.surroundWidth * 100));
+      if (surW.style && typeof surW.style.setProperty === 'function') {
+        surW.style.setProperty('--at-fill', Math.round((settings.surroundWidth / 2) * 100) + '%');
+      }
+    }
+    if (surWV) surWV.textContent = Math.round(settings.surroundWidth * 100) + '%';
+    /* 空间推子统一走「轻量 input」：只刷新自己这一根的外观，音频与落盘都交给调度器 */
+    function bindSpatialSlider(id, applyValue) {
+      var input = el(id);
+      if (!input || input.getAttribute('data-bound') === '1') return;
+      input.setAttribute('data-bound', '1');
+      input.addEventListener('input', function (e) {
+        var v = clamp(e.target.value, 0, 200);
+        applyValue(v);
+        var pct = Math.round(v);
+        if (input.style && typeof input.style.setProperty === 'function') {
+          input.style.setProperty('--at-fill', Math.round((v / 200) * 100) + '%');
+        }
+        var valEl = el(id + '-v');
+        if (valEl) valEl.textContent = pct + '%';
+        scheduleApply();
+        scheduleSave();
+      });
+      /* 松手时才落盘一次，保证中途崩溃也不丢（低频、不阻塞拖动） */
+      input.addEventListener('change', function () { saveSettings(); });
+    }
+    bindSpatialSlider('at-center-mid', function (v) { settings.midGain = v / 100; });
+    bindSpatialSlider('at-center-side', function (v) { settings.sideGain = v / 100; });
+    var surA = el('at-surround-ambience');
+    var surAV = el('at-surround-ambience-v');
+    if (surA && surA !== active) {
+      surA.value = String(Math.round(settings.surroundAmbience * 100));
+      if (surA.style && typeof surA.style.setProperty === 'function') {
+        surA.style.setProperty('--at-fill', Math.round(settings.surroundAmbience * 100) + '%');
+      }
+    }
+    if (surAV) surAV.textContent = Math.round(settings.surroundAmbience * 100) + '%';
+    /* 关掉时两个滑块压暗，但保留数值（用户能看出关着的是哪套参数） */
+    var surBody = el('audio-tuning-surround-body');
+    if (surBody) surBody.classList.toggle('is-off', !settings.surroundEnabled);
+    var midEl = el('at-center-mid');
+    var midV = el('at-center-mid-v');
+    if (midEl && midEl !== active) {
+      midEl.value = String(Math.round(settings.midGain * 100));
+      if (midEl.style && typeof midEl.style.setProperty === 'function') {
+        midEl.style.setProperty('--at-fill', Math.round((settings.midGain / 2) * 100) + '%');
+      }
+    }
+    if (midV) midV.textContent = Math.round(settings.midGain * 100) + '%';
+    var sideEl = el('at-center-side');
+    var sideV = el('at-center-side-v');
+    if (sideEl && sideEl !== active) {
+      sideEl.value = String(Math.round(settings.sideGain * 100));
+      if (sideEl.style && typeof sideEl.style.setProperty === 'function') {
+        sideEl.style.setProperty('--at-fill', Math.round((settings.sideGain / 2) * 100) + '%');
+      }
+    }
+    if (sideV) sideV.textContent = Math.round(settings.sideGain * 100) + '%';
     for (var i = 0; i < EQ_BANDS.length; i++) {
       var input = el('at-eq-' + i);
       var label = el('at-eq-v-' + i);
-      if (input) {
+      if (input && input !== active) {
         input.value = String(settings.eq[i]);
         // 竖向推子：--at-fill 是从底部算起的填充高度，-12dB 为 0%、+12dB 为 100%
         if (input.style && typeof input.style.setProperty === 'function') {
@@ -421,8 +606,16 @@
     }
     var summary = el('audio-tuning-summary');
     if (summary) {
-      summary.textContent = (PRESET_LABELS[settings.preset] || '自定义') +
-        ' · 响度' + (settings.replayGainEnabled ? fmtDb(runtime.appliedDb) + 'dB' : '关');
+      /* 折叠起来时摘要要能看出「还有哪些效果开着」，否则合并到一体后会被忘掉 */
+      var parts = [
+        (PRESET_LABELS[settings.preset] || '自定义'),
+        '响度' + (settings.replayGainEnabled ? fmtDb(runtime.appliedDb) + 'dB' : '关')
+      ];
+      if (settings.surroundEnabled) parts.push('环绕' + Math.round(settings.surroundWidth * 100) + '%');
+      if (Math.abs(settings.midGain - 1) > 0.001 || Math.abs(settings.sideGain - 1) > 0.001) {
+        parts.push('人声' + Math.round(settings.midGain * 100) + '/' + Math.round(settings.sideGain * 100));
+      }
+      summary.textContent = parts.join(' · ');
     }
     var presetWrap = el('audio-tuning-presets');
     if (presetWrap) {
@@ -451,6 +644,42 @@
     }
     html += '</div>';
     rows.innerHTML = html;
+
+    /* 立体环绕 / 人声伴奏也用同一套竖向推子，避免面板里出现两种滑块语言。
+     * 结构与 .at-eq-rack 完全一致，只是量纲是 0~200% / 0~100%。 */
+    function spatialRack(items) {
+      var out = '<div class="at-eq-rack at-eq-rack-spatial">';
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k];
+        var f = Math.round((it.value / it.max) * 100);
+        out += '<div class="at-eq-band">' +
+          '<div class="at-eq-slot">' +
+          '<input id="' + it.id + '" class="at-eq-range" type="range" min="0" max="' + it.max +
+          '" step="' + it.step + '" value="' + it.value + '" data-spatial="' + it.key +
+          '" style="--at-fill:' + f + '%" aria-label="' + it.aria + '">' +
+          '</div>' +
+          '<span class="at-eq-freq">' + it.label + '</span>' +
+          '<span class="at-eq-val" id="' + it.id + '-v">' + it.value + it.unit + '</span>' +
+          '</div>';
+      }
+      return out + '</div>';
+    }
+    var spatialRows = el('audio-tuning-spatial-rows');
+    if (spatialRows && spatialRows.getAttribute('data-built') !== '1') {
+      spatialRows.setAttribute('data-built', '1');
+      spatialRows.innerHTML = spatialRack([
+        { id: 'at-surround-width', key: 'width', label: '声场', unit: '%', max: 200, step: 5, value: Math.round(settings.surroundWidth * 100), aria: '声场宽度百分比' },
+        { id: 'at-surround-ambience', key: 'ambience', label: '反射', unit: '%', max: 100, step: 5, value: Math.round(settings.surroundAmbience * 100), aria: '空间反射强度' }
+      ]);
+    }
+    var centerRows = el('audio-tuning-center-rows');
+    if (centerRows && centerRows.getAttribute('data-built') !== '1') {
+      centerRows.setAttribute('data-built', '1');
+      centerRows.innerHTML = spatialRack([
+        { id: 'at-center-mid', key: 'mid', label: '人声', unit: '%', max: 200, step: 5, value: Math.round(settings.midGain * 100), aria: '中置（人声）增益百分比' },
+        { id: 'at-center-side', key: 'side', label: '伴奏', unit: '%', max: 200, step: 5, value: Math.round(settings.sideGain * 100), aria: '侧声道（伴奏）增益百分比' }
+      ]);
+    }
     /* 预设卡片的频谱缩略：按预设自己的曲线画十根柱子。
      * 整块包 try/catch —— 单测里的 document/元素是能力极简的桩，
      * 少一个 querySelector 就把 buildUi 整个打断，得不偿失。 */
@@ -492,6 +721,33 @@
       settings.balance = clamp(e.target.value, -100, 100) / 100;
       saveSettings(); applyAll(); syncUi();
     });
+    var surW = el('at-surround-width');
+    if (surW) surW.addEventListener('input', function (e) {
+      settings.surroundWidth = clamp(e.target.value, 0, 200) / 100;
+      /* 拖滑块视为想听效果：自动开开关，避免「拖了没反应」 */
+      if (!settings.surroundEnabled && settings.surroundWidth !== 1) settings.surroundEnabled = true;
+      if (surW.style && typeof surW.style.setProperty === 'function') {
+        surW.style.setProperty('--at-fill', Math.round((settings.surroundWidth / 2) * 100) + '%');
+      }
+      var wv = el('at-surround-width-v');
+      if (wv) wv.textContent = Math.round(settings.surroundWidth * 100) + '%';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (surW) surW.addEventListener('change', function () { saveSettings(); });
+    var surA = el('at-surround-ambience');
+    if (surA) surA.addEventListener('input', function (e) {
+      settings.surroundAmbience = clamp(e.target.value, 0, 100) / 100;
+      if (!settings.surroundEnabled && settings.surroundAmbience > 0) settings.surroundEnabled = true;
+      if (surA.style && typeof surA.style.setProperty === 'function') {
+        surA.style.setProperty('--at-fill', Math.round(settings.surroundAmbience * 100) + '%');
+      }
+      var av = el('at-surround-ambience-v');
+      if (av) av.textContent = Math.round(settings.surroundAmbience * 100) + '%';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (surA) surA.addEventListener('change', function () { saveSettings(); });
     var presets = el('audio-tuning-presets');
     if (presets) presets.addEventListener('click', function (e) {
       var b = e.target && e.target.closest ? e.target.closest('button[data-preset]') : null;
@@ -510,6 +766,14 @@
   }
   function toggleOption(key) {
     settings[key] = !settings[key];
+    /* 打开立体环绕时，如果两个参数还在中性位（声场 100% / 反射 0%），
+     * 这一级在数学上是严格直通的 —— 开关本身不会有任何可听变化。
+     * 所以首次打开给一组「听得出来但不夸张」的默认值。 */
+    if (key === 'surroundEnabled' && settings.surroundEnabled &&
+        Math.abs(settings.surroundWidth - 1) < 0.001 && settings.surroundAmbience < 0.001) {
+      settings.surroundWidth = 1.3;
+      settings.surroundAmbience = 0.12;
+    }
     saveSettings();
     if (key === 'replayGainEnabled' && !settings.replayGainEnabled) applyLoudness(0, 'disabled');
     if (key === 'antiClickEnabled' && !settings.antiClickEnabled) antiClickIn('disabled');
@@ -524,6 +788,76 @@
     bindMedia: bindMedia,
     onTrackChanged: onTrackChanged,
     applyAll: applyAll,
+    /* 立体环绕：给设置页之外（快捷键 / 探针 / 以后的三条杠快捷项）用的最小接口 */
+    setSurround: function (cfg) {
+      cfg = cfg || {};
+      if (cfg.enabled != null) settings.surroundEnabled = !!cfg.enabled;
+      if (cfg.width != null) settings.surroundWidth = clamp(cfg.width, 0, 2);
+      if (cfg.ambience != null) settings.surroundAmbience = clamp(cfg.ambience, 0, 1);
+      saveSettings();
+      applyAll();
+      syncUi();
+      return settings.surroundEnabled;
+    },
+    /* 中置分离：mid 主要是人声与居中乐器，side 主要是铺开的伴奏。
+       这是 M/S 原理，不是真分轨 —— 会连带影响居中定位的 bass / 军鼓。 */
+    setCenter: function (cfg) {
+      cfg = cfg || {};
+      if (cfg.mid != null) settings.midGain = clamp(cfg.mid, 0, 2);
+      if (cfg.side != null) settings.sideGain = clamp(cfg.side, 0, 2);
+      saveSettings();
+      applyAll();
+      syncUi();
+      return { mid: settings.midGain, side: settings.sideGain };
+    },
+    getCenter: function () {
+      return { mid: settings.midGain, side: settings.sideGain };
+    },
+    getSurround: function () {
+      return {
+        enabled: !!settings.surroundEnabled,
+        width: settings.surroundWidth,
+        ambience: settings.surroundAmbience
+      };
+    },
+    /* 运行时自检：控制台里跑 Mineradio.audioTuning.debugSurround()
+     * 一次看清「节点在不在、增益是多少、声音到底走没走 Web Audio」。
+     * 「开了没感觉」时先用它排掉链路问题，别靠耳朵猜。 */
+    debugSurround: function () {
+      var c = chain;
+      var out = {
+        chainBuilt: !!c,
+        surroundInChain: !!(c && c.surround),
+        settings: {
+          enabled: !!settings.surroundEnabled,
+          width: settings.surroundWidth,
+          ambience: settings.surroundAmbience
+        },
+        gains: c && c.surround ? {
+          width: c.surround.width.gain.value,
+          reflect1: c.surround.g1.gain.value,
+          reflect2: c.surround.g2.gain.value,
+          mid: c.surround.midGain.gain.value,
+          side: c.surround.sideGain.gain.value,
+          bassCompDb: c.surround.bassComp.gain.value
+        } : null,
+        center: { mid: settings.midGain, side: settings.sideGain },
+        /* 这三项决定「有没有声音走进 Web Audio」：
+           audioRouted=false 说明元素还没接到图里（没开始播放或换过源）；
+           wasapiActive=true 时声音走的是 WASAPI，但取样点在 gainNode 之后，
+           所以调音链仍然生效 —— 若这里 true 而听不出变化，就不是链路的问题。 */
+        audioRouted: !!(boundMedia && typeof source !== 'undefined' && source),
+        wasapiActive: !!(global.Mineradio && global.Mineradio.wasapiOutput &&
+          typeof global.Mineradio.wasapiOutput.isActive === 'function' &&
+          global.Mineradio.wasapiOutput.isActive()),
+        eqEnabled: !!settings.eqEnabled,
+        replayGainEnabled: !!settings.replayGainEnabled,
+        antiClickEnabled: !!settings.antiClickEnabled,
+        sampleRate: c && c.ctx ? c.ctx.sampleRate : null
+      };
+      try { console.log('[audioTuning] surround debug', out); } catch (_) { }
+      return out;
+    },
     setTransitionPan: setTransitionPan,
     clearTransitionPan: clearTransitionPan,
     setPreset: setPreset,
@@ -577,6 +911,7 @@
   global.toggleAudioTuningEq = function () { return toggleOption('eqEnabled'); };
   global.toggleAudioTuningReplayGain = function () { return toggleOption('replayGainEnabled'); };
   global.toggleAudioTuningAntiClick = function () { return toggleOption('antiClickEnabled'); };
+  global.toggleAudioTuningSurround = function () { return toggleOption('surroundEnabled'); };
   global.setAudioTuningPreset = setPreset;
   global.resetAudioTuning = function () { setPreset('flat'); };
 

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>surround dsp probe</title></head>
+<body>
+<!-- 用 OfflineAudioContext 渲染真实信号，量「立体环绕」这一级的实际输出。
+     不出声、不依赖界面；结论由 __probe() 返回的数字给出。 -->
+<script src="../../public/js/modules/04-mood/01-audio-tuning.js"></script>
+<script>
+(function () {
+  var SR = 44100;
+  var SEC = 0.5;
+
+  function makeInput(ctx, mode) {
+    var len = Math.round(SR * SEC);
+    var buf = ctx.createBuffer(2, len, SR);
+    var L = buf.getChannelData(0);
+    var R = buf.getChannelData(1);
+    for (var i = 0; i < len; i++) {
+      var t = i / SR;
+      var sine = Math.sin(2 * Math.PI * 1000 * t) * 0.5;
+      var low = Math.sin(2 * Math.PI * 60 * t) * 0.25;
+      var v = sine + low;
+      if (mode === 'low') { var lv = Math.sin(2 * Math.PI * 1000 * t) * 0.1; L[i] = lv; R[i] = 0; }
+      else if (mode === 'center') { L[i] = v; R[i] = v; }
+      else if (mode === 'antiphase') { L[i] = v; R[i] = -v; }
+      else { L[i] = v; R[i] = 0; }          // hard-left
+    }
+    return buf;
+  }
+
+  async function renderOnce(mode, cfg) {
+    var ctx = new OfflineAudioContext(2, Math.round(SR * SEC), SR);
+    var buf = makeInput(ctx, mode);
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+
+    var tuning = window.Mineradio.audioTuning;
+    tuning.setSurround({
+      enabled: !!cfg.enabled,
+      width: cfg.width == null ? 1 : cfg.width,
+      ambience: cfg.ambience == null ? 0 : cfg.ambience
+    });
+    tuning.setCenter({ mid: cfg.mid == null ? 1 : cfg.mid, side: cfg.side == null ? 1 : cfg.side });
+
+    var head = ctx.createGain();
+    var out = tuning.install(ctx, head);
+    out.connect(ctx.destination);
+    src.connect(head);
+    src.start(0);
+
+    var rendered = await ctx.startRendering();
+    return { out: rendered, in: buf };
+  }
+
+  function maxDiff(a, b, ch) {
+    var x = a.getChannelData(ch), y = b.getChannelData(ch), m = 0;
+    for (var i = 0; i < x.length; i++) m = Math.max(m, Math.abs(x[i] - y[i]));
+    return m;
+  }
+  function rms(buf, ch) {
+    var d = buf.getChannelData(ch), s = 0;
+    for (var i = 0; i < d.length; i++) s += d[i] * d[i];
+    return Math.sqrt(s / d.length);
+  }
+  function peak(buf, ch) {
+    var d = buf.getChannelData(ch), p = 0;
+    for (var i = 0; i < d.length; i++) p = Math.max(p, Math.abs(d[i]));
+    return p;
+  }
+  /* DynamicsCompressor 带 lookahead，会给整条链加固定延迟。
+     判定「关闭态是否透明」必须先对齐这个延迟，否则测到的是相位差不是增益差。 */
+  function bestLag(a, b, ch) {
+    var x = a.getChannelData(ch), y = b.getChannelData(ch);
+    var best = 0, bestScore = -Infinity;
+    for (var lag = 0; lag <= 600; lag++) {
+      var s = 0;
+      for (var i = 2000; i < Math.min(x.length, 12000); i++) s += y[i] * x[i - lag] * 0;
+      s = 0;
+      for (var j = 2000; j < Math.min(y.length, 12000); j++) s += y[j] * x[j - lag];
+      if (s > bestScore) { bestScore = s; best = lag; }
+    }
+    return best;
+  }
+  /* 只量中段稳态：起播瞬间有滤波器/压缩器的 transient，整段 max 会被它带偏 */
+  function alignedDiff(a, b, ch, lag) {
+    var x = a.getChannelData(ch), y = b.getChannelData(ch), m = 0;
+    var from = 8000 + lag, to = Math.min(x.length, y.length) - 2000;
+    for (var i = from; i < to; i++) m = Math.max(m, Math.abs(y[i] - x[i - lag]));
+    return m;
+  }
+  function steadyGain(a, b, ch, lag) {
+    var x = a.getChannelData(ch), y = b.getChannelData(ch);
+    var num = 0, den = 0;
+    for (var i = 8000 + lag; i < Math.min(x.length, y.length) - 2000; i++) {
+      num += y[i] * x[i - lag];
+      den += x[i - lag] * x[i - lag];
+    }
+    return den ? num / den : 0;
+  }
+  function lrMaxDiff(buf) { return maxDiff(buf, buf, 1) === 0 ? 0 : (function () {
+    var l = buf.getChannelData(0), r = buf.getChannelData(1), m = 0;
+    for (var i = 0; i < l.length; i++) m = Math.max(m, Math.abs(l[i] - r[i]));
+    return m;
+  })(); }
+
+  window.__probe = async function () {
+    var res = {};
+
+    /* 1. 关闭态必须与直通逐样本一致（这是「不生效时不能偷偷改声音」的底线） */
+    var off = await renderOnce('hardleft', { enabled: false, width: 1, ambience: 0 });
+    var lag = bestLag(off.out, off.in, 0);
+    res.chainLatencySamples = lag;
+    res.bypassLeftDiffRaw = +maxDiff(off.out, off.in, 0).toFixed(6);
+    res.bypassLeftDiff = +alignedDiff(off.out, off.in, 0, lag).toFixed(6);
+    res.bypassRightDiff = +alignedDiff(off.out, off.in, 1, lag).toFixed(6);
+
+    /* 1b. 低电平（远离限幅器阈值）：如果这一条差异≈0，说明上面的残差来自限幅器而不是环绕级 */
+    var low = await renderOnce('low', { enabled: false, width: 1, ambience: 0 });
+    var lowLag = bestLag(low.out, low.in, 0);
+    res.lowLevelLag = lowLag;
+    res.lowLevelBypassDiff = +alignedDiff(low.out, low.in, 0, lowLag).toFixed(6);
+    res.lowLevelInPeak = +peak(low.in, 0).toFixed(4);
+    res.lowLevelOutPeak = +peak(low.out, 0).toFixed(4);
+    res.lowLevelSteadyGain = +steadyGain(low.out, low.in, 0, lowLag).toFixed(4);
+    res.bigSteadyGain = +steadyGain(off.out, off.in, 0, lag).toFixed(4);
+
+    /* 1c. 只改「开关」不清零参数：width=1、amb=0 时开关开/关必须完全等价，
+           这条直接证明环绕级本身是中性（0.935 的增益来自链上原有的限幅器）。 */
+    var neuA = await renderOnce('hardleft', { enabled: false, width: 1, ambience: 0 });
+    var neuB = await renderOnce('hardleft', { enabled: true, width: 1, ambience: 0 });
+    function midDiff(x, y, ch) {
+      var a = x.getChannelData(ch), b = y.getChannelData(ch), m = 0;
+      for (var i = 8000; i < Math.min(a.length, b.length) - 2000; i++) m = Math.max(m, Math.abs(a[i] - b[i]));
+      return m;
+    }
+    res.neutralEnabledDiff = +midDiff(neuA.out, neuB.out, 0).toFixed(8);
+
+    /* 1d. 「只打开开关」到底有没有可听变化（用户实际会这么操作） */
+    var switchOnly = await renderOnce('hardleft', { enabled: false });
+    var switchDefault = await renderOnce('hardleft', { enabled: true, width: 1.3, ambience: 0.12 });
+    function sideEnergy(buf) {
+      var l = buf.getChannelData(0), r = buf.getChannelData(1), s = 0;
+      for (var i = 8000; i < l.length - 2000; i++) { var d = l[i] - r[i]; s += d * d; }
+      return Math.sqrt(s / (l.length - 10000));
+    }
+    res.sideEnergyOff = +sideEnergy(switchOnly.out).toFixed(4);
+    res.sideEnergyDefault = +sideEnergy(switchDefault.out).toFixed(4);
+    res.sideEnergyGainPct = +(((sideEnergy(switchDefault.out) / sideEnergy(switchOnly.out)) - 1) * 100).toFixed(1);
+
+    /* 2. 中置内容（L=R，相当于人声在中间）拉宽后不能偏 */
+    var centerOff = await renderOnce('center', { enabled: false });
+    var centerWide = await renderOnce('center', { enabled: true, width: 2, ambience: 0 });
+    res.centerLRDiffOff = +lrMaxDiff(centerOff.out).toFixed(6);
+    res.centerLRDiffWide = +lrMaxDiff(centerWide.out).toFixed(6);
+    res.centerRmsOff = +rms(centerOff.out, 0).toFixed(4);
+    res.centerRmsWide = +rms(centerWide.out, 0).toFixed(4);
+
+    /* 3. 侧向内容硬左输入：拉宽后两端都变响、且反相（声场外扩） */
+    var sideOff = await renderOnce('hardleft', { enabled: false });
+    var sideWide = await renderOnce('hardleft', { enabled: true, width: 2, ambience: 0 });
+    res.hardLeftRmsLOff = +rms(sideOff.out, 0).toFixed(4);
+    res.hardLeftRmsLWide = +rms(sideWide.out, 0).toFixed(4);
+    res.hardLeftRmsROff = +rms(sideOff.out, 1).toFixed(4);
+    res.hardLeftRmsRWide = +rms(sideWide.out, 1).toFixed(4);
+
+    /* 4. 反射：侧向内容下应增加能量（延迟支路起作用） */
+    var dry = await renderOnce('hardleft', { enabled: true, width: 1.4, ambience: 0 });
+    var wet = await renderOnce('hardleft', { enabled: true, width: 1.4, ambience: 0.9 });
+    res.ambienceRmsDry = +rms(dry.out, 0).toFixed(4);
+    res.ambienceRmsWet = +rms(wet.out, 0).toFixed(4);
+
+    /* 4b. 中置分离：mid=0 必须去掉中置内容，side=0 必须去掉侧向内容，且互不影响 */
+    var centerDry = await renderOnce('center', { enabled: false });
+    var centerMidZero = await renderOnce('center', { enabled: false, mid: 0, side: 1 });
+    var centerSideZero = await renderOnce('center', { enabled: false, mid: 1, side: 0 });
+    res.centerMidZeroRms = +rms(centerMidZero.out, 0).toFixed(4);
+    res.centerSideZeroRms = +rms(centerSideZero.out, 0).toFixed(4);
+    res.centerDryRms = +rms(centerDry.out, 0).toFixed(4);
+
+    var antiDry = await renderOnce('antiphase', { enabled: false });
+    var antiMidZero = await renderOnce('antiphase', { enabled: false, mid: 0, side: 1 });
+    res.antiDryRms = +rms(antiDry.out, 0).toFixed(4);
+    res.antiMidZeroRmsKeep = +rms(antiMidZero.out, 0).toFixed(4);
+
+    /* 5. 反相信号（纯 side）拉宽不受 mid 影响，验证矩阵没接错 */
+    var antiOff = await renderOnce('antiphase', { enabled: false });
+    var antiWide = await renderOnce('antiphase', { enabled: true, width: 2 });
+    res.antiBypassDiff = +alignedDiff(antiOff.out, antiOff.in, 0, lag).toFixed(6);
+    res.antiRmsOff = +rms(antiOff.out, 0).toFixed(4);
+    res.antiRmsWide = +rms(antiWide.out, 0).toFixed(4);
+
+    return res;
+  };
+})();
+</script>
+</body>
+</html>

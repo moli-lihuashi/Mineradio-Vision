@@ -8,6 +8,7 @@ var wasapiOutputEnabled = false;
 var wasapiOutputActive = false;
 var wasapiScriptNode = null;
 var wasapiTapConnected = false;
+var wasapiDetachedDestination = null;
 
 function readWasapiOutputPref() {
   try {
@@ -89,21 +90,27 @@ async function startWasapiOutputBridge() {
       if (outR) outR.fill(0);
     };
 
-    var tap = (typeof audioTap !== 'undefined' && audioTap) ? audioTap : source;
-    // audioTap 可能是局部变量；从 gain 前旁路：优先 source
-    tap = source;
-    if (typeof Mineradio !== 'undefined' && Mineradio.moodAudio && Mineradio.moodAudio.getExitNode) {
-      try { tap = Mineradio.moodAudio.getExitNode() || tap; } catch (_) {}
+    /* 取样点必须是「调音链之后、主出声之前」的那个节点。
+     * 音频图顺序：source → moodExit → audioTuning(EQ/前级/响度/声道/防爆音) → audioTap → gainNode → destination。
+     * 旧代码写死 tap = source，等于整段绕过调音链 —— 这就是「开旁路后音效调节没反应」的原因。
+     * gainNode 是合并脚本里的模块级变量，从它取样才能把 EQ、前级、响度和音量/淡变一起带上。 */
+    var masterOut = (typeof gainNode !== 'undefined') ? gainNode : null;
+    if (masterOut) {
+      masterOut.connect(wasapiScriptNode);
+      wasapiTapConnected = true;
+      /* 主出声改由 WASAPI 走，WebAudio 这一路必须断掉；
+       * 不能沿用「把 gain 设 0」的写法：取样点在 gain 之后，清零会连旁路流一起静音。 */
+      try {
+        masterOut.disconnect(audioCtx.destination);
+        wasapiDetachedDestination = audioCtx.destination;
+      } catch (_) { }
+    } else {
+      /* 兜底：拿不到主输出节点才退回 source。这条路径调音链不生效，必须留下痕迹。 */
+      source.connect(wasapiScriptNode);
+      wasapiTapConnected = true;
+      console.warn('[WASAPI 3A] gainNode 不可用，退回 source 取样：EQ / 音量不会生效');
     }
-    tap.connect(wasapiScriptNode);
     wasapiScriptNode.connect(audioCtx.destination);
-    wasapiTapConnected = true;
-
-    // 静音 WebAudio 主出声，只走 WASAPI
-    if (gainNode) {
-      if (gainNode.gain.value > 0.0001) gainNode.__wasapiPrevGain = gainNode.gain.value;
-      gainNode.gain.value = 0;
-    }
     wasapiOutputActive = true;
     console.log('[WASAPI 3A] bridge started @', sr);
     return { ok: true, enabled: true, status: opened.status };
@@ -121,11 +128,15 @@ async function stopWasapiOutputBridge() {
     wasapiScriptNode = null;
   }
   wasapiTapConnected = false;
-  if (gainNode && gainNode.__wasapiPrevGain != null) {
+  /* 把主出声接回去（开启时是断开的，不是把 gain 清零） */
+  if (wasapiDetachedDestination && typeof gainNode !== 'undefined' && gainNode) {
+    try { gainNode.connect(wasapiDetachedDestination); } catch (_) { }
+    wasapiDetachedDestination = null;
+  }
+  /* 兼容旧版本留下的清零写法：万一还有 __wasapiPrevGain，恢复它 */
+  if (typeof gainNode !== 'undefined' && gainNode && gainNode.__wasapiPrevGain != null) {
     try { gainNode.gain.value = gainNode.__wasapiPrevGain; } catch (_) {}
     gainNode.__wasapiPrevGain = null;
-  } else if (gainNode && wasapiOutputEnabled === false) {
-    // leave as-is
   }
   if (api && typeof api.wasapiClose === 'function') {
     try { await api.wasapiClose(); } catch (_) {}

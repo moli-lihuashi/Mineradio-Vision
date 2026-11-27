@@ -38,7 +38,10 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 async function waitDevtools(ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
+    /* /json/version 偶尔在端口已监听后仍不响应（实测约 1/3 概率），
+     * 用 /json/list 兜底：任一能拿到 JSON 就算 CDP 起来了。 */
     try { const v = await httpJson('/json/version'); if (v && v.webSocketDebuggerUrl) return v; } catch (_) {}
+    try { const l = await httpJson('/json/list'); if (Array.isArray(l)) return { ok: true }; } catch (_) {}
     await delay(300);
   }
   throw new Error('CDP 未就绪');
@@ -468,6 +471,28 @@ async function evalJs(ws, expr) {
       };
     })()`);
     console.log('\n[10] 登录页样式:', JSON.stringify(loginProbe, null, 1));
+    // 10b) 切到 Spotify：它的授权面板是另一套 DOM，浅色没覆盖到会全糊
+    await evalJs(ws, `(function(){ if (typeof selectLoginProviderNode === 'function') selectLoginProviderNode('spotify'); return true; })()`);
+    await delay(1600);
+    const spotifyProbe = await evalJs(ws, `(function(){
+      var hero = document.getElementById('folio-spotify-hero');
+      function c(sel) { var e = document.querySelector(sel); return e ? getComputedStyle(e).color : ''; }
+      return {
+        heroShown: !!hero && !hero.hidden,
+        h3: c('#folio-spotify-hero h3'),
+        p: c('#folio-spotify-hero p'),
+        segOn: c('#folio-spotify-hero .folio-seg button.on'),
+        steps: c('#folio-spotify-hero .folio-steps'),
+        tabColor: (function(){ var e = document.getElementById('login-provider-spotify'); return e ? getComputedStyle(e).color : ''; })()
+      };
+    })()`);
+    console.log('  [10b] Spotify:', JSON.stringify(spotifyProbe));
+    const shotSp = await send(ws, 'Page.captureScreenshot', { format: 'png' });
+    if (shotSp && shotSp.data) {
+      const fsp = path.join(OUT, 'live-login-spotify.png');
+      fs.writeFileSync(fsp, Buffer.from(shotSp.data, 'base64'));
+      console.log('  Spotify 截图:', fsp);
+    }
     const shot10 = await send(ws, 'Page.captureScreenshot', { format: 'png' });
     if (shot10 && shot10.data) {
       const f10 = path.join(OUT, 'live-login-light.png');
@@ -476,6 +501,56 @@ async function evalJs(ws, expr) {
     }
     await evalJs(ws, `(function(){
       if (typeof closeLoginModal === 'function') closeLoginModal();
+      return true;
+    })()`);
+    await delay(600);
+
+    // 12) 设置 → 播放 → 输出设备（用户报浅色下文字看不见）
+    await evalJs(ws, `(function(){
+      if (typeof openSettingsPage === 'function') openSettingsPage('audio');
+      return true;
+    })()`);
+    await delay(1500);
+    await evalJs(ws, `(function(){
+      var el = document.getElementById('audio-output-panel') || document.getElementById('playback-output-device');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      return true;
+    })()`);
+    await delay(700);
+    const devProbe = await evalJs(ws, `(function(){
+      var sel = document.getElementById('playback-output-device');
+      if (!sel) return null;
+      var cs = getComputedStyle(sel);
+      var opt = sel.options.length ? getComputedStyle(sel.options[0]) : null;
+      var acts = [].slice.call(document.querySelectorAll('#settings-modal .playback-output-actions button')).map(function (b) {
+        return { text: (b.textContent || '').trim(), color: getComputedStyle(b).color, bg: getComputedStyle(b).backgroundColor };
+      });
+      var item = document.querySelector('#audio-output-list .audio-output-item');
+      var small = item ? item.querySelector('small') : null;
+      return {
+        itemText: item ? (item.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 50) : '',
+        itemColor: item ? getComputedStyle(item).color : '',
+        itemBg: item ? getComputedStyle(item).backgroundColor : '',
+        smallColor: small ? getComputedStyle(small).color : '',
+        headColor: (function () { var h = document.querySelector('#audio-output-panel .quality-output-head'); return h ? getComputedStyle(h).color : ''; })(),
+        inSettings: !!sel.closest('#settings-modal'),
+        color: cs.color, bg: cs.backgroundColor, scheme: cs.colorScheme,
+        options: sel.options.length,
+        first: sel.options.length ? (sel.options[0].textContent || '').trim() : '',
+        optColor: opt ? opt.color : '', optBg: opt ? opt.backgroundColor : '',
+        actions: acts
+      };
+    })()`);
+    console.log('\n[12] 播放设备:', JSON.stringify(devProbe, null, 1));
+    const shotDev = await send(ws, 'Page.captureScreenshot', { format: 'png' });
+    if (shotDev && shotDev.data) {
+      const fd = path.join(OUT, 'live-settings-device.png');
+      fs.writeFileSync(fd, Buffer.from(shotDev.data, 'base64'));
+      console.log('  设备区截图:', fd);
+    }
+
+    await evalJs(ws, `(function(){
+      if (typeof closeSettingsPage === 'function') closeSettingsPage();
       document.documentElement.removeAttribute('data-theme');
       window.closeFoliaPanel();
       return true;

@@ -785,3 +785,35 @@ html[data-theme="light"] #login-modal .qr-shell.web-login-preview{
   background:radial-gradient(circle at 50% 42%,rgba(191,214,107,.18),transparent 46%),rgba(22,22,26,.03);
   border-color:rgba(22,22,26,.12);
   box-shadow:0 16px 42px rgba(20,20,24,.12),inset 0 1px 0 rgba(255,255,255,.8)}
+
+/* ---------- Spotify 授权面板（浅色） ----------
+ * .folio-spotify-hero 那套（browser-tile / browser-window 的伪元素 / seg / steps /
+ * custom-toggle / client-id 输入框）通篇 rgba(255,255,255,.xx) + 黑输入框，
+ * 浅色下标题和说明全糊。.folio-primary-btn 是黄底黑字，不用动。
+ * tab 的选中态另有 color:#d8ffe2!important，浅底上几乎不可见，一并压成深绿。 */
+html[data-theme="light"] #login-modal .login-platform-list button.spotify.active{
+  background:rgba(29,185,84,.22)!important;color:#0b6b2e!important}
+html[data-theme="light"] #login-modal .folio-spotify-hero{border-bottom-color:rgba(22,22,26,.09)}
+html[data-theme="light"] #login-modal .folio-browser-tile{
+  background:rgba(22,22,26,.03);border-color:rgba(22,22,26,.10)}
+html[data-theme="light"] #login-modal .folio-browser-window{border-color:rgba(22,22,26,.18)}
+html[data-theme="light"] #login-modal .folio-browser-window::before{background:rgba(22,22,26,.12)}
+html[data-theme="light"] #login-modal .folio-browser-window::after{
+  background:rgba(22,22,26,.35);
+  box-shadow:6px 0 0 rgba(22,22,26,.35),12px 0 0 rgba(22,22,26,.35)}
+html[data-theme="light"] #login-modal .folio-seg{
+  background:rgba(22,22,26,.045);border-color:rgba(22,22,26,.09)}
+html[data-theme="light"] #login-modal .folio-seg button{color:rgba(22,22,26,.55)}
+html[data-theme="light"] #login-modal .folio-seg button.on{
+  background:rgba(22,22,26,.10);color:rgba(22,22,26,.94)}
+html[data-theme="light"] #login-modal .folio-hero-copy h3{color:rgba(22,22,26,.94)}
+html[data-theme="light"] #login-modal .folio-hero-copy p{color:rgba(22,22,26,.60)}
+html[data-theme="light"] #login-modal .folio-steps{color:rgba(22,22,26,.45)}
+html[data-theme="light"] #login-modal .folio-steps b{color:#2b7a56}
+html[data-theme="light"] #login-modal .folio-custom-toggle{color:rgba(22,22,26,.50)}
+html[data-theme="light"] #login-modal .folio-custom-toggle:hover{color:rgba(22,22,26,.82)}
+html[data-theme="light"] #login-modal .folio-spotify-custom input{
+  border-color:rgba(22,22,26,.16);background:#fff;color:rgba(22,22,26,.88)}
+html[data-theme="light"] #login-modal .folio-spotify-custom button{
+  background:rgba(22,22,26,.08);color:rgba(22,22,26,.88)}
+html[data-theme="light"] #login-modal .folio-spotify-custom small{color:rgba(22,22,26,.45)}

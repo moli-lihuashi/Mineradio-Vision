@@ -871,7 +871,7 @@ try {
         <button type="button" id="playback-output-default">跟随系统</button>
       </div>
       <div id="playback-output-status" class="pa-status">跟随系统默认设备</div>
-      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出不经过 Web Audio。</div>
+      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出仍经过调音链（EQ / 环绕），只绕开系统混音器。</div>
     </div>
   </details>
           </div>
@@ -910,6 +910,23 @@ try {
         <span id="at-balance-v">中</span>
       </div>
       <div class="audio-tuning-hint">31Hz–16kHz · ±12dB · 响度补偿上限 ±6dB</div>
+
+      <!-- 立体环绕：与上面的 EQ / 响度同属一条串行链路（EQ → 响度 → 环绕 → 人声伴奏），
+           所以放在同一个折叠体里，而不是另开卡片。 -->
+      <div id="audio-tuning-surround-body">
+        <button type="button" id="audio-tuning-surround-toggle" class="quick-menu-toggle"
+          onclick="toggleAudioTuningSurround()" aria-pressed="false"
+          title="侧声道立体声扩展 + 早期反射：声场更宽、包围感更强。只处理 side，mid（人声 / bass）原地不动，所以人声不会被拉偏"><span>立体环绕</span><span class="dot"></span></button>
+        <!-- 与十段 EQ 同一套竖向推子（.at-eq-rack），而不是另一套横向滑块 -->
+        <div id="audio-tuning-spatial-rows"></div>
+        <div class="audio-tuning-hint">首次打开会给 130% / 12% 的默认强度（这两项都在中性值时开关听不出变化）；反射 ≥ 40% 明显“出耳”，齿音重的曲子建议 ≤ 25%</div>
+      </div>
+
+      <div class="fx-section-label">人声 / 伴奏</div>
+      <div id="audio-tuning-center-body">
+        <div id="audio-tuning-center-rows"></div>
+        <div class="audio-tuning-hint">基于左右声道差的中置分离，不是真分轨：人声拉到 0 可当消音伴奏，但居中定位的 bass / 军鼓会跟着变薄（会自动补 4dB 低频）；人声若不在正中则无效</div>
+      </div>
     </div>
   </details>
           </div>
@@ -925,7 +942,7 @@ try {
         <div id="audio-output-list" class="audio-output-list"></div>
       </div>
           </div>
-          <div class="settings-group-note">WASAPI 旁路输出不经过 Web Audio；变速后歌词进度仍会自动同步。</div>
+          <div class="settings-group-note">WASAPI 旁路输出仍走调音链（EQ / 立体环绕），只绕开 Windows 混音器；变速后歌词进度仍会自动同步。</div>
         </div>
       </section>
 
