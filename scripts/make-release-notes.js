@@ -70,15 +70,16 @@ function main() {
     lines.push('');
     lines.push('## 资产替换说明');
     lines.push('');
-    lines.push('本版**未升级版本号**，同名资产已被 2026-11-16 的重新构建替换。');
+    // 日期取本次构建时间，不写死：同一个脚本会反复用于「不升版本、就地替换资产」
+    lines.push('本版**未升级版本号**，同名资产已被 ' + b.builtAt.slice(0, 10) + ' 的重新构建替换。');
     lines.push('此前的校验值为：');
     lines.push('');
     supersedes.forEach((sha, idx) => {
       lines.push('- ' + (assets[idx] ? assets[idx].name : '资产 ' + (idx + 1)) + '：`' + sha + '`');
     });
     lines.push('');
-    lines.push('若你手里的文件是上表中的旧值，说明拿到的是 2026-11-14 的构建；');
-    lines.push('要使用本次内容（含 LX 音源接入等），请重新下载并核对上方的 SHA256。');
+    lines.push('若你手里的文件是上表中的旧值，说明拿到的是替换前的构建；');
+    lines.push('要使用本次内容，请重新下载并核对上方的 SHA256。');
   }
   lines.push('');
   lines.push('## 本版内容');
