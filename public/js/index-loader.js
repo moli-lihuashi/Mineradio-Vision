@@ -326,6 +326,12 @@
     'js/modules/12-folia/0l0-folia-mode-tuning.js',
     'js/modules/12-folia/0l-folia-tuning-panel.js',
     'js/modules/12-folia/0l1-folia-mode-panels.js',
+    /* 隐喻（metaphor，Folia 0.8 新增）：四个文件按 绘制层 → 线稿 → 排版/分镜/镜头/字形 → 运行时 的顺序，
+     * 各自挂在 window.FoliaMetaphor 上，最后那个注册样式本体。 */
+    'js/modules/12-folia/0m-folia-metaphor-paint.js',
+    'js/modules/12-folia/0m-folia-metaphor-figures.js',
+    'js/modules/12-folia/0m-folia-metaphor-plan.js',
+    'js/modules/12-folia/0m-folia-mode-metaphor.js',
     'js/modules/12-folia/03-folia-world-runtime.js',
     'js/modules/12-folia/17-folia-mod-host.js',
     'js/modules/12-folia/18-folia-panel-host.js',

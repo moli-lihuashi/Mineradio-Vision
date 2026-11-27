@@ -98,7 +98,7 @@ function createSandbox(overrides) {
   }
 
   // ---- AudioContext 桩 ----
-  const created = { biquad: [], gain: [], panner: [], compressor: [], analyser: [], splitter: [], merger: [], delay: [] };
+  const created = { biquad: [], gain: [], panner: [], compressor: [], analyser: [], splitter: [], merger: [], delay: [], waveshaper: [] };
   const meter = {
     kind: 'analyser',
     fftSize: 2048,
@@ -153,6 +153,13 @@ function createSandbox(overrides) {
     createDelay() {
       const n = makeNode('delay', { delayTime: makeParam(0) });
       created.delay.push(n);
+      return n;
+    },
+    /* 虚拟低音的谐波支路要用到：不给桩会让整条 install 抛错，
+       失败原因就变成「ctx 缺方法」而不是「实现错了」。 */
+    createWaveShaper: o.noShaper ? undefined : function () {
+      const n = makeNode('waveshaper', { curve: null, oversample: 'none' });
+      created.waveshaper.push(n);
       return n;
     },
   };
@@ -251,7 +258,13 @@ test('A2 链路顺序 input→EQ→preamp→loudness→环绕→limiter→antiCl
   assert.ok(surroundMerger, '环绕级必须有声道合并');
   /* 2026-11-26：合并之后还多了一级低音补偿（lowshelf），再进限幅器 */
   assert.ok(surroundMerger.outs.includes(c.surround.bassComp), '合流后接低音补偿');
-  assert.ok(c.surround.bassComp.outs.includes(c.safetyLimiter), '补偿后进限幅器');
+  /* 2026-11-27：补偿之后又多了两级 —— 先并联虚拟低音（求和节点），再进 3D 丽音 */
+  assert.ok(c.vbs && c.vbs.sum, '链上必须有虚拟低音的求和节点');
+  assert.ok(c.surround.bassComp.outs.includes(c.vbs.sum), '低音补偿后先进虚拟低音的求和节点');
+  assert.ok(c.surround.bassComp.outs.includes(c.vbs.lowpass), '同时分出一路去造谐波');
+  assert.ok(c.vbs.sum.outs.some((n) => n && n.kind === 'splitter'), '求和之后进 3D 级');
+  assert.ok(c.haas && c.haas.merger, '链上必须有 3D 丽音级');
+  assert.ok(c.haas.merger.outs.includes(c.safetyLimiter), '3D 级合流后进限幅器');
   assert.ok(c.safetyLimiter.outs.includes(c.antiClick), '防爆音必须在 limiter 之后');
   assert.ok(c.antiClick.outs.includes(c.panner));
   assert.equal(exit, c.panner);
@@ -296,7 +309,7 @@ test('A6 换源重建音频图时只重接首段，不重建整链', () => {
   const again = s.api.install(s.ctx, newInput);
   assert.equal(again, exit);
   assert.equal(chainOf(s), c);
-  assert.equal(s.created.biquad.length, 12); // 10 段 EQ + 环绕反射 highpass + 低音补偿 lowshelf
+  assert.equal(s.created.biquad.length, 17); // 10 段 EQ + 环绕反射 highpass + 低音补偿 lowshelf + 3D 两路 highpass + 虚拟低音三只滤波器
   assert.ok(!s.input.outs.includes(c.eq[0]), '旧 input 到首段的连边要断掉');
   assert.ok(!s.input.outs.includes(c.meter), '旧 input 到 meter 的连边要断掉');
   assert.ok(newInput.outs.includes(c.eq[0]));
@@ -325,7 +338,7 @@ test('A8 没有 StereoPanner / DynamicsCompressor 时链路仍完整降级', () 
   const merger = c.surround.nodes.find((n) => n.kind === 'merger');
   assert.ok(c.loudness.outs.some((n) => n && n.kind === 'splitter'), '响度先进环绕级');
   assert.ok(merger && merger.outs.includes(c.surround.bassComp), '合流后接低音补偿');
-  assert.ok(c.surround.bassComp.outs.includes(c.antiClick), '没有压缩器时补偿级直连 antiClick');
+  assert.ok(c.haas && c.haas.merger.outs.includes(c.antiClick), '没有压缩器时 3D 级直连 antiClick');
   assert.equal(s.api.getStatus().hasPanner, false);
   assert.equal(s.api.getStatus().hasLimiter, false);
   assert.equal(s.api.getStatus().eqBands, 10);
@@ -351,7 +364,7 @@ test('A10 initAudio 每次 new AudioContext：ctx 变化时先拆旧链再建，
   assert.ok(!s.input.outs.includes(oldChain.eq[0]), '旧 input 的首段连边要断掉');
   assert.ok(!s.input.outs.includes(oldChain.meter), '旧 meter 连边要断掉');
   assert.equal(oldChain.eq[0].outs.length, 0, '旧链节点输出要清空');
-  assert.equal(s.created.biquad.length, 24, '两条链各 10 段 EQ + 环绕 highpass + 低音补偿');
+  assert.equal(s.created.biquad.length, 34, '两条链各 10 段 EQ + 环绕 highpass + 低音补偿 + 3D 两路 highpass + 虚拟低音三只滤波器');
   assert.ok(newInput.outs.includes(fresh.eq[0]));
 });
 
@@ -647,12 +660,15 @@ test('E1 index.html 挂载模块并具备全部 UI 载体', () => {
     'audio-tuning-replaygain-toggle', 'audio-tuning-anticlick-toggle',
     'audio-tuning-presets', 'audio-tuning-eq-rows',
     'at-preamp', 'at-preamp-v', 'at-balance', 'at-balance-v',
+    'audio-tuning-haas-body', 'audio-tuning-haas-toggle', 'audio-tuning-haas-sliders',
+    'at-haas-mix', 'at-haas-mix-v', 'at-haas-delay', 'at-haas-delay-v',
   ];
   for (const id of ids) assert.ok(htmlSource.includes('id="' + id + '"'), '缺少 ' + id);
-  for (const p of ['flat', 'pop', 'rock', 'vocal']) {
+  for (const p of ['flat', 'pop', 'rock', 'vocal', 'live3d']) {
     assert.ok(htmlSource.includes('data-preset="' + p + '"'), '缺少预设 ' + p);
   }
   assert.ok(htmlSource.includes('toggleAudioTuningEq()'));
+  assert.ok(htmlSource.includes('toggleAudioTuningHaas()'));
   assert.ok(htmlSource.includes('toggleAudioTuningReplayGain()'));
   assert.ok(htmlSource.includes('toggleAudioTuningAntiClick()'));
 });
@@ -828,10 +844,12 @@ test('D4 拖动空间推子：合并到下一帧才写参数，拖动过程不�
   const slider = s.elements['at-center-mid'];
   assert.ok(slider && slider._listeners.input && slider._listeners.input.length, '推子要绑上 input');
 
+  /* 折叠后只有开启才能拖，所以先打开（同时会给一个非中性的默认 mid） */
+  s.sandbox.toggleAudioTuningCenter();
   const storeBefore = JSON.stringify(s.store);
 
   slider.fire('input', { target: { value: '0' } });
-  assert.equal(c.surround.midGain.gain.value, 1, '还没到下一帧，不应该立刻改音频参数');
+  assert.equal(c.surround.midGain.gain.value, 0.6, '还没到下一帧，不应该立刻改音频参数');
   assert.equal(JSON.stringify(s.store), storeBefore, '拖动过程不能同步写盘');
 
   s.advance(20);           // 推进一帧，触发 flush
@@ -840,4 +858,281 @@ test('D4 拖动空间推子：合并到下一帧才写参数，拖动过程不�
 
   slider.fire('change', { target: { value: '0' } });
   assert.notEqual(JSON.stringify(s.store), storeBefore, '松手（change）要立刻落盘一次');
+});
+
+// =============================================================================
+// E. 回归：buildUi 里两块「顺手删区间」最容易误伤的逻辑
+//    （2026-11-26 删竖向推子时，先丢过 EQ 输入委托，后丢过预设波形）
+// =============================================================================
+test('E1 预设卡片的频谱柱子在，且十段 EQ 的输入委托在', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/modules/04-mood/01-audio-tuning.js'), 'utf8');
+  assert.ok(src.includes("var wave = btn.querySelector('.at-preset-wave')"), '预设波形生成被删过，必须留着');
+  assert.ok(src.includes("wave.innerHTML = bars"), '柱子要真的写进去');
+  assert.ok(src.includes("rows.addEventListener('input'"), '十段 EQ 的输入委托被删过，必须留着');
+  assert.ok(src.includes("t.getAttribute('data-band')"), '委托靠 data-band 找频段');
+});
+
+// =============================================================================
+// F. 3D 丽音（交叉差分延迟）
+//    out_L = in_L − k·HP(delay(in_R)) / out_R = in_R − k·HP(delay(in_L))
+//    关键契约：关掉必须严格直通；低频不进差分支路；参数越界要夹住。
+// =============================================================================
+test('F1 默认严格中性：两路 dry=1、两路交叉增益=0，等于逐样本直通', () => {
+  const s = createSandbox();
+  s.install();
+  const h = chainOf(s).haas;
+  assert.ok(h, '链上必须有 3D 级');
+  assert.equal(h.dryL.gain.value, 1);
+  assert.equal(h.dryR.gain.value, 1);
+  assert.equal(h.xLR.gain.value, 0, '关闭时交叉项必须为 0（否则不是直通）');
+  assert.equal(h.xRL.gain.value, 0);
+  assert.equal(s.api.getHaas().enabled, false);
+});
+
+test('F2 开开关后交叉增益写成负值，延迟落到节点上', () => {
+  const s = createSandbox();
+  s.install();
+  const h = chainOf(s).haas;
+  s.sandbox.toggleAudioTuningHaas();
+  const st = s.api.getHaas();
+  assert.equal(st.enabled, true);
+  assert.equal(st.mix, 0.28, '中性值打开时给默认强度 28%');
+  assert.equal(st.delayMs, 22);
+  assert.ok(Math.abs(h.xLR.gain.value + 0.28) < 1e-9, 'L→R 交叉项是负增益');
+  assert.ok(Math.abs(h.xRL.gain.value + 0.28) < 1e-9, 'R→L 交叉项是负增益');
+  assert.ok(Math.abs(h.delayL.delayTime.value - 0.022) < 1e-9, '延迟 22ms');
+  assert.ok(Math.abs(h.delayR.delayTime.value - 0.022) < 1e-9);
+});
+
+test('F3 再关回去必须回严格中性，且不清空用户拖过的参数', () => {
+  const s = createSandbox();
+  s.install();
+  const h = chainOf(s).haas;
+  s.api.setHaas({ enabled: true, delayMs: 30, mix: 0.45 });
+  assert.ok(Math.abs(h.xLR.gain.value + 0.45) < 1e-9);
+  s.sandbox.toggleAudioTuningHaas();
+  assert.equal(s.api.getHaas().enabled, false);
+  assert.equal(h.xLR.gain.value, 0, '关掉必须回 0');
+  assert.equal(h.xRL.gain.value, 0);
+  assert.equal(s.api.getHaas().delayMs, 30, '滑块数值要保留，下次打开还是上次那组');
+  assert.equal(s.api.getHaas().mix, 0.45);
+});
+
+test('F4 预设 live3d = 一键 3D 丽音：EQ 曲线 + 3D 级一起打开', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setPreset('live3d');
+  const c = chainOf(s);
+  assert.deepEqual(Array.from(c.eq, (f) => f.gain.value), [4, 4.5, 2.5, 0, -1.5, -2, -0.5, 1.5, 3, 2]);
+  const st = s.api.getSettings();
+  assert.equal(st.preset, 'live3d');
+  assert.equal(st.haasEnabled, true, '预设必须把 3D 级一起打开，否则只是改了 EQ');
+  assert.ok(Math.abs(c.haas.xLR.gain.value + 0.28) < 1e-9);
+  const saved = JSON.parse(s.store['mineradio-audio-tuning-v1']);
+  assert.equal(saved.haasEnabled, true, '3D 开关要落盘');
+});
+
+test('F5 越界参数被夹住，不会把非法值写进节点', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setHaas({ enabled: true, delayMs: 999, mix: 9 });
+  assert.equal(s.api.getHaas().delayMs, 35, '延迟上限 35ms');
+  assert.equal(s.api.getHaas().mix, 0.6, '强度上限 60%');
+  s.api.setHaas({ delayMs: -5, mix: -1 });
+  assert.equal(s.api.getHaas().delayMs, 8, '延迟下限 8ms');
+  assert.equal(s.api.getHaas().mix, 0);
+});
+
+test('F6 持久化回读：刷新后 3D 参数与开关都还原', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setHaas({ enabled: true, delayMs: 26, mix: 0.34 });
+  const saved = s.store['mineradio-audio-tuning-v1'];
+  const s2 = createSandbox({ storage: { 'mineradio-audio-tuning-v1': saved } });
+  const st = s2.api.getHaas();
+  assert.equal(st.enabled, true);
+  assert.equal(st.delayMs, 26);
+  assert.equal(st.mix, 0.34);
+  s2.install();
+  assert.ok(Math.abs(chainOf(s2).haas.xLR.gain.value + 0.34) < 1e-9, '回读后增益要落到节点上');
+});
+
+test('F7 延迟支路必须高通在前：低频不参与差分，bass 才不会被梳状滤波削掉', () => {
+  const s = createSandbox();
+  s.install();
+  const h = chainOf(s).haas;
+  assert.equal(h.hpL.type, 'highpass');
+  assert.equal(h.hpR.type, 'highpass');
+  assert.ok(h.hpL.frequency.value >= 200 && h.hpL.frequency.value <= 400,
+    '分频点落在 200~400Hz：低于 200 会削 bass，高于 400 会只剩齿音');
+  // 连线顺序：交叉项必须取自 HP 之后、Delay 之前
+  assert.ok(h.hpL.outs.includes(h.delayL), 'HP 之后才进延迟');
+  assert.ok(h.delayL.outs.includes(h.xLR), '延迟之后才进交叉增益');
+});
+
+test('F8 detach 把 3D 级的 10 个节点全部断开，不留悬挂引用', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  const h = c.haas;
+  const nodes = h.nodes.slice();
+  s.api.detach();
+  assert.equal(s.api._test.getChain(), null);
+  for (const n of nodes) assert.equal(n.outs.length, 0, '每个节点输出都要清空');
+});
+
+test('F9 拖动强度滑块走节流：不当场写参数，下一帧才落地', () => {
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  const slider = s.elements['at-haas-mix'];
+  assert.ok(slider && slider._listeners.input && slider._listeners.input.length, '滑块要绑上 input');
+  slider.fire('input', { target: { value: '50' } });
+  assert.equal(s.api.getHaas().mix, 0.5, 'settings 要立刻更新（UI 读数跟着走）');
+  assert.equal(c.haas.xLR.gain.value, 0, '但音频参数要等下一帧');
+  s.advance(20);
+  assert.ok(Math.abs(c.haas.xLR.gain.value + 0.5) < 1e-9, '下一帧必须真的写进去');
+});
+
+test('F10 五列预设排布：三处 CSS 都得改，真正生效的是 #settings-modal 那条', () => {
+  const rack = fs.readFileSync(path.join(appRoot, 'public/css/10-shell/eq-rack.css'), 'utf8');
+  const page = fs.readFileSync(path.join(appRoot, 'public/css/10-shell/settings-page.css'), 'utf8');
+  const shell = fs.readFileSync(path.join(appRoot, 'public/css/10-shell/shell.css'), 'utf8');
+  /* 这一条是实锤：`#settings-modal .audio-tuning-presets` 特异性 (1,1,0)，
+     压过 eq-rack.css 里的 (0,1,0)。只改 eq-rack 的话第 5 个按钮会掉到第二行
+     —— 2026-11-27 的真截图里，第 5 个按钮就是这样掉到第二行的。 */
+  assert.ok(/#settings-modal \.audio-tuning-presets\{[^}]*repeat\(5/.test(page),
+    '生效的是 #settings-modal 这条，不改它等于没改');
+  assert.ok(/\.audio-tuning-presets\{display:grid;grid-template-columns:repeat\(5/.test(shell), 'shell.css 的默认列数');
+  assert.ok(/\.audio-tuning-presets\{display:grid;grid-template-columns:repeat\(5/.test(rack), 'eq-rack.css 的默认列数');
+  assert.ok(rack.includes('#audio-tuning-haas-body.is-off'), '关闭态压暗要跟着一起加');
+});
+
+// =============================================================================
+// G. 虚拟低音（心理声学低音增强）
+//    并联支路：lowpass(fc) → 软整流 → highpass(去直流) → lowpass(限带) → mix
+//    关键契约：关掉必须直通；整流曲线必须是半波（否则不是「补基频」是「加失真」）；
+//              直流必须被掐掉（否则往功放灌 DC）。
+// =============================================================================
+test('G1 默认关闭：mix=0、总和节点只有直连那一路', () => {
+  const s = createSandbox();
+  s.install();
+  const v = chainOf(s).vbs;
+  assert.ok(v, '链上必须有虚拟低音支路');
+  assert.equal(v.mix.gain.value, 0, '关闭时支路增益必须为 0');
+  assert.equal(v.sum.gain.value, 1, '总和节点保持单位增益');
+  assert.equal(s.api.getVirtualBass().enabled, false);
+});
+
+test('G2 打开后支路增益与三只滤波器频率一起落到节点上', () => {
+  const s = createSandbox();
+  s.install();
+  const v = chainOf(s).vbs;
+  s.sandbox.toggleAudioTuningBass();
+  const st = s.api.getVirtualBass();
+  assert.equal(st.enabled, true);
+  assert.equal(st.crossoverHz, 150, '默认分频 150Hz');
+  assert.equal(st.amount, 0.45, '默认强度 45%');
+  assert.ok(Math.abs(v.mix.gain.value - 0.45 * 0.55) < 1e-9, '支路增益 = 强度 × 归一化系数');
+  assert.equal(v.lowpass.frequency.value, 150, '分频低通');
+  assert.ok(Math.abs(v.dcBlock.frequency.value - 165) < 1e-6, '去直流高通 = 分频 × 1.1');
+  assert.equal(v.bandLimit.frequency.value, 900, '限带低通 = 分频 × 6');
+});
+
+test('G3 关回去必须回 0，且不清空用户拖过的参数', () => {
+  const s = createSandbox();
+  s.install();
+  const v = chainOf(s).vbs;
+  s.api.setVirtualBass({ enabled: true, crossoverHz: 240, amount: 0.8 });
+  assert.ok(v.mix.gain.value > 0);
+  s.sandbox.toggleAudioTuningBass();
+  assert.equal(v.mix.gain.value, 0, '关掉必须回 0（否则不是直通）');
+  assert.equal(s.api.getVirtualBass().crossoverHz, 240, '滑块数值要保留');
+  assert.equal(s.api.getVirtualBass().amount, 0.8);
+});
+
+test('G4 整流曲线必须是半波：负半周全 0、正半周饱和到 1', () => {
+  const s = createSandbox();
+  s.install();
+  const curve = Array.from(chainOf(s).vbs.shaper.curve);
+  assert.ok(curve.length >= 1024, '查表要有足够分辨率');
+  const half = Math.floor(curve.length / 2);
+  assert.ok(curve.slice(0, half).every((x) => x === 0), '负半周必须全 0（半波整流的定义）');
+  assert.ok(curve[curve.length - 1] > 0.999, '正半周顶端要饱和到 1');
+  assert.ok(curve[Math.floor(half * 1.5)] > 0.4, '正半周中段要有输出');
+  /* 单调不减：曲线一旦回折就说明查表建错了（会出现怪异的谐波） */
+  for (let i = half + 1; i < curve.length; i++) {
+    assert.ok(curve[i] >= curve[i - 1] - 1e-9, '第 ' + i + ' 点回折了');
+  }
+});
+
+test('G5 越界参数被夹住', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setVirtualBass({ enabled: true, crossoverHz: 9999, amount: 9 });
+  assert.equal(s.api.getVirtualBass().crossoverHz, 300);
+  assert.equal(s.api.getVirtualBass().amount, 1);
+  s.api.setVirtualBass({ crossoverHz: 1, amount: -1 });
+  assert.equal(s.api.getVirtualBass().crossoverHz, 60);
+  assert.equal(s.api.getVirtualBass().amount, 0);
+});
+
+test('G6 持久化回读：刷新后分频/强度/开关都还原', () => {
+  const s = createSandbox();
+  s.install();
+  s.api.setVirtualBass({ enabled: true, crossoverHz: 220, amount: 0.6 });
+  const saved = s.store['mineradio-audio-tuning-v1'];
+  const s2 = createSandbox({ storage: { 'mineradio-audio-tuning-v1': saved } });
+  const back = s2.api.getVirtualBass();
+  assert.equal(back.enabled, true);
+  assert.equal(back.crossoverHz, 220);
+  assert.equal(back.amount, 0.6);
+  s2.install();
+  assert.ok(chainOf(s2).vbs.mix.gain.value > 0, '回读后增益要落到节点上');
+});
+
+test('G7 支路顺序：低通取低频 → 整流 → 去直流 → 限带 → 混音', () => {
+  const s = createSandbox();
+  s.install();
+  const v = chainOf(s).vbs;
+  assert.ok(v.lowpass.outs.includes(v.pre), '低频先过分频低通再进驱动增益');
+  assert.ok(v.pre.outs.includes(v.shaper), '驱动之后才是整流');
+  assert.ok(v.shaper.outs.includes(v.dcBlock), '整流之后必须立刻去直流');
+  assert.ok(v.dcBlock.outs.includes(v.bandLimit), '去直流之后限带');
+  assert.ok(v.bandLimit.outs.includes(v.mix), '限带之后进混音增益');
+  assert.ok(v.mix.outs.includes(v.sum), '混音增益汇入总和节点');
+  assert.equal(v.dcBlock.type, 'highpass', '去直流必须是 highpass');
+  assert.equal(v.bandLimit.type, 'lowpass', '限带必须是 lowpass');
+});
+
+test('G8 detach 把虚拟低音的 7 个节点全部断开', () => {
+  const s = createSandbox();
+  s.install();
+  const v = chainOf(s).vbs;
+  const nodes = v.nodes.slice();
+  s.api.detach();
+  assert.equal(s.api._test.getChain(), null);
+  for (const n of nodes) assert.ok(!n || n.outs.length === 0, '每个节点输出都要清空');
+});
+
+test('G9 UI 载体齐全，且拖滑块会自动开启', () => {
+  const s = createSandbox();
+  s.install();
+  assert.ok(s.api._test.getChain().vbs, '链路里要有支路');
+  s.elements['at-bass-amount'].fire('input', { target: { value: '70' } });
+  assert.equal(s.api.getVirtualBass().amount, 0.7);
+  assert.equal(s.api.getVirtualBass().enabled, true, '拖强度滑块视为想用这个效果');
+  s.elements['at-bass-freq'].fire('input', { target: { value: '80' } });
+  assert.equal(s.api.getVirtualBass().crossoverHz, 80);
+  s.advance(20);
+  assert.equal(chainOf(s).vbs.lowpass.frequency.value, 80, '分频改了要真的写到节点上');
+});
+
+test('G10 没有 WaveShaperNode 时支路强制静音，主信号仍直通', () => {
+  const s = createSandbox({ noShaper: true });
+  s.install();
+  const v = chainOf(s).vbs;
+  assert.equal(v.shaper, null);
+  s.sandbox.toggleAudioTuningBass();
+  assert.equal(v.mix.gain.value, 0, '内核不支持整流时必须压成 0，不能只做滤波');
 });

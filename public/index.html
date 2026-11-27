@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-app-version="3.3.5">
+<html lang="zh-CN" data-app-version="3.4.0">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -871,7 +871,7 @@ try {
         <button type="button" id="playback-output-default">跟随系统</button>
       </div>
       <div id="playback-output-status" class="pa-status">跟随系统默认设备</div>
-      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出仍经过调音链（EQ / 环绕），只绕开系统混音器。</div>
+      <div class="audio-tuning-hint">变速后歌词与桌面歌词进度自动同步；WASAPI 旁路输出仍经过调音链（EQ / 环绕 / 3D 丽音），只绕开系统混音器。</div>
     </div>
   </details>
           </div>
@@ -897,6 +897,7 @@ try {
         <button type="button" data-preset="pop" title="流行"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">流行</span></button>
         <button type="button" data-preset="rock" title="摇滚"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">摇滚</span></button>
         <button type="button" data-preset="vocal" title="人声"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">人声</span></button>
+        <button type="button" data-preset="live3d" title="3D丽音：低频抬升 + 差分延迟环绕，一键出包围感"><span class="at-preset-wave" aria-hidden="true"></span><span class="at-preset-name">3D丽音</span></button>
       </div>
       <div id="audio-tuning-eq-rows"></div>
       <div class="at-control-row">
@@ -917,15 +918,88 @@ try {
         <button type="button" id="audio-tuning-surround-toggle" class="quick-menu-toggle"
           onclick="toggleAudioTuningSurround()" aria-pressed="false"
           title="侧声道立体声扩展 + 早期反射：声场更宽、包围感更强。只处理 side，mid（人声 / bass）原地不动，所以人声不会被拉偏"><span>立体环绕</span><span class="dot"></span></button>
-        <!-- 与十段 EQ 同一套竖向推子（.at-eq-rack），而不是另一套横向滑块 -->
-        <div id="audio-tuning-spatial-rows"></div>
-        <div class="audio-tuning-hint">首次打开会给 130% / 12% 的默认强度（这两项都在中性值时开关听不出变化）；反射 ≥ 40% 明显“出耳”，齿音重的曲子建议 ≤ 25%</div>
+        <div class="at-collapse" id="audio-tuning-surround-sliders">
+          <div class="at-collapse-inner">
+            <div class="at-control-row">
+              <label for="at-surround-width">声场</label>
+              <input id="at-surround-width" type="range" min="0" max="200" step="5" value="100" aria-label="声场宽度百分比">
+              <span id="at-surround-width-v">100%</span>
+            </div>
+            <div class="at-control-row">
+              <label for="at-surround-ambience">反射</label>
+              <input id="at-surround-ambience" type="range" min="0" max="100" step="5" value="0" aria-label="空间反射强度">
+              <span id="at-surround-ambience-v">0%</span>
+            </div>
+            <div class="audio-tuning-hint">首次打开会给 130% / 12% 的默认强度（这两项都在中性值时开关听不出变化）；反射 ≥ 40% 明显“出耳”，齿音重的曲子建议 ≤ 25%</div>
+          </div>
+        </div>
       </div>
 
-      <div class="fx-section-label">人声 / 伴奏</div>
       <div id="audio-tuning-center-body">
-        <div id="audio-tuning-center-rows"></div>
-        <div class="audio-tuning-hint">基于左右声道差的中置分离，不是真分轨：人声拉到 0 可当消音伴奏，但居中定位的 bass / 军鼓会跟着变薄（会自动补 4dB 低频）；人声若不在正中则无效</div>
+        <button type="button" id="audio-tuning-center-toggle" class="quick-menu-toggle"
+          onclick="toggleAudioTuningCenter()" aria-pressed="false"
+          title="中置分离：人声主要在 mid，伴奏主要在 side。会连带影响居中定位的 bass / 军鼓"><span>人声 / 伴奏</span><span class="dot"></span></button>
+        <div class="at-collapse" id="audio-tuning-center-sliders">
+          <div class="at-collapse-inner">
+            <div class="at-control-row">
+              <label for="at-center-mid">人声</label>
+              <input id="at-center-mid" type="range" min="0" max="200" step="5" value="100" aria-label="中置（人声）增益百分比">
+              <span id="at-center-mid-v">100%</span>
+            </div>
+            <div class="at-control-row">
+              <label for="at-center-side">伴奏</label>
+              <input id="at-center-side" type="range" min="0" max="200" step="5" value="100" aria-label="侧声道（伴奏）增益百分比">
+              <span id="at-center-side-v">100%</span>
+            </div>
+            <div class="audio-tuning-hint">基于左右声道差的中置分离，不是真分轨：人声拉到 0 可当消音伴奏，但居中定位的 bass / 军鼓会跟着变薄（会自动补 4dB 低频）；人声若不在正中则无效</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3D 丽音：链路在「人声/伴奏」之后、限幅器之前，所以它是整条调音链的
+           最后一级音效。差值结构（相减）而不是单边延迟，见 01-audio-tuning.js 注释。 -->
+      <div id="audio-tuning-haas-body">
+        <button type="button" id="audio-tuning-haas-toggle" class="quick-menu-toggle"
+          onclick="toggleAudioTuningHaas()" aria-pressed="false"
+          title="差分延迟环绕：左右各延迟一路后交叉相减，声场向耳外扩，人声不偏左。延迟支路只在 300Hz 以上工作，低频不参与差分"><span>3D 丽音</span><span class="dot"></span></button>
+        <div class="at-collapse" id="audio-tuning-haas-sliders">
+          <div class="at-collapse-inner">
+            <div class="at-control-row">
+              <label for="at-haas-mix">强度</label>
+              <input id="at-haas-mix" type="range" min="0" max="60" step="1" value="28" aria-label="3D 环绕强度百分比">
+              <span id="at-haas-mix-v">28%</span>
+            </div>
+            <div class="at-control-row">
+              <label for="at-haas-delay">延迟</label>
+              <input id="at-haas-delay" type="range" min="8" max="35" step="1" value="22" aria-label="差分延迟毫秒">
+              <span id="at-haas-delay-v">22ms</span>
+            </div>
+            <div class="audio-tuning-hint">两侧各延迟一路后交叉相减：侧向能量放大、总能量不涨，所以不会糊成一坨，人声也不偏左。延迟 18–26ms 落在融合区（听成空间感），超过 30ms 开始像回声；强度 ≤ 30% 时人声最干净，> 45% 居中人声会被削出金属声——这是相减型算法的固有代价，不是参数没调好</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 虚拟低音：并联谐波支路，不走 3D 级的差分延迟，所以单独一块。
+           它补的是「低频存在感」，不是 EQ 那种把 62Hz 抬响。 -->
+      <div id="audio-tuning-bass-body">
+        <button type="button" id="audio-tuning-bass-toggle" class="quick-menu-toggle"
+          onclick="toggleAudioTuningBass()" aria-pressed="false"
+          title="心理声学低音增强：取分频点以下的低频造谐波，让耳朵补出纸盆推不出来的基频。小耳机与笔记本外放的差别最明显"><span>虚拟低音</span><span class="dot"></span></button>
+        <div class="at-collapse" id="audio-tuning-bass-sliders">
+          <div class="at-collapse-inner">
+            <div class="at-control-row">
+              <label for="at-bass-freq">分频</label>
+              <input id="at-bass-freq" type="range" min="60" max="300" step="10" value="150" aria-label="低音分频点赫兹">
+              <span id="at-bass-freq-v">150Hz</span>
+            </div>
+            <div class="at-control-row">
+              <label for="at-bass-amount">强度</label>
+              <input id="at-bass-amount" type="range" min="0" max="100" step="5" value="45" aria-label="低音增强强度百分比">
+              <span id="at-bass-amount-v">45%</span>
+            </div>
+            <div class="audio-tuning-hint">分频点按播放设备调：笔记本内置扬声器 150–300Hz，小耳机 120–200Hz，书架箱 80–120Hz。设太高会把男声的胸腔共鸣也拿去造谐波，人声发虚；强度超过 60% 时鼓点密集的段落会出现可闻的谐波噪声</div>
+          </div>
+        </div>
       </div>
     </div>
   </details>
@@ -942,7 +1016,7 @@ try {
         <div id="audio-output-list" class="audio-output-list"></div>
       </div>
           </div>
-          <div class="settings-group-note">WASAPI 旁路输出仍走调音链（EQ / 立体环绕），只绕开 Windows 混音器；变速后歌词进度仍会自动同步。</div>
+          <div class="settings-group-note">WASAPI 旁路输出仍走调音链（EQ / 立体环绕 / 3D 丽音），只绕开 Windows 混音器；变速后歌词进度仍会自动同步。</div>
         </div>
       </section>
 

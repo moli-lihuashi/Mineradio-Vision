@@ -34,13 +34,61 @@
   var ANTICLICK_IN_MS = 12;
   var ANTICLICK_TIMEOUT_MS = 900;
 
+  /* 3D 丽音：没有拿到酷狗的原始参数（商业闭源），这条曲线是按公开听感描述
+     反推的初始值——低频抬、中频退、高频提亮，配合下面的差分延迟级使用。
+     单独点这个预设会把 EQ 和 3D 级一起打开，等价于酷狗那个「一键音效」。 */
   var PRESETS = {
     flat:   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     pop:    [-1, 1, 3, 4, 2, -1, -1, 1, 3, 3],
     rock:   [4, 3, 1, -2, -3, 1, 3, 4, 4, 3],
-    vocal:  [-2, -1, 0, 1, 3, 5, 4, 2, 0, -1]
+    vocal:  [-2, -1, 0, 1, 3, 5, 4, 2, 0, -1],
+    live3d: [4, 4.5, 2.5, 0, -1.5, -2, -0.5, 1.5, 3, 2]
   };
-  var PRESET_LABELS = { flat: '平坦', pop: '流行', rock: '摇滚', vocal: '人声' };
+  var PRESET_LABELS = { flat: '平坦', pop: '流行', rock: '摇滚', vocal: '人声', live3d: '3D丽音' };
+  /* 预设附带的音效级：点预设等于「整套一键音效」，不只是改 EQ */
+  var PRESET_FX = {
+    live3d: { haasDelayMs: 22, haasMix: 0.28 }
+  };
+
+  /* ── 3D 丽音（差分延迟环绕）参数边界 ───────────────────────────────
+   * 延迟落在 8~35ms：短于 8ms 听成梳状染色而不是空间感，长于 35ms
+   * 会和原始声部分离成「回声」（Haas 融合区上限约 35~40ms）。
+   * 混合量上限 60%：再高会把居中人声削出金属声（相减导致的中频抵消）。 */
+  var HAAS_DELAY_MIN = 8;
+  var HAAS_DELAY_MAX = 35;
+  var HAAS_MIX_LIMIT = 0.6;
+  /* 延迟支路的高通：低频不参与相减，否则 bass 被梳状滤波削掉 */
+  var HAAS_FOCUS_HZ = 300;
+
+  /* ── 虚拟低音（心理声学低音增强）参数边界 ───────────────────────────
+   * 分频点决定「哪一段低频被拿去造谐波」：小耳机 150~300，书架箱 80~120，
+   * 更低的分频点没有意义（那一段本来就能重放，不需要补）。
+   * 谐波带宽取分频点的 6 倍：再往上会碰到人声齿音区，听起来是「刺」不是「厚」。 */
+  var VB_FC_MIN = 60;
+  var VB_FC_MAX = 300;
+  var VB_HARMONIC_RATIO = 6;
+  /* 支路输出的归一化系数：整流后的谐波比原信号弱，直接按 1:1 混进去听不出来 */
+  var VB_MIX_SCALE = 0.55;
+  var VB_DRIVE = 2;
+  var VB_CURVE_POINTS = 2048;
+  var vbCurveCache = null;
+
+  /* 半波软整流的查表曲线：正半周做饱和、负半周归零。
+   * 负半周归零 → 产生全偶次 + 奇次谐波（大脑靠这组谐波「补」出缺失的基频）；
+   * 用 1-exp 而不是硬削，是为了避免把低频直接变成方波（那是失真，不是低音）。
+   * 代价是会引入直流偏移，所以后面必须跟一级 highpass。 */
+  function virtualBassCurve() {
+    if (vbCurveCache) return vbCurveCache;
+    var c = new Float32Array(VB_CURVE_POINTS);
+    var k = 3;
+    var norm = 1 - Math.exp(-k);
+    for (var i = 0; i < VB_CURVE_POINTS; i++) {
+      var x = (i / (VB_CURVE_POINTS - 1)) * 2 - 1;
+      c[i] = x > 0 ? (1 - Math.exp(-k * x)) / norm : 0;
+    }
+    vbCurveCache = c;
+    return c;
+  }
 
   function clamp(v, min, max) {
     v = Number(v);
@@ -79,8 +127,17 @@
       surroundWidth: 1,
       surroundAmbience: 0,
       /* 中置分离（人声 / 伴奏双推子）：1 = 原样，0 = 完全去掉 */
+      centerEnabled: false,
       midGain: 1,
-      sideGain: 1
+      sideGain: 1,
+      /* 3D 丽音：交叉差分延迟，默认关（mix=0 时逐样本直通） */
+      haasEnabled: false,
+      haasDelayMs: 22,
+      haasMix: 0.28,
+      /* 虚拟低音：并联支路，关闭时 mix=0，总和节点只剩原信号 */
+      vbEnabled: false,
+      vbCrossoverHz: 150,
+      vbAmount: 0.45
     };
   }
 
@@ -99,8 +156,15 @@
       if (raw.surroundEnabled === true) out.surroundEnabled = true;
       if (raw.surroundWidth != null) out.surroundWidth = clamp(raw.surroundWidth, 0, 2);
       if (raw.surroundAmbience != null) out.surroundAmbience = clamp(raw.surroundAmbience, 0, 1);
+      if (raw.centerEnabled === true) out.centerEnabled = true;
       if (raw.midGain != null) out.midGain = clamp(raw.midGain, 0, 2);
       if (raw.sideGain != null) out.sideGain = clamp(raw.sideGain, 0, 2);
+      if (raw.haasEnabled === true) out.haasEnabled = true;
+      if (raw.haasDelayMs != null) out.haasDelayMs = clamp(raw.haasDelayMs, HAAS_DELAY_MIN, HAAS_DELAY_MAX);
+      if (raw.haasMix != null) out.haasMix = clamp(raw.haasMix, 0, HAAS_MIX_LIMIT);
+      if (raw.vbEnabled === true) out.vbEnabled = true;
+      if (raw.vbCrossoverHz != null) out.vbCrossoverHz = clamp(raw.vbCrossoverHz, VB_FC_MIN, VB_FC_MAX);
+      if (raw.vbAmount != null) out.vbAmount = clamp(raw.vbAmount, 0, 1);
       // 'custom' 也要能回读：拖过 EQ 后预设名是 custom，否则刷新会显示「平坦」却是自定义曲线
       if (typeof raw.preset === 'string' && (PRESETS[raw.preset] || raw.preset === 'custom')) out.preset = raw.preset;
     } catch (_) {}
@@ -184,9 +248,40 @@
       setParam(chain.surround.g2.gain, surOn ? 0.35 * settings.surroundAmbience : 0, ramp);
       /* 中置分离与人声/伴奏推子不受 surroundEnabled 控制：它们是独立的一组。
          mid=side=1 时与直通等价；压低 mid 时按比例给低音补偿（0 → 0dB，0.5 → +2dB）。 */
-      setParam(chain.surround.midGain.gain, settings.midGain, ramp);
-      setParam(chain.surround.sideGain.gain, settings.sideGain, ramp);
-      setParam(chain.surround.bassComp.gain, (1 - settings.midGain) * 4, ramp);
+      /* 中置分离有独立开关：关掉时 mid/side 回 1、补偿回 0dB（严格中性），
+         滑块保持原值不丢，下次打开还是上次那组参数。 */
+      var cenOn = !!settings.centerEnabled;
+      var effMid = cenOn ? settings.midGain : 1;
+      var effSide = cenOn ? settings.sideGain : 1;
+      setParam(chain.surround.midGain.gain, effMid, ramp);
+      setParam(chain.surround.sideGain.gain, effSide, ramp);
+      setParam(chain.surround.bassComp.gain, (1 - effMid) * 4, ramp);
+    }
+    if (chain.haas) {
+      /* 关闭时 k=0：xLR/xRL 两个负增益归零，输出等于两路 dry 直通，
+         与输入逐样本相同 —— 和 surround 用同一套「关掉必须严格中性」的约束。 */
+      var hOn = !!settings.haasEnabled;
+      var k = hOn ? clamp(settings.haasMix, 0, HAAS_MIX_LIMIT) : 0;
+      /* k=0 时给 0 而不是 -0：-0 在 Web Audio 里等价，但读出来会让探针误判成「非零」 */
+      var kGain = k > 0 ? -k : 0;
+      setParam(chain.haas.xLR.gain, kGain, ramp);
+      setParam(chain.haas.xRL.gain, kGain, ramp);
+      var dSec = clamp(settings.haasDelayMs, HAAS_DELAY_MIN, HAAS_DELAY_MAX) / 1000;
+      /* delayTime 拉长 ramp 会被听成变调（读取指针平滑移动 = doppler）：
+         拖滑块时给 20ms 以内的小平滑，别用 30ms 的通用 ramp。 */
+      setParam(chain.haas.delayL.delayTime, dSec, Math.min(ramp, 20));
+      setParam(chain.haas.delayR.delayTime, dSec, Math.min(ramp, 20));
+    }
+    if (chain.vbs) {
+      /* 关闭时 mix=0：总和节点只剩原信号（vbSum.gain=1 且只有直连那一路），逐样本直通。 */
+      var vOn = !!settings.vbEnabled;
+      var vFc = clamp(settings.vbCrossoverHz, VB_FC_MIN, VB_FC_MAX);
+      var nyq = (Number(chain.ctx && chain.ctx.sampleRate) || 44100) / 2 - 200;
+      setParam(chain.vbs.lowpass.frequency, Math.min(vFc, nyq), ramp);
+      setParam(chain.vbs.dcBlock.frequency, Math.min(vFc * 1.1, nyq), ramp);
+      setParam(chain.vbs.bandLimit.frequency, Math.min(vFc * VB_HARMONIC_RATIO, nyq), ramp);
+      setParam(chain.vbs.mix.gain,
+        (vOn && chain.vbs.shaper) ? clamp(settings.vbAmount, 0, 1) * VB_MIX_SCALE : 0, ramp);
     }
     /* 故意不碰 antiClick.gain：它是 seek/换源的 8ms 短淡变，
        用户拖 EQ 或响度自适应收敛时都不能把它强行拉回 1。 */
@@ -323,8 +418,79 @@
     surOutR.connect(surMerger, 0, 1);
     surMerger.connect(surBassComp);
 
-    if (safetyLimiter) { surBassComp.connect(safetyLimiter); safetyLimiter.connect(antiClick); }
-    else surBassComp.connect(antiClick);
+    /* ── 3D 丽音：交叉差分延迟（ViPER 差分环绕的同构实现）──────────────
+     *   out_L = in_L − k·HP(delay(in_R, d))
+     *   out_R = in_R − k·HP(delay(in_L, d))
+     * 相减而不是相加：侧向能量被放大、总能量不涨，所以不会像「只延迟一路」
+     * 那样糊成一坨；也不做单边延迟——那套会让幻象中心偏向先到的一侧
+     * （酷狗 3D 丽音被吐槽「左耳声音更大」就是这个代价）。
+     * 延迟支路先过 300Hz 高通：低频不参与差分，bass 不会被梳状滤波削掉。
+     * 关掉时 k=0，两路 dry 原样合流，与输入逐样本相同。 */
+    var haasSplitter = ctx.createChannelSplitter(2);
+    var haasDryL = ctx.createGain(); haasDryL.gain.value = 1;
+    var haasDryR = ctx.createGain(); haasDryR.gain.value = 1;
+    var haasHpL = ctx.createBiquadFilter();
+    haasHpL.type = 'highpass'; haasHpL.frequency.value = HAAS_FOCUS_HZ; haasHpL.Q.value = 0.707;
+    var haasHpR = ctx.createBiquadFilter();
+    haasHpR.type = 'highpass'; haasHpR.frequency.value = HAAS_FOCUS_HZ; haasHpR.Q.value = 0.707;
+    /* maxDelayTime 给 50ms：上限 35ms 留余量，写超了 Chromium 会抛 RangeError */
+    var haasDelayL = ctx.createDelay(0.05); haasDelayL.delayTime.value = settings.haasDelayMs / 1000;
+    var haasDelayR = ctx.createDelay(0.05); haasDelayR.delayTime.value = settings.haasDelayMs / 1000;
+    /* 两个负增益的初值是 0（=关闭）；符号在 applyAll 里给，这里只是占位 */
+    var haasXLR = ctx.createGain(); haasXLR.gain.value = 0;
+    var haasXRL = ctx.createGain(); haasXRL.gain.value = 0;
+    var haasMerger = ctx.createChannelMerger(2);
+
+    /* ── 虚拟低音（心理声学低音增强）：并联谐波支路 ──────────────────────
+     * 原信号照常走 vbSum；另一路取低频 → 软整流造谐波 → 掐掉基频和直流 →
+     * 限带后按比例混回。耳朵听到的是 2f/3f/4f 这组谐波，「补」出纸盆根本
+     * 推不出来的那个基频——这是小耳机/笔记本外放唯一能真正「有低频」的办法，
+     * 用 EQ 抬 62Hz 只会让它更响更糊。
+     * 关掉时 vbMix=0，vbSum 只剩直连那一路，与输入逐样本相同。 */
+    var vbSum = ctx.createGain(); vbSum.gain.value = 1;
+    var vbLowpass = ctx.createBiquadFilter();
+    vbLowpass.type = 'lowpass'; vbLowpass.frequency.value = settings.vbCrossoverHz; vbLowpass.Q.value = 0.707;
+    var vbPre = ctx.createGain(); vbPre.gain.value = VB_DRIVE;
+    var vbShaper = typeof ctx.createWaveShaper === 'function' ? ctx.createWaveShaper() : null;
+    if (vbShaper) { vbShaper.curve = virtualBassCurve(); vbShaper.oversample = '2x'; }
+    /* 整流会引入直流偏移：这一级必须存在，否则会往功放灌直流 */
+    var vbDcBlock = ctx.createBiquadFilter();
+    vbDcBlock.type = 'highpass'; vbDcBlock.frequency.value = settings.vbCrossoverHz * 1.1; vbDcBlock.Q.value = 0.707;
+    var vbBandLimit = ctx.createBiquadFilter();
+    vbBandLimit.type = 'lowpass';
+    vbBandLimit.frequency.value = Math.min(settings.vbCrossoverHz * VB_HARMONIC_RATIO, nyquistGuard);
+    vbBandLimit.Q.value = 0.707;
+    var vbMix = ctx.createGain(); vbMix.gain.value = 0;
+
+    surBassComp.connect(vbSum);
+    surBassComp.connect(vbLowpass);
+    vbLowpass.connect(vbPre);
+    if (vbShaper) {
+      vbPre.connect(vbShaper);
+      vbShaper.connect(vbDcBlock);
+    } else {
+      /* 没有 WaveShaperNode 的内核上整条支路无效，主信号仍直通（applyAll 会把 mix 压成 0） */
+      vbPre.connect(vbDcBlock);
+    }
+    vbDcBlock.connect(vbBandLimit);
+    vbBandLimit.connect(vbMix);
+    vbMix.connect(vbSum);
+    vbSum.connect(haasSplitter);
+    haasSplitter.connect(haasDryL, 0);
+    haasSplitter.connect(haasDryR, 1);
+    haasDryL.connect(haasMerger, 0, 0);
+    haasDryR.connect(haasMerger, 0, 1);
+    haasSplitter.connect(haasHpL, 0);
+    haasHpL.connect(haasDelayL);
+    haasDelayL.connect(haasXLR);
+    haasXLR.connect(haasMerger, 0, 1);
+    haasSplitter.connect(haasHpR, 1);
+    haasHpR.connect(haasDelayR);
+    haasDelayR.connect(haasXRL);
+    haasXRL.connect(haasMerger, 0, 0);
+
+    if (safetyLimiter) { haasMerger.connect(safetyLimiter); safetyLimiter.connect(antiClick); }
+    else haasMerger.connect(antiClick);
     // antiClick 必须在 limiter 之后：否则压缩器 release 会把 8ms 淡出的尾巴补响
     if (panner) antiClick.connect(panner);
     chain = {
@@ -350,6 +516,30 @@
           surWidth, surMidGain, surSideGain, surBassComp, surHp, surD1, surD2,
           surG1, surG2, surInvert, surSum, surSumNeg, surOutL, surOutR, surMerger]
       },
+      haas: {
+        splitter: haasSplitter,
+        dryL: haasDryL,
+        dryR: haasDryR,
+        hpL: haasHpL,
+        hpR: haasHpR,
+        delayL: haasDelayL,
+        delayR: haasDelayR,
+        xLR: haasXLR,
+        xRL: haasXRL,
+        merger: haasMerger,
+        nodes: [haasSplitter, haasDryL, haasDryR, haasHpL, haasHpR,
+          haasDelayL, haasDelayR, haasXLR, haasXRL, haasMerger]
+      },
+      vbs: {
+        sum: vbSum,
+        lowpass: vbLowpass,
+        pre: vbPre,
+        shaper: vbShaper,
+        dcBlock: vbDcBlock,
+        bandLimit: vbBandLimit,
+        mix: vbMix,
+        nodes: [vbSum, vbLowpass, vbPre, vbShaper, vbDcBlock, vbBandLimit, vbMix]
+      },
       exit: panner || antiClick
     };
     connectMeter(inputNode);
@@ -364,6 +554,8 @@
     disconnectMeter(chain.input);
     var nodes = chain.eq.concat([chain.preamp, chain.loudness, chain.safetyLimiter, chain.antiClick, chain.panner, chain.meter]);
     if (chain.surround && chain.surround.nodes) nodes = nodes.concat(chain.surround.nodes);
+    if (chain.haas && chain.haas.nodes) nodes = nodes.concat(chain.haas.nodes);
+    if (chain.vbs && chain.vbs.nodes) nodes = nodes.concat(chain.vbs.nodes);
     nodes.forEach(function (n) { if (n) { try { n.disconnect(); } catch (_) {} } });
     chain = null;
     analyserNode = null;
@@ -514,6 +706,8 @@
     toggleButton('audio-tuning-replaygain-toggle', settings.replayGainEnabled);
     toggleButton('audio-tuning-anticlick-toggle', settings.antiClickEnabled);
     toggleButton('audio-tuning-surround-toggle', settings.surroundEnabled);
+    toggleButton('audio-tuning-haas-toggle', settings.haasEnabled);
+    toggleButton('audio-tuning-bass-toggle', settings.vbEnabled);
     var active = global.document.activeElement;
     var surW = el('at-surround-width');
     var surWV = el('at-surround-width-v');
@@ -555,9 +749,22 @@
       }
     }
     if (surAV) surAV.textContent = Math.round(settings.surroundAmbience * 100) + '%';
-    /* 关掉时两个滑块压暗，但保留数值（用户能看出关着的是哪套参数） */
+    /* 开关联动展开/收起：开着才把滑块摊开，关掉收起（保留数值，下次打开还是上次那组） */
+    toggleButton('audio-tuning-center-toggle', settings.centerEnabled);
+    var surSliders = el('audio-tuning-surround-sliders');
+    if (surSliders) surSliders.classList.toggle('is-open', !!settings.surroundEnabled);
+    var cenSliders = el('audio-tuning-center-sliders');
+    if (cenSliders) cenSliders.classList.toggle('is-open', !!settings.centerEnabled);
+    var haasSliders = el('audio-tuning-haas-sliders');
+    if (haasSliders) haasSliders.classList.toggle('is-open', !!settings.haasEnabled);
+    var bassSliders = el('audio-tuning-bass-sliders');
+    if (bassSliders) bassSliders.classList.toggle('is-open', !!settings.vbEnabled);
     var surBody = el('audio-tuning-surround-body');
     if (surBody) surBody.classList.toggle('is-off', !settings.surroundEnabled);
+    var haasBody = el('audio-tuning-haas-body');
+    if (haasBody) haasBody.classList.toggle('is-off', !settings.haasEnabled);
+    var bassBody = el('audio-tuning-bass-body');
+    if (bassBody) bassBody.classList.toggle('is-off', !settings.vbEnabled);
     var midEl = el('at-center-mid');
     var midV = el('at-center-mid-v');
     if (midEl && midEl !== active) {
@@ -576,6 +783,44 @@
       }
     }
     if (sideV) sideV.textContent = Math.round(settings.sideGain * 100) + '%';
+    var haasMixEl = el('at-haas-mix');
+    var haasMixV = el('at-haas-mix-v');
+    if (haasMixEl && haasMixEl !== active) {
+      haasMixEl.value = String(Math.round(settings.haasMix * 100));
+      if (haasMixEl.style && typeof haasMixEl.style.setProperty === 'function') {
+        haasMixEl.style.setProperty('--at-fill', Math.round((settings.haasMix / HAAS_MIX_LIMIT) * 100) + '%');
+      }
+    }
+    if (haasMixV) haasMixV.textContent = Math.round(settings.haasMix * 100) + '%';
+    var haasDelayEl = el('at-haas-delay');
+    var haasDelayV = el('at-haas-delay-v');
+    if (haasDelayEl && haasDelayEl !== active) {
+      haasDelayEl.value = String(Math.round(settings.haasDelayMs));
+      if (haasDelayEl.style && typeof haasDelayEl.style.setProperty === 'function') {
+        haasDelayEl.style.setProperty('--at-fill',
+          Math.round(((settings.haasDelayMs - HAAS_DELAY_MIN) / (HAAS_DELAY_MAX - HAAS_DELAY_MIN)) * 100) + '%');
+      }
+    }
+    if (haasDelayV) haasDelayV.textContent = Math.round(settings.haasDelayMs) + 'ms';
+    var bassFcEl = el('at-bass-freq');
+    var bassFcV = el('at-bass-freq-v');
+    if (bassFcEl && bassFcEl !== active) {
+      bassFcEl.value = String(Math.round(settings.vbCrossoverHz));
+      if (bassFcEl.style && typeof bassFcEl.style.setProperty === 'function') {
+        bassFcEl.style.setProperty('--at-fill',
+          Math.round(((settings.vbCrossoverHz - VB_FC_MIN) / (VB_FC_MAX - VB_FC_MIN)) * 100) + '%');
+      }
+    }
+    if (bassFcV) bassFcV.textContent = Math.round(settings.vbCrossoverHz) + 'Hz';
+    var bassAmtEl = el('at-bass-amount');
+    var bassAmtV = el('at-bass-amount-v');
+    if (bassAmtEl && bassAmtEl !== active) {
+      bassAmtEl.value = String(Math.round(settings.vbAmount * 100));
+      if (bassAmtEl.style && typeof bassAmtEl.style.setProperty === 'function') {
+        bassAmtEl.style.setProperty('--at-fill', Math.round(settings.vbAmount * 100) + '%');
+      }
+    }
+    if (bassAmtV) bassAmtV.textContent = Math.round(settings.vbAmount * 100) + '%';
     for (var i = 0; i < EQ_BANDS.length; i++) {
       var input = el('at-eq-' + i);
       var label = el('at-eq-v-' + i);
@@ -612,6 +857,8 @@
         '响度' + (settings.replayGainEnabled ? fmtDb(runtime.appliedDb) + 'dB' : '关')
       ];
       if (settings.surroundEnabled) parts.push('环绕' + Math.round(settings.surroundWidth * 100) + '%');
+      if (settings.haasEnabled) parts.push('3D' + Math.round(settings.haasMix * 100) + '%');
+      if (settings.vbEnabled) parts.push('低音' + Math.round(settings.vbAmount * 100) + '%');
       if (Math.abs(settings.midGain - 1) > 0.001 || Math.abs(settings.sideGain - 1) > 0.001) {
         parts.push('人声' + Math.round(settings.midGain * 100) + '/' + Math.round(settings.sideGain * 100));
       }
@@ -645,47 +892,11 @@
     html += '</div>';
     rows.innerHTML = html;
 
-    /* 立体环绕 / 人声伴奏也用同一套竖向推子，避免面板里出现两种滑块语言。
-     * 结构与 .at-eq-rack 完全一致，只是量纲是 0~200% / 0~100%。 */
-    function spatialRack(items) {
-      var out = '<div class="at-eq-rack at-eq-rack-spatial">';
-      for (var k = 0; k < items.length; k++) {
-        var it = items[k];
-        var f = Math.round((it.value / it.max) * 100);
-        out += '<div class="at-eq-band">' +
-          '<div class="at-eq-slot">' +
-          '<input id="' + it.id + '" class="at-eq-range" type="range" min="0" max="' + it.max +
-          '" step="' + it.step + '" value="' + it.value + '" data-spatial="' + it.key +
-          '" style="--at-fill:' + f + '%" aria-label="' + it.aria + '">' +
-          '</div>' +
-          '<span class="at-eq-freq">' + it.label + '</span>' +
-          '<span class="at-eq-val" id="' + it.id + '-v">' + it.value + it.unit + '</span>' +
-          '</div>';
-      }
-      return out + '</div>';
-    }
-    var spatialRows = el('audio-tuning-spatial-rows');
-    if (spatialRows && spatialRows.getAttribute('data-built') !== '1') {
-      spatialRows.setAttribute('data-built', '1');
-      spatialRows.innerHTML = spatialRack([
-        { id: 'at-surround-width', key: 'width', label: '声场', unit: '%', max: 200, step: 5, value: Math.round(settings.surroundWidth * 100), aria: '声场宽度百分比' },
-        { id: 'at-surround-ambience', key: 'ambience', label: '反射', unit: '%', max: 100, step: 5, value: Math.round(settings.surroundAmbience * 100), aria: '空间反射强度' }
-      ]);
-    }
-    var centerRows = el('audio-tuning-center-rows');
-    if (centerRows && centerRows.getAttribute('data-built') !== '1') {
-      centerRows.setAttribute('data-built', '1');
-      centerRows.innerHTML = spatialRack([
-        { id: 'at-center-mid', key: 'mid', label: '人声', unit: '%', max: 200, step: 5, value: Math.round(settings.midGain * 100), aria: '中置（人声）增益百分比' },
-        { id: 'at-center-side', key: 'side', label: '伴奏', unit: '%', max: 200, step: 5, value: Math.round(settings.sideGain * 100), aria: '侧声道（伴奏）增益百分比' }
-      ]);
-    }
     /* 预设卡片的频谱缩略：按预设自己的曲线画十根柱子。
      * 整块包 try/catch —— 单测里的 document/元素是能力极简的桩，
      * 少一个 querySelector 就把 buildUi 整个打断，得不偿失。 */
     try {
-      /* 预设卡片的频谱缩略：按预设自己的曲线画十根柱子，一眼能看出风格差异。
-       * 走宿主元素 + 能力检测，不直接 document.querySelectorAll —— 单测里的 document
+      /* 走宿主元素 + 能力检测，不直接 document.querySelectorAll —— 单测里的 document
        * 是只有 getElementById 的桩，直接调会 TypeError 把整个 buildUi 打断。 */
       var presetHost = el('audio-tuning-presets');
       if (presetHost && typeof presetHost.querySelectorAll === 'function') Array.prototype.forEach.call(presetHost.querySelectorAll('button[data-preset]'), function (btn) {
@@ -699,8 +910,9 @@
         }
         wave.innerHTML = bars;
       });
-
     } catch (_) {}
+
+    /* 十段 EQ 的输入委托：整排共用一处监听（之前误删过一次，别再动） */
     rows.addEventListener('input', function (e) {
       var t = e.target;
       if (!t || t.getAttribute('data-band') == null) return;
@@ -748,6 +960,64 @@
       scheduleSave();
     });
     if (surA) surA.addEventListener('change', function () { saveSettings(); });
+    /* 3D 丽音两根滑块：拖动视为想听效果（与 surround 同一套语义），
+     * 但强度为 0 时不自动开——0 等于没效果，开了只会让人以为坏了。 */
+    var haasMix = el('at-haas-mix');
+    if (haasMix) haasMix.addEventListener('input', function (e) {
+      settings.haasMix = clamp(e.target.value, 0, HAAS_MIX_LIMIT * 100) / 100;
+      if (!settings.haasEnabled && settings.haasMix > 0.001) settings.haasEnabled = true;
+      if (haasMix.style && typeof haasMix.style.setProperty === 'function') {
+        haasMix.style.setProperty('--at-fill', Math.round((settings.haasMix / HAAS_MIX_LIMIT) * 100) + '%');
+      }
+      var mv = el('at-haas-mix-v');
+      if (mv) mv.textContent = Math.round(settings.haasMix * 100) + '%';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (haasMix) haasMix.addEventListener('change', function () { saveSettings(); });
+    var haasDelay = el('at-haas-delay');
+    if (haasDelay) haasDelay.addEventListener('input', function (e) {
+      settings.haasDelayMs = clamp(e.target.value, HAAS_DELAY_MIN, HAAS_DELAY_MAX);
+      if (!settings.haasEnabled && settings.haasMix > 0.001) settings.haasEnabled = true;
+      if (haasDelay.style && typeof haasDelay.style.setProperty === 'function') {
+        haasDelay.style.setProperty('--at-fill',
+          Math.round(((settings.haasDelayMs - HAAS_DELAY_MIN) / (HAAS_DELAY_MAX - HAAS_DELAY_MIN)) * 100) + '%');
+      }
+      var dv = el('at-haas-delay-v');
+      if (dv) dv.textContent = Math.round(settings.haasDelayMs) + 'ms';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (haasDelay) haasDelay.addEventListener('change', function () { saveSettings(); });
+    /* 虚拟低音两根滑块：分频点跟设备走（笔记本 150–300，书架箱 80–120），
+       动了就视为要用这个效果，自动开开关。 */
+    var bassFc = el('at-bass-freq');
+    if (bassFc) bassFc.addEventListener('input', function (e) {
+      settings.vbCrossoverHz = clamp(e.target.value, VB_FC_MIN, VB_FC_MAX);
+      if (!settings.vbEnabled && settings.vbAmount > 0.001) settings.vbEnabled = true;
+      if (bassFc.style && typeof bassFc.style.setProperty === 'function') {
+        bassFc.style.setProperty('--at-fill',
+          Math.round(((settings.vbCrossoverHz - VB_FC_MIN) / (VB_FC_MAX - VB_FC_MIN)) * 100) + '%');
+      }
+      var fv = el('at-bass-freq-v');
+      if (fv) fv.textContent = Math.round(settings.vbCrossoverHz) + 'Hz';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (bassFc) bassFc.addEventListener('change', function () { saveSettings(); });
+    var bassAmt = el('at-bass-amount');
+    if (bassAmt) bassAmt.addEventListener('input', function (e) {
+      settings.vbAmount = clamp(e.target.value, 0, 100) / 100;
+      if (!settings.vbEnabled && settings.vbAmount > 0.001) settings.vbEnabled = true;
+      if (bassAmt.style && typeof bassAmt.style.setProperty === 'function') {
+        bassAmt.style.setProperty('--at-fill', Math.round(settings.vbAmount * 100) + '%');
+      }
+      var av = el('at-bass-amount-v');
+      if (av) av.textContent = Math.round(settings.vbAmount * 100) + '%';
+      scheduleApply();
+      scheduleSave();
+    });
+    if (bassAmt) bassAmt.addEventListener('change', function () { saveSettings(); });
     var presets = el('audio-tuning-presets');
     if (presets) presets.addEventListener('click', function (e) {
       var b = e.target && e.target.closest ? e.target.closest('button[data-preset]') : null;
@@ -760,6 +1030,14 @@
     if (!PRESETS[name]) return;
     settings.eq = PRESETS[name].slice();
     settings.preset = name;
+    /* 3D 丽音这类预设自带音效级：点一下 = 整套一键音效，不只是改 EQ 曲线。
+       普通预设（flat/pop/rock/vocal）没有这一项，行为保持不变。 */
+    var fx = PRESET_FX[name];
+    if (fx) {
+      settings.haasEnabled = true;
+      if (fx.haasDelayMs != null) settings.haasDelayMs = clamp(fx.haasDelayMs, HAAS_DELAY_MIN, HAAS_DELAY_MAX);
+      if (fx.haasMix != null) settings.haasMix = clamp(fx.haasMix, 0, HAAS_MIX_LIMIT);
+    }
     saveSettings();
     applyAll();
     syncUi();
@@ -773,6 +1051,21 @@
         Math.abs(settings.surroundWidth - 1) < 0.001 && settings.surroundAmbience < 0.001) {
       settings.surroundWidth = 1.3;
       settings.surroundAmbience = 0.12;
+    }
+    /* 同理：人声/伴奏 100% / 100% 等于没开，首次打开压一点人声让效果可见 */
+    if (key === 'centerEnabled' && settings.centerEnabled &&
+        Math.abs(settings.midGain - 1) < 0.001 && Math.abs(settings.sideGain - 1) < 0.001) {
+      settings.midGain = 0.6;
+    }
+    /* 3D 丽音同理：强度 0 时开关本身没有可听变化，打开时补一组默认值 */
+    if (key === 'haasEnabled' && settings.haasEnabled && settings.haasMix < 0.001) {
+      settings.haasMix = 0.28;
+      settings.haasDelayMs = 22;
+    }
+    /* 虚拟低音：强度 0 时开了等于没效果，补一组默认值 */
+    if (key === 'vbEnabled' && settings.vbEnabled && settings.vbAmount < 0.001) {
+      settings.vbAmount = 0.45;
+      settings.vbCrossoverHz = 150;
     }
     saveSettings();
     if (key === 'replayGainEnabled' && !settings.replayGainEnabled) applyLoudness(0, 'disabled');
@@ -805,6 +1098,11 @@
       cfg = cfg || {};
       if (cfg.mid != null) settings.midGain = clamp(cfg.mid, 0, 2);
       if (cfg.side != null) settings.sideGain = clamp(cfg.side, 0, 2);
+      /* 明确改了参数就视为要用这个效果；保持与「拖滑块自动开」同一套语义 */
+      if ((cfg.mid != null && Math.abs(settings.midGain - 1) > 0.001) ||
+          (cfg.side != null && Math.abs(settings.sideGain - 1) > 0.001)) {
+        settings.centerEnabled = true;
+      }
       saveSettings();
       applyAll();
       syncUi();
@@ -812,6 +1110,42 @@
     },
     getCenter: function () {
       return { mid: settings.midGain, side: settings.sideGain };
+    },
+    /* 3D 丽音（差分延迟环绕）：delayMs 8~35，mix 0~0.6 */
+    setHaas: function (cfg) {
+      cfg = cfg || {};
+      if (cfg.enabled != null) settings.haasEnabled = !!cfg.enabled;
+      if (cfg.delayMs != null) settings.haasDelayMs = clamp(cfg.delayMs, HAAS_DELAY_MIN, HAAS_DELAY_MAX);
+      if (cfg.mix != null) settings.haasMix = clamp(cfg.mix, 0, HAAS_MIX_LIMIT);
+      saveSettings();
+      applyAll();
+      syncUi();
+      return settings.haasEnabled;
+    },
+    getHaas: function () {
+      return {
+        enabled: !!settings.haasEnabled,
+        delayMs: settings.haasDelayMs,
+        mix: settings.haasMix
+      };
+    },
+    /* 虚拟低音（心理声学低音增强）：crossoverHz 60~300，amount 0~1 */
+    setVirtualBass: function (cfg) {
+      cfg = cfg || {};
+      if (cfg.enabled != null) settings.vbEnabled = !!cfg.enabled;
+      if (cfg.crossoverHz != null) settings.vbCrossoverHz = clamp(cfg.crossoverHz, VB_FC_MIN, VB_FC_MAX);
+      if (cfg.amount != null) settings.vbAmount = clamp(cfg.amount, 0, 1);
+      saveSettings();
+      applyAll();
+      syncUi();
+      return settings.vbEnabled;
+    },
+    getVirtualBass: function () {
+      return {
+        enabled: !!settings.vbEnabled,
+        crossoverHz: settings.vbCrossoverHz,
+        amount: settings.vbAmount
+      };
     },
     getSurround: function () {
       return {
@@ -842,6 +1176,23 @@
           bassCompDb: c.surround.bassComp.gain.value
         } : null,
         center: { mid: settings.midGain, side: settings.sideGain },
+        /* 3D 丽音的实读值：crossLR / crossRL 是负增益，为 0 就说明这一级等于没开 */
+        haas: c && c.haas ? {
+          enabled: !!settings.haasEnabled,
+          dry: [c.haas.dryL.gain.value, c.haas.dryR.gain.value],
+          crossLR: c.haas.xLR.gain.value,
+          crossRL: c.haas.xRL.gain.value,
+          delayMs: Math.round(c.haas.delayL.delayTime.value * 1000)
+        } : null,
+        /* 虚拟低音：mix 为 0 就说明支路没接通；shaper 为 null 说明内核不支持、已强制静音 */
+        vbs: c && c.vbs ? {
+          enabled: !!settings.vbEnabled,
+          mix: c.vbs.mix.gain.value,
+          crossoverHz: Math.round(c.vbs.lowpass.frequency.value),
+          dcBlockHz: Math.round(c.vbs.dcBlock.frequency.value),
+          bandLimitHz: Math.round(c.vbs.bandLimit.frequency.value),
+          hasShaper: !!c.vbs.shaper
+        } : null,
         /* 这三项决定「有没有声音走进 Web Audio」：
            audioRouted=false 说明元素还没接到图里（没开始播放或换过源）；
            wasapiActive=true 时声音走的是 WASAPI，但取样点在 gainNode 之后，
@@ -871,7 +1222,13 @@
         eq: settings.eq.slice(),
         preampDb: settings.preampDb,
         balance: settings.balance,
-        preset: settings.preset
+        preset: settings.preset,
+        haasEnabled: settings.haasEnabled,
+        haasDelayMs: settings.haasDelayMs,
+        haasMix: settings.haasMix,
+        vbEnabled: settings.vbEnabled,
+        vbCrossoverHz: settings.vbCrossoverHz,
+        vbAmount: settings.vbAmount
       };
     },
     getStatus: function () {
@@ -912,6 +1269,9 @@
   global.toggleAudioTuningReplayGain = function () { return toggleOption('replayGainEnabled'); };
   global.toggleAudioTuningAntiClick = function () { return toggleOption('antiClickEnabled'); };
   global.toggleAudioTuningSurround = function () { return toggleOption('surroundEnabled'); };
+  global.toggleAudioTuningCenter = function () { return toggleOption('centerEnabled'); };
+  global.toggleAudioTuningHaas = function () { return toggleOption('haasEnabled'); };
+  global.toggleAudioTuningBass = function () { return toggleOption('vbEnabled'); };
   global.setAudioTuningPreset = setPreset;
   global.resetAudioTuning = function () { setPreset('flat'); };
 

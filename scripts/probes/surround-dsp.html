@@ -21,6 +21,8 @@
       var low = Math.sin(2 * Math.PI * 60 * t) * 0.25;
       var v = sine + low;
       if (mode === 'low') { var lv = Math.sin(2 * Math.PI * 1000 * t) * 0.1; L[i] = lv; R[i] = 0; }
+      else if (mode === 'bass60') { L[i] = Math.sin(2 * Math.PI * 60 * t) * 0.3; R[i] = 0; }
+      else if (mode === 'impulse') { L[i] = i === 1000 ? 0.8 : 0; R[i] = 0; }
       else if (mode === 'center') { L[i] = v; R[i] = v; }
       else if (mode === 'antiphase') { L[i] = v; R[i] = -v; }
       else { L[i] = v; R[i] = 0; }          // hard-left
@@ -41,6 +43,9 @@
       ambience: cfg.ambience == null ? 0 : cfg.ambience
     });
     tuning.setCenter({ mid: cfg.mid == null ? 1 : cfg.mid, side: cfg.side == null ? 1 : cfg.side });
+    /* 每次都要显式给一遍：setHaas 会落 localStorage，不重置会把上一轮的开关带进来 */
+    tuning.setHaas(cfg.haas || { enabled: false });
+    tuning.setVirtualBass(cfg.vb || { enabled: false });
 
     var head = ctx.createGain();
     var out = tuning.install(ctx, head);
@@ -66,6 +71,43 @@
     var d = buf.getChannelData(ch), p = 0;
     for (var i = 0; i < d.length; i++) p = Math.max(p, Math.abs(d[i]));
     return p;
+  }
+  /* 区间 RMS：测脉冲响应落在哪一段时间里（定位延迟量） */
+  function energyRange(buf, ch, fromSec, toSec) {
+    var d = buf.getChannelData(ch);
+    var a = Math.max(0, Math.round(fromSec * SR));
+    var b = Math.min(d.length, Math.round(toSec * SR));
+    var s = 0;
+    for (var i = a; i < b; i++) s += d[i] * d[i];
+    return Math.sqrt(s / Math.max(1, b - a));
+  }
+  /* 单频幅度：直接在目标频率上做相关，比 FFT 省事且够准（整段稳态正弦） */
+  function toneMag(buf, ch, freqHz) {
+    var d = buf.getChannelData(ch);
+    var from = Math.round(0.12 * SR);
+    var to = d.length - Math.round(0.12 * SR);
+    var re = 0, im = 0, n = 0;
+    for (var i = from; i < to; i++) {
+      var ph = 2 * Math.PI * freqHz * (i / SR);
+      re += d[i] * Math.cos(ph);
+      im -= d[i] * Math.sin(ph);
+      n++;
+    }
+    return (Math.sqrt(re * re + im * im) / Math.max(1, n)) * 2;
+  }
+  function dcOffset(buf, ch) {
+    var d = buf.getChannelData(ch), s = 0;
+    for (var i = 0; i < d.length; i++) s += d[i];
+    return s / d.length;
+  }
+  /* 峰值位置：直接回答「延迟到底是多少毫秒」，不靠猜窗口 */
+  function peakIndex(buf, ch) {
+    var d = buf.getChannelData(ch), best = 0, bi = -1;
+    for (var i = 0; i < d.length; i++) {
+      var a = Math.abs(d[i]);
+      if (a > best) { best = a; bi = i; }
+    }
+    return { ms: +(bi / SR * 1000).toFixed(2), value: +best.toFixed(6) };
   }
   /* DynamicsCompressor 带 lookahead，会给整条链加固定延迟。
      判定「关闭态是否透明」必须先对齐这个延迟，否则测到的是相位差不是增益差。 */
@@ -188,6 +230,66 @@
     res.antiBypassDiff = +alignedDiff(antiOff.out, antiOff.in, 0, lag).toFixed(6);
     res.antiRmsOff = +rms(antiOff.out, 0).toFixed(4);
     res.antiRmsWide = +rms(antiWide.out, 0).toFixed(4);
+
+    /* ── 6. 3D 丽音（交叉差分延迟）───────────────────────────────────────
+     * 关闭态的透明性已由第 1 项覆盖（这一级关掉时 dry 直通、交叉项为 0，
+     * chainLatencySamples 与 bypassDiff 不应因为加了这一级而变化）。
+     * 这里量「开了之后到底做了什么」，四条各自独立可判。 */
+    var hOff3d = await renderOnce('center', { enabled: false, haas: { enabled: false } });
+    var hOn3d = await renderOnce('center', { enabled: false, haas: { enabled: true, delayMs: 22, mix: 0.4 } });
+
+    /* 6a 居中人声不能偏：对称交叉结构下 L/R 必须仍然相等 */
+    res.haasCenterLRDiffOff = +lrMaxDiff(hOff3d.out).toFixed(6);
+    res.haasCenterLRDiffOn = +lrMaxDiff(hOn3d.out).toFixed(6);
+
+    /* 6b 侧向内容串到对侧：硬左输入，开 3D 后右声道从 0 变成有能量 */
+    var hSideOff = await renderOnce('hardleft', { enabled: false, haas: { enabled: false } });
+    var hSideOn = await renderOnce('hardleft', { enabled: false, haas: { enabled: true, delayMs: 22, mix: 0.4 } });
+    res.haasHardLeftROff = +rms(hSideOff.out, 1).toFixed(6);
+    res.haasHardLeftROn = +rms(hSideOn.out, 1).toFixed(5);
+    res.haasSideEnergyGainPct = +(((rms(hSideOn.out, 0) / rms(hSideOff.out, 0)) - 1) * 100).toFixed(1);
+
+    /* 6c 低频保护：60Hz 硬左，延迟支路的 300Hz 高通必须挡住它。
+          右声道若出现可观的 60Hz 能量，就说明 bass 会被梳状滤波削掉。 */
+    var hBass = await renderOnce('bass60', { enabled: false, haas: { enabled: true, delayMs: 22, mix: 0.4 } });
+    res.haasBass60LeftRms = +rms(hBass.out, 0).toFixed(4);
+    res.haasBass60RightRms = +rms(hBass.out, 1).toFixed(6);
+
+    /* 6d 延迟真的落在 22ms：输入脉冲在 22.7ms（i=1000），加上 22ms 应落在 44.7ms */
+    var hImp = await renderOnce('impulse', { enabled: false, haas: { enabled: true, delayMs: 22, mix: 0.4 } });
+    res.haasImpulseRBefore = +energyRange(hImp.out, 1, 0, 0.035).toFixed(6);
+    res.haasImpulseRWindow = +energyRange(hImp.out, 1, 0.040, 0.050).toFixed(6);
+    res.haasImpulseRAfter = +energyRange(hImp.out, 1, 0.055, 0.09).toFixed(6);
+    res.haasImpulseRPeak = peakIndex(hImp.out, 1);
+    res.haasImpulseLPeak = peakIndex(hImp.out, 0);
+    /* 参考：关掉 3D 走同一条输入，看整链本身（EQ + 限幅器）把脉冲推到哪 */
+    var hImpOff = await renderOnce('impulse', { enabled: false, haas: { enabled: false } });
+    res.impulseRefLPeak = peakIndex(hImpOff.out, 0);
+    res.impulseRefRPeak = peakIndex(hImpOff.out, 1);
+
+    /* 6e 峰值：3D 级在限幅器之前，硬左满幅输入下仍不应削波 */
+    res.haasPeakL = +peak(hSideOn.out, 0).toFixed(4);
+    res.haasPeakR = +peak(hSideOn.out, 1).toFixed(4);
+
+    /* ── 7. 虚拟低音（心理声学低音增强）────────────────────────────────
+     * 输入 60Hz 纯音（低于 150Hz 分频点）。关闭时不该有任何谐波；
+     * 打开后 120/180Hz 必须显著上升，且基频本身不能被抬多少
+     * ——「补谐波」和「抬低频」是两件事，抬低频用 EQ 就够了。 */
+    var vbOff = await renderOnce('bass60', { enabled: false, vb: { enabled: false } });
+    var vbOn = await renderOnce('bass60', {
+      enabled: false,
+      vb: { enabled: true, crossoverHz: 150, amount: 0.85 }
+    });
+    res.vbOffFund = +toneMag(vbOff.out, 0, 60).toFixed(5);
+    res.vbOnFund = +toneMag(vbOn.out, 0, 60).toFixed(5);
+    res.vbOffH2 = +toneMag(vbOff.out, 0, 120).toFixed(5);
+    res.vbOnH2 = +toneMag(vbOn.out, 0, 120).toFixed(5);
+    res.vbOffH3 = +toneMag(vbOff.out, 0, 180).toFixed(5);
+    res.vbOnH3 = +toneMag(vbOn.out, 0, 180).toFixed(5);
+    /* 直流必须被掐掉：整流支路漏 DC 会往功放灌直流 */
+    res.vbOffDc = +dcOffset(vbOff.out, 0).toFixed(6);
+    res.vbOnDc = +dcOffset(vbOn.out, 0).toFixed(6);
+    res.vbPeak = +peak(vbOn.out, 0).toFixed(4);
 
     return res;
   };

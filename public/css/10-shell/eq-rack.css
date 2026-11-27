@@ -53,7 +53,7 @@
 
 /* ---------- 预设卡片：给每个预设画一条自己的曲线 ---------- */
 /* 覆盖 shell.css 里那排纯文字小按钮。频谱柱子由 01-audio-tuning.js 按 PRESETS 生成。 */
-.audio-tuning-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 8px}
+.audio-tuning-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:10px 0 8px}
 .audio-tuning-presets button{
   display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;
   min-height:74px;padding:11px 8px 10px;border-radius:10px;
@@ -83,6 +83,12 @@
 /* 立体环绕关闭时把两个滑块压暗：数值仍可读，但要能一眼看出「这套参数现在没生效」 */
 #audio-tuning-surround-body.is-off .at-control-row{opacity:.48}
 #audio-tuning-surround-body.is-off .audio-tuning-hint{opacity:.6}
+/* 3D 丽音同一套语义：关掉压暗但保留数值 */
+#audio-tuning-haas-body.is-off .at-control-row{opacity:.48}
+#audio-tuning-haas-body.is-off .audio-tuning-hint{opacity:.6}
+/* 虚拟低音同一套语义 */
+#audio-tuning-bass-body.is-off .at-control-row{opacity:.48}
+#audio-tuning-bass-body.is-off .audio-tuning-hint{opacity:.6}
 
 /* 立体环绕 / 人声伴奏复用十段 EQ 的竖向推子：只把排布改成左对齐紧凑，
    否则 .at-eq-rack 默认按 10 列均分会把两个推子甩到两端。 */
@@ -102,3 +108,19 @@
 .at-eq-rack-spatial .at-eq-range { height: 118px; }
 /* 0dB 参考线是 dB 量纲才有的东西：这里量纲是百分比，画中间线反而误导 */
 .at-eq-rack-spatial .at-eq-slot::after { display: none; }
+
+/* ---------- 开关控制展开/收起 ----------
+ * 用 grid-template-rows 0fr → 1fr 做高度过渡，不依赖魔法数字的 max-height，
+ * 内容多长都不会被截断（max-height 写小了会把最后一行切掉）。 */
+.at-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  overflow: hidden;
+  transition: grid-template-rows .3s cubic-bezier(.16,1,.3,1), opacity .2s ease;
+}
+.at-collapse.is-open { grid-template-rows: 1fr; opacity: 1; }
+.at-collapse > .at-collapse-inner { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .at-collapse { transition: none; }
+}

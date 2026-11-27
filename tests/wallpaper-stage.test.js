@@ -139,10 +139,10 @@ test('内置壁纸与玻璃镜像必须在背景层清单里（用户要求不�
     '玻璃镜像画布必须隐藏（回读快照会露出一块半透明卡片）');
 });
 
-test('壁纸模式下禁用整屏场景样式：花火/町景/雾笺/凝彩', () => {
+test('壁纸模式下禁用整屏场景样式：花火/町景/雾笺/凝彩/隐喻', () => {
   const state = fs.readFileSync(path.join(root, 'public/js/modules/12-folia/00-folia-state.js'), 'utf8');
-  assert.match(state, /FOLIA_WALLPAPER_BLOCKED_MODES\s*=\s*\['hanabi',\s*'machi',\s*'nebbia',\s*'tempera'\]/,
-    '禁用清单必须正好是这四个整屏场景样式');
+  assert.match(state, /FOLIA_WALLPAPER_BLOCKED_MODES\s*=\s*\['hanabi',\s*'machi',\s*'nebbia',\s*'tempera',\s*'metaphor'\]/,
+    '禁用清单必须正好是这五个整屏场景样式（2026-11-27 +隐喻：它整屏铺纸，不是叠在壁纸上的效果层）');
   assert.match(state, /function foliaModeBlockedInWallpaper/, '缺少统一的判定函数');
   const panel = fs.readFileSync(path.join(root, 'public/js/modules/12-folia/04-folia-panel.js'), 'utf8');
   assert.match(panel, /foliaModeBlockedInWallpaper\(mode\.id\)/, '面板没有读取禁用判定');

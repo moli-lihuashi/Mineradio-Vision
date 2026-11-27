@@ -33,10 +33,11 @@ var foliaWorld = {
 
 var FOLIA_WORLD_INTENSITIES = ['calm', 'normal', 'chaotic'];
 
-/* 壁纸模式下**禁止使用**的样式：花火 / 町景 / 雾笺 / 凝彩。
+/* 壁纸模式下**禁止使用**的样式：花火 / 町景 / 雾笺 / 凝彩 / 隐喻。
  * 它们自己画整屏场景（不透明），桌面效果层会和壁纸、桌面图标互相盖住；
- * 在「不透明承载」打通之前，壁纸模式开着时这几个入口直接置灰。 */
-var FOLIA_WALLPAPER_BLOCKED_MODES = ['hanabi', 'machi', 'nebbia', 'tempera'];
+ * 在「不透明承载」打通之前，壁纸模式开着时这几个入口直接置灰。
+ * 隐喻同理：它整屏铺纸（纸就是主题背景色，不是透明底），不是叠在壁纸上的效果层。 */
+var FOLIA_WALLPAPER_BLOCKED_MODES = ['hanabi', 'machi', 'nebbia', 'tempera', 'metaphor'];
 
 function foliaModeBlockedInWallpaper(id) {
   if (typeof fx === 'undefined' || !fx || !fx.wallpaperMode) return false;

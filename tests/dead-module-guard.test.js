@@ -84,8 +84,10 @@ test('index-loader 与 HTML 脚本通道并集覆盖全部模块，无死文件�
   //             deferred +2 = 12-folia/18-folia-panel-host.js（Folia 面板模组宿主）
   //                         + 12-folia/19-folia-panel-icons.js（面板按钮图标换成 morphicons）
   // 2026-11-26：deferred +1 = 07-fx/09-genie-menu.js（fx 面板头部的液态拉出菜单）
+  // 2026-11-27：deferred +4 = 12-folia/0m-folia-metaphor-{paint,figures,plan}.js + 0m-folia-mode-metaphor.js
+  //             （移植 Folia 0.8 新增的「隐喻」歌词样式：绘制层 / 线稿 / 排版分镜 / 运行时）
   assert.equal(core.length, 136, 'core module count changed — update expectation deliberately');
-  assert.equal(deferred.length, 83, 'deferred module count changed — update expectation deliberately');
+  assert.equal(deferred.length, 87, 'deferred module count changed — update expectation deliberately');
   const overlap = deferred.filter((p) => core.includes(p));
   assert.deepEqual(overlap, [], 'same module must not load twice across waves');
 

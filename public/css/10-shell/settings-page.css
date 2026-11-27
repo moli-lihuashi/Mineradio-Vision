@@ -636,7 +636,7 @@ body.settings-page-open .settings-shell{transform:none}
 
 /* 均衡器预设卡：保留「频谱柱 + 名称」的原始结构，只换成设置页的描边与底色。
  * 这里不能给 button 定高 —— 它内部还有 34px 的波形区，定高会把名字挤掉。 */
-#settings-modal .audio-tuning-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+#settings-modal .audio-tuning-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
   gap:8px;margin:14px}
 #settings-modal .audio-tuning-presets button{min-height:74px;border:1px solid var(--st-line);
   border-radius:10px;background:transparent;color:var(--st-t2);font-family:inherit;font-size:11.5px;
