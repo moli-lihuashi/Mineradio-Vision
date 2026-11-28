@@ -135,6 +135,37 @@ body.desktop-shell.empty-home-active.controls-visible:not(.home-controls-locked)
 #user-btn.logged-in{padding:0 16px 0 4px;min-width:0;color:#fff;border-color:rgba(244,210,138,0.52);background:rgba(244,210,138,0.07);box-shadow:0 0 0 1px rgba(244,210,138,.08),0 14px 42px rgba(0,0,0,.28)}
 #user-btn.multi-account{height:auto;min-width:0;padding:0;flex-direction:column;align-items:flex-end;gap:7px;border:0;background:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
 #user-btn.multi-account:hover{background:transparent;border-color:transparent;box-shadow:none;transform:none;color:#fff}
+/* 多账号堆叠：默认折叠成一行，悬停/聚焦展开（2026-11-28）
+ *
+ * 原状：四颗胶囊常驻，左边缘参差 65px（实测 191/135/129/126px 宽，右边缘对齐），
+ * 因为行宽随内容走 + align-items:flex-end；四行还白占 178px 高的画面右上角。
+ *
+ * 现在：默认只留当前账号那一行（右侧用 +N 表示还有几个），鼠标移入或键盘聚焦才展开；
+ * 展开后整列等宽、行高 40。
+ *
+ * 宽度跟内容走，不写死：`width:max-content` 让整列收敛到「这批账号里最长的那一行」，
+ * 换短昵称（或登出只剩两个账号）时列宽立刻跟着缩，不会留一条空白；
+ * 昵称本身还有 132px 上限（+ 整列 232px 上限），超长昵称截断而不是把画面顶宽。
+ * 行等宽由 align-items:stretch 保证 —— 所以子项是 width:auto，别再写 width:100%。
+ *
+ * 注意：.top-account-pill 的 background / border-color / box-shadow 在 css/06-fx/glass.css
+ * 里是 !important（液态玻璃统一接管），在这一段写颜色不会生效，别浪费时间。 */
+#user-btn.multi-account{width:max-content;max-width:min(232px,42vw);align-items:stretch;gap:6px;position:relative}
+#user-btn.multi-account .top-account-pill{width:auto;height:40px;padding:0 12px 0 4px}
+#user-btn.multi-account .top-account-pill img{width:30px;height:30px}
+#user-btn.multi-account .top-account-pill .top-account-name{flex:1 1 auto;min-width:0;max-width:132px;text-align:left}
+/* 四行里三行是「普通」：同一个灰底标签重复四次只是噪声。堆叠态退成纯文字，
+   会员等级（SVIP/VIP）保留色块——视觉重量按信息价值分配。 */
+#user-btn.multi-account .top-account-vip.normal,
+#user-btn.multi-account .top-account-vip.none{background:transparent;color:rgba(255,255,255,.40);box-shadow:none;font-weight:600;letter-spacing:.06em;padding:0}
+/* 折叠态：只留当前账号一行，其余行不参与布局。
+   不额外加「还有 N 个」的计数：真机量过，两三个短昵称账号时计数会把收起态撑得比展开态还宽
+   （实测收起 150px / 展开 123px），折叠就不再是「更紧凑」的那一态。展开靠悬停/聚焦，
+   会员徽标在收起时照常显示 —— 收起还把 SVIP 藏掉等于用信息换宽度。
+   只对支持 hover 的设备折叠：纯触屏没有悬停，收起来就再也展不开了。 */
+@media (hover:hover){
+  #user-btn.multi-account:not(:hover):not(:focus-within) .top-account-pill:not(:first-child){display:none}
+}
 #user-avatar{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,0.1)}
 #user-vip-tag{font-size:9px;padding:2px 6px;border-radius:3px;background:linear-gradient(135deg,#fff3c2,var(--champagne),#c9963d);color:#201303;font-weight:800;letter-spacing:.5px;box-shadow:0 0 12px rgba(244,210,138,.24)}
 #user-vip-tag.qq{background:linear-gradient(135deg,#e7fff9,#00f5d4,#61a8ff);color:#03100f;box-shadow:0 0 12px rgba(0,245,212,.22)}

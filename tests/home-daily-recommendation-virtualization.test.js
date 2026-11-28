@@ -100,3 +100,29 @@ test('daily viewport updates are scroll-driven and animation-frame throttled', (
   assert.match(schedule, /requestAnimationFrame\s*\(/);
   assert.match(schedule, /renderHomePlatformDailyWindow\s*\(\s*false\s*\)/);
 });
+
+test('home discovery virtual window coalesces scroll and resize into one frame', () => {
+  const bind = namedFunctionSource(dashboardScript, 'bindHomeDiscoveryVirtualScroll');
+  const schedule = namedFunctionSource(dashboardScript, 'scheduleHomeDiscoveryVirtualWindowRender');
+  assert.match(bind, /addEventListener\(\s*'scroll'\s*,\s*scheduleHomeDiscoveryVirtualWindowRender/);
+  assert.match(bind, /addEventListener\(\s*'resize'\s*,\s*scheduleHomeDiscoveryVirtualWindowRender/);
+
+  let frame = null;
+  let paints = 0;
+  const context = {
+    homeDiscoveryVirtualState: { raf: 0 },
+    requestAnimationFrame(callback) { frame = callback; return 1; },
+    paintHomeDiscoveryVirtualWindow(force) {
+      assert.strictEqual(force, false);
+      paints += 1;
+    },
+  };
+  const scheduleRender = vm.runInNewContext(`(${schedule})`, context);
+  scheduleRender();
+  scheduleRender();
+  assert.strictEqual(paints, 0);
+  assert.strictEqual(typeof frame, 'function');
+  frame();
+  assert.strictEqual(paints, 1);
+  assert.strictEqual(context.homeDiscoveryVirtualState.raf, 0);
+});

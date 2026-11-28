@@ -104,7 +104,8 @@ var homeDiscoveryVirtualState = {
   end: 0,
   itemH: 72,
   overscan: 6,
-  bound: false
+  bound: false,
+  raf: 0
 };
 function homeDiscoveryVirtualWindow(root, total) {
   var viewH = Math.max(180, root.clientHeight || 360);
@@ -132,12 +133,19 @@ function paintHomeDiscoveryVirtualWindow(force) {
   html.push('<div class="home-discovery-virt-pad" style="height:' + bottomPad + 'px"></div>');
   root.innerHTML = html.join('');
 }
+function scheduleHomeDiscoveryVirtualWindowRender() {
+  if (homeDiscoveryVirtualState.raf) return;
+  homeDiscoveryVirtualState.raf = requestAnimationFrame(function () {
+    homeDiscoveryVirtualState.raf = 0;
+    paintHomeDiscoveryVirtualWindow(false);
+  });
+}
+
 function bindHomeDiscoveryVirtualScroll(root) {
   if (!root || homeDiscoveryVirtualState.bound === root) return;
   homeDiscoveryVirtualState.bound = root;
-  root.addEventListener('scroll', function () {
-    paintHomeDiscoveryVirtualWindow(false);
-  }, { passive: true });
+  root.addEventListener('scroll', scheduleHomeDiscoveryVirtualWindowRender, { passive: true });
+  window.addEventListener('resize', scheduleHomeDiscoveryVirtualWindowRender, { passive: true });
 }
 function renderHomeDashboardDiscovery() {
   var root = document.getElementById('home-discovery-list');

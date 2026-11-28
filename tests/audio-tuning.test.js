@@ -407,6 +407,7 @@ test('B3 拖 EQ 后 preset=custom，刷新回读仍是 custom 而不是显示「
   rows.fire('input', { target: { getAttribute: () => '2', value: '7.5' } });
   assert.equal(s.api.getSettings().eq[2], 7.5);
   assert.equal(s.api.getSettings().preset, 'custom');
+  rows.fire('change');
   const saved = s.store['mineradio-audio-tuning-v1'];
   const s2 = createSandbox({ storage: { 'mineradio-audio-tuning-v1': saved } });
   assert.equal(s2.api.getSettings().preset, 'custom');
@@ -432,11 +433,14 @@ test('B5 前级增益走 dB→linear，平衡映射 -100..100 → -1..1', () => 
   s.install();
   const preamp = s.elements['at-preamp'];
   preamp.fire('input', { target: { value: '3' } });
+  s.advance(20);
   assert.ok(Math.abs(chainOf(s).preamp.gain.value - Math.pow(10, 3 / 20)) < 1e-9);
   const balance = s.elements['at-balance'];
   balance.fire('input', { target: { value: '-50' } });
+  s.advance(20);
   assert.equal(chainOf(s).panner.pan.value, -0.5);
   balance.fire('input', { target: { value: '100' } });
+  s.advance(20);
   assert.equal(chainOf(s).panner.pan.value, 1);
 });
 
@@ -829,6 +833,8 @@ test('D2 syncUi 不回写正在拖动的控件', () => {
       `${id} 的 value 回写必须跳过拖动中的元素`);
   }
   assert.ok(/if \(input && input !== active\)/.test(src), 'EQ 推子同理');
+  assert.ok(/if \(preamp && preamp !== active\)/.test(src), '前级推子不能拖到一半被回写');
+  assert.ok(/if \(balance && balance !== active\)/.test(src), '平衡推子不能拖到一半被回写');
 });
 
 test('D3 调度器出错也要复位标志位，否则推子会永久失灵', () => {
@@ -858,6 +864,37 @@ test('D4 拖动空间推子：合并到下一帧才写参数，拖动过程不�
 
   slider.fire('change', { target: { value: '0' } });
   assert.notEqual(JSON.stringify(s.store), storeBefore, '松手（change）要立刻落盘一次');
+});
+
+test('D5 EQ / 前级 / 平衡拖动共享每帧应用与 300ms 合并落盘', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/modules/04-mood/01-audio-tuning.js'), 'utf8');
+  const eqStart = src.indexOf("rows.addEventListener('input'");
+  const eqEnd = src.indexOf("rows.addEventListener('change'", eqStart);
+  const eqHandler = src.slice(eqStart, eqEnd);
+  assert.ok(eqHandler.includes('scheduleApply()') && eqHandler.includes('scheduleSave()'));
+  assert.ok(!/saveSettings\(\);|applyAll\(\);|syncUi\(\);/.test(eqHandler), 'EQ input 不得同步写盘、应用或全量刷新');
+
+  const s = createSandbox();
+  s.install();
+  const c = chainOf(s);
+  const storeBefore = JSON.stringify(s.store);
+  const rows = s.elements['audio-tuning-eq-rows'];
+  rows.fire('input', { target: { getAttribute: () => '2', value: '7.5' } });
+  s.elements['at-preamp'].fire('input', { target: { value: '3' } });
+  s.elements['at-balance'].fire('input', { target: { value: '-50' } });
+  assert.equal(c.eq[2].gain.value, 0, '同一帧内不应逐个重算音频链');
+  assert.equal(c.preamp.gain.value, 1);
+  assert.equal(c.panner.pan.value, 0);
+  assert.equal(JSON.stringify(s.store), storeBefore, 'input 过程不得同步写盘');
+
+  s.advance(20);
+  assert.equal(c.eq[2].gain.value, 7.5);
+  assert.ok(Math.abs(c.preamp.gain.value - Math.pow(10, 3 / 20)) < 1e-9);
+  assert.equal(c.panner.pan.value, -0.5);
+  assert.equal(JSON.stringify(s.store), storeBefore, '应用音频参数不应顺带写盘');
+
+  rows.fire('change');
+  assert.notEqual(JSON.stringify(s.store), storeBefore, '松手后必须立即保存最终值');
 });
 
 // =============================================================================

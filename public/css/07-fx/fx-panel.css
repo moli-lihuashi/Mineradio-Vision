@@ -270,6 +270,8 @@ body.desktop-shell.diy-mode #bottom-bar.stage-mode{left:50%;width:min(1080px,cal
 #t-float{display:none!important}
 .fx-toggle span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px}
 .fx-toggle:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.15)}
+.fx-toggle:focus-visible{outline:2px solid var(--fc-accent,#00f5d4);outline-offset:2px}
+#settings-modal .fx-toggle:focus-visible{outline-offset:-2px}
 .fx-toggle.on{color:var(--fc-accent);border-color:rgba(0,245,212,.34);background:rgba(0,245,212,.07)}
 .fx-toggle .dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.18);transition:all .2s}
 .fx-toggle.on .dot{background:var(--fc-accent);box-shadow:0 0 10px rgba(0,245,212,.45)}

@@ -10,12 +10,95 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const foliaCss = fs.readFileSync(path.join(root, 'public/css/12-folia/folia-world.css'), 'utf8');
 const panelCss = fs.readFileSync(path.join(root, 'public/css/07-fx/fx-panel.css'), 'utf8');
 const panelJs = fs.readFileSync(path.join(root, 'public/js/modules/12-folia/04-folia-panel.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
+const inputsJs = fs.readFileSync(path.join(root, 'public/js/modules/07-fx/05a-fx-panel-inputs.js'), 'utf8');
+const toggleAccessibilitySource = inputsJs.slice(
+  inputsJs.indexOf('var fxToggleAccessibilityBound = false;'),
+  inputsJs.indexOf('function getFxSliderRow')
+);
+
+function createToggleHarness() {
+  const listeners = Object.create(null);
+  const toggles = [];
+  let observerCallback = null;
+  function makeToggle(id, on, disabled) {
+    const classes = new Set(on ? ['fx-toggle', 'on'] : ['fx-toggle']);
+    if (disabled) classes.add('dev-locked');
+    const attrs = Object.create(null);
+    const toggle = {
+      nodeType: 1,
+      id,
+      attrs,
+      clickCalls: 0,
+      classList: {
+        contains(name) { return classes.has(name); },
+        add(name) { classes.add(name); },
+        toggle(name, force) {
+          const next = force === undefined ? !classes.has(name) : !!force;
+          if (next) classes.add(name); else classes.delete(name);
+          return next;
+        },
+      },
+      hasAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name); },
+      getAttribute(name) { return this.hasAttribute(name) ? attrs[name] : null; },
+      setAttribute(name, value) { attrs[name] = String(value); },
+      removeAttribute(name) { delete attrs[name]; },
+      querySelectorAll() { return []; },
+      closest() { return this; },
+      click() {
+        this.clickCalls += 1;
+        this.classList.toggle('on');
+        (listeners.click || []).forEach((fn) => fn({ target: this }));
+      },
+    };
+    toggles.push(toggle);
+    return toggle;
+  }
+  const initial = makeToggle('t-test', false, false);
+  const root = {
+    nodeType: 1,
+    classList: { contains() { return false; } },
+    querySelectorAll(selector) { return selector === '.fx-toggle' ? [initial] : []; },
+  };
+  const document = {
+    documentElement: root,
+    body: root,
+    addEventListener(name, fn) { (listeners[name] || (listeners[name] = [])).push(fn); },
+  };
+  class MutationObserver {
+    constructor(callback) { observerCallback = callback; }
+    observe() {}
+  }
+  const sandbox = { document, MutationObserver, Array, console };
+  vm.createContext(sandbox);
+  vm.runInContext(toggleAccessibilitySource, sandbox);
+  sandbox.bindFxToggleAccessibility();
+  return {
+    sandbox, initial, makeToggle, listeners,
+    notify(records) { observerCallback(records); },
+    keydown(key, options) {
+      const event = Object.assign({
+        target: initial,
+        key,
+        code: key === ' ' ? 'Space' : '',
+        defaultPrevented: false,
+        repeat: false,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        preventDefault() { this.defaultPrevented = true; },
+      }, options || {});
+      (listeners.keydown || []).forEach((fn) => fn(event));
+      return event;
+    },
+  };
+}
 
 test('样式卡：等行高 + 两行截断 + 4px 网格间距', () => {
   assert.match(foliaCss, /\.fx-folia-mode-grid\s*\{[^}]*grid-auto-rows:\s*1fr/, '网格没设等行高，长描述会把整行拉歪');
@@ -76,4 +159,64 @@ test('预设卡与面板标题的字体对齐', () => {
   assert.match(panelCss, /\.preset-card \.pc-name\{[^}]*font-weight:600[^}]*letter-spacing:0/, '预设卡名称还是 700/宽字距');
   assert.match(panelCss, /\.preset-card \.pc-desc\{[^}]*font-size:12px/, '预设卡描述不是 12px');
   assert.match(panelCss, /\.fx-title\{[^}]*letter-spacing:0/, '面板标题还有宽字距');
+});
+
+test('FX 开关统一具备 switch 语义、键盘焦点与状态同步', () => {
+  const h = createToggleHarness();
+  assert.equal(h.initial.getAttribute('role'), 'switch');
+  assert.equal(h.initial.getAttribute('tabindex'), '0');
+  assert.equal(h.initial.getAttribute('aria-checked'), 'false');
+  h.sandbox.bindFxToggleAccessibility();
+  assert.equal(h.listeners.keydown.length, 1, '重复启动不能绑定多次键盘事件');
+
+  const enter = h.keydown('Enter');
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(h.initial.clickCalls, 1, 'Enter 应触发一次开关点击');
+  assert.equal(h.initial.getAttribute('aria-checked'), 'true');
+
+  h.keydown(' ');
+  assert.equal(h.initial.clickCalls, 2, 'Space 应触发一次开关点击');
+  assert.equal(h.initial.getAttribute('aria-checked'), 'false');
+
+  const dynamic = h.makeToggle('t-dynamic', true, false);
+  h.notify([{ type: 'childList', addedNodes: [dynamic] }]);
+  assert.equal(dynamic.getAttribute('role'), 'switch');
+  assert.equal(dynamic.getAttribute('tabindex'), '0');
+  assert.equal(dynamic.getAttribute('aria-checked'), 'true');
+  dynamic.classList.toggle('on', false);
+  h.notify([{ type: 'attributes', target: dynamic }]);
+  assert.equal(dynamic.getAttribute('aria-checked'), 'false');
+
+  const unrelatedAttrs = Object.create(null);
+  const unrelated = {
+    classList: { contains() { return false; } },
+    setAttribute(name, value) { unrelatedAttrs[name] = String(value); },
+  };
+  h.notify([{ type: 'attributes', target: unrelated }]);
+  assert.equal(Object.keys(unrelatedAttrs).length, 0, '普通元素切换 class 不能被误标成 switch');
+
+  const disabled = h.makeToggle('t-disabled', false, true);
+  h.notify([{ type: 'childList', addedNodes: [disabled] }]);
+  assert.equal(disabled.getAttribute('aria-disabled'), 'true');
+  const disabledEvent = h.keydown('Enter', { target: disabled });
+  assert.equal(disabledEvent.defaultPrevented, true);
+  assert.equal(disabled.clickCalls, 0, '禁用开关不能通过键盘激活');
+
+  const unavailable = h.makeToggle('t-unavailable', false, false);
+  unavailable.classList.add('runtime-unavailable');
+  h.notify([{ type: 'attributes', target: unavailable }]);
+  assert.equal(unavailable.getAttribute('aria-disabled'), 'true', '运行时不支持的开关也要保持禁用');
+  h.keydown('Enter', { target: unavailable });
+  assert.equal(unavailable.clickCalls, 0);
+
+  const externallyDisabled = h.makeToggle('t-external-disabled', false, false);
+  externallyDisabled.setAttribute('aria-disabled', 'true');
+  h.notify([{ type: 'childList', addedNodes: [externallyDisabled] }]);
+  assert.equal(externallyDisabled.getAttribute('aria-disabled'), 'true', '不能清掉其他模块设置的禁用语义');
+
+  const repeated = h.keydown('Enter', { repeat: true });
+  assert.equal(repeated.defaultPrevented, false);
+  assert.equal(h.initial.clickCalls, 2, '长按重复事件不能连续切换');
+  assert.match(panelCss, /\.fx-toggle:focus-visible\{[^}]*outline:2px solid/, '键盘焦点必须可见');
+  assert.match(inputsJs, /bootFxPanelChrome\(\)/, '无障碍初始化必须随面板启动');
 });

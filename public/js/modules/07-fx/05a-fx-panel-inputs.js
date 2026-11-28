@@ -44,6 +44,61 @@ function updateHomeAudioVisual(dt) {
     bars[i].style.opacity = String(clampRange(0.36 + prev * 0.68, 0.32, 1));
   }
 }
+var fxToggleAccessibilityBound = false;
+function syncFxToggleAccessibility(toggle) {
+  if (!toggle || !toggle.classList || !toggle.classList.contains('fx-toggle') || !toggle.setAttribute) return;
+  toggle.setAttribute('role', 'switch');
+  toggle.setAttribute('aria-checked', toggle.classList.contains('on') ? 'true' : 'false');
+  if (toggle.classList.contains('dev-locked') || toggle.classList.contains('runtime-unavailable')) {
+    toggle.setAttribute('aria-disabled', 'true');
+  }
+}
+function enhanceFxToggleAccessibility(node) {
+  if (!node || node.nodeType !== 1) return;
+  if (node.classList && node.classList.contains('fx-toggle')) {
+    if (!node.hasAttribute('tabindex')) node.setAttribute('tabindex', '0');
+    syncFxToggleAccessibility(node);
+  }
+  if (typeof node.querySelectorAll !== 'function') return;
+  Array.prototype.forEach.call(node.querySelectorAll('.fx-toggle'), function (toggle) {
+    if (!toggle.hasAttribute('tabindex')) toggle.setAttribute('tabindex', '0');
+    syncFxToggleAccessibility(toggle);
+  });
+}
+function bindFxToggleAccessibility() {
+  if (fxToggleAccessibilityBound || typeof document === 'undefined') return;
+  fxToggleAccessibilityBound = true;
+  enhanceFxToggleAccessibility(document.documentElement || document.body);
+  document.addEventListener('keydown', function (e) {
+    var toggle = e.target && e.target.closest ? e.target.closest('.fx-toggle') : null;
+    if (!toggle || e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key !== 'Enter' && e.key !== ' ' && e.code !== 'Space') return;
+    e.preventDefault();
+    if (toggle.getAttribute('aria-disabled') === 'true') return;
+    toggle.click();
+  });
+  document.addEventListener('click', function (e) {
+    var toggle = e.target && e.target.closest ? e.target.closest('.fx-toggle') : null;
+    syncFxToggleAccessibility(toggle);
+  });
+  if (typeof MutationObserver !== 'function') return;
+  var observer = new MutationObserver(function (records) {
+    records.forEach(function (record) {
+      if (record.type === 'attributes') {
+        syncFxToggleAccessibility(record.target);
+        return;
+      }
+      Array.prototype.forEach.call(record.addedNodes, enhanceFxToggleAccessibility);
+    });
+  });
+  observer.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class']
+  });
+}
+
 function getFxSliderRow(el) {
   return el && el.closest ? el.closest('.fx-slider') : null;
 }
@@ -560,10 +615,11 @@ function ensureFxSliderResetButton(id, key) {
   row.appendChild(btn);
 }
 
-/* 启动刷一次：eco 状态下打开面板就要能看到那条提示，不必先动一下画质档位 */
-(function bootLyricRowsEcoHint() {
+/* 启动补齐开关语义与 eco 提示，不必等用户先操作一次 */
+(function bootFxPanelChrome() {
   if (typeof document === 'undefined') return;
   function run() {
+    bindFxToggleAccessibility();
     try { updateLyricRowsEcoHint(); } catch (_) {}
     /* 画质可能被自动降级/迁移改动，延迟再对一次 */
     setTimeout(function () { try { updateLyricRowsEcoHint(); } catch (_) {} }, 2500);

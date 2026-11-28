@@ -840,11 +840,11 @@
     }
     var preamp = el('at-preamp');
     var preampV = el('at-preamp-v');
-    if (preamp) preamp.value = String(settings.preampDb);
+    if (preamp && preamp !== active) preamp.value = String(settings.preampDb);
     if (preampV) preampV.textContent = fmtDb(settings.preampDb) + 'dB';
     var balance = el('at-balance');
     var balanceV = el('at-balance-v');
-    if (balance) balance.value = String(Math.round(settings.balance * 100));
+    if (balance && balance !== active) balance.value = String(Math.round(settings.balance * 100));
     if (balanceV) {
       var pct = Math.round(settings.balance * 100);
       balanceV.textContent = pct === 0 ? '中' : (pct < 0 ? 'L' + Math.abs(pct) : 'R' + pct);
@@ -919,20 +919,45 @@
       var idx = clamp(t.getAttribute('data-band'), 0, EQ_BANDS.length - 1);
       settings.eq[idx] = clamp(t.value, -EQ_LIMIT_DB, EQ_LIMIT_DB);
       settings.preset = 'custom';
-      saveSettings();
-      applyAll();
-      syncUi();
+      if (t.style && typeof t.style.setProperty === 'function') {
+        t.style.setProperty('--at-fill', Math.round(((settings.eq[idx] + EQ_LIMIT_DB) / (EQ_LIMIT_DB * 2)) * 100) + '%');
+      }
+      var valueEl = el('at-eq-v-' + idx);
+      if (valueEl) valueEl.textContent = fmtDb(settings.eq[idx]);
+      var band = t.closest ? t.closest('.at-eq-band') : null;
+      if (band) {
+        band.classList.toggle('is-boost', settings.eq[idx] > 0.25);
+        band.classList.toggle('is-cut', settings.eq[idx] < -0.25);
+      }
+      var presetWrap = el('audio-tuning-presets');
+      if (presetWrap && typeof presetWrap.querySelectorAll === 'function') {
+        Array.prototype.forEach.call(presetWrap.querySelectorAll('button[data-preset]'), function (b) {
+          b.classList.toggle('active', false);
+        });
+      }
+      scheduleApply();
+      scheduleSave();
     });
+    rows.addEventListener('change', function () { saveSettings(); syncUi(); });
     var preamp = el('at-preamp');
     if (preamp) preamp.addEventListener('input', function (e) {
       settings.preampDb = clamp(e.target.value, -PREAMP_LIMIT_DB, PREAMP_LIMIT_DB);
-      saveSettings(); applyAll(); syncUi();
+      var valueEl = el('at-preamp-v');
+      if (valueEl) valueEl.textContent = fmtDb(settings.preampDb) + 'dB';
+      scheduleApply();
+      scheduleSave();
     });
+    if (preamp) preamp.addEventListener('change', function () { saveSettings(); syncUi(); });
     var balance = el('at-balance');
     if (balance) balance.addEventListener('input', function (e) {
       settings.balance = clamp(e.target.value, -100, 100) / 100;
-      saveSettings(); applyAll(); syncUi();
+      var pct = Math.round(settings.balance * 100);
+      var valueEl = el('at-balance-v');
+      if (valueEl) valueEl.textContent = pct === 0 ? '中' : (pct < 0 ? 'L' + Math.abs(pct) : 'R' + pct);
+      scheduleApply();
+      scheduleSave();
     });
+    if (balance) balance.addEventListener('change', function () { saveSettings(); syncUi(); });
     var surW = el('at-surround-width');
     if (surW) surW.addEventListener('input', function (e) {
       settings.surroundWidth = clamp(e.target.value, 0, 200) / 100;
