@@ -24,41 +24,46 @@ test('版本号解析与比较', () => {
   assert.deepEqual(bumpMinor([3, 3, 1]), [3, 4, 0]);
 });
 
-test('feat 需要 minor，fix/perf 需要 patch，docs 等不需要', () => {
-  assert.equal(classifyBump(['feat(platforms): 平台能力面板']).level, 'minor');
+test('默认走补丁号：feat / fix / perf 都只要求 patch，带 ! 的提交才要求 minor', () => {
+  assert.equal(classifyBump(['feat(platforms): 平台能力面板']).level, 'patch');
   assert.equal(classifyBump(['fix(glass): 修复玻璃全黑']).level, 'patch');
   assert.equal(classifyBump(['perf(we): 后台停解码']).level, 'patch');
   assert.equal(classifyBump(['docs(README): 重写', 'test(guards): 补断言', 'chore(privacy): 清理']).level, 'none');
   // 混合时取最高级别
-  assert.equal(classifyBump(['docs: x', 'fix: y', 'feat: z']).level, 'minor');
+  assert.equal(classifyBump(['docs: x', 'fix: y', 'feat: z']).level, 'patch');
   assert.equal(classifyBump(['fix: y', 'perf: z']).level, 'patch');
-  // 破坏性 feat 也归 minor（本仓库暂未启用 major 判定）
+  // 带 ! 的不兼容改动抬到 minor（本仓库暂未启用 major 判定）
   assert.equal(classifyBump(['feat!: 不兼容改动']).level, 'minor');
+  assert.equal(classifyBump(['fix(api)!: 接口必带 token']).level, 'minor');
+  // 同一批里既有普通 feat 又有不兼容改动 -> minor
+  assert.equal(classifyBump(['feat: 新面板', 'fix!: 不兼容']).level, 'minor');
 });
 
 test('未知前缀不静默吞掉，会单列出来供人工判断', () => {
   const r = classifyBump(['随手改了一点', 'feat: 新面板']);
-  assert.equal(r.level, 'minor');
+  assert.equal(r.level, 'patch');
   assert.deepEqual(r.unknown, ['随手改了一点']);
 });
 
-test('版本未达到要求时必须拦住（这正是「功能加了版本号不动」）', () => {
-  const feat = evaluateVersionBump('3.3.1', '3.3.1', 'minor');
-  assert.equal(feat.ok, false);
-  assert.equal(feat.expected, '3.4.0');
+test('版本未达到要求时必须拦住（这正是「改了东西版本号不动」）', () => {
+  const patch = evaluateVersionBump('3.3.6', '3.3.6', 'patch');
+  assert.equal(patch.ok, false);
+  assert.equal(patch.expected, '3.3.7');
 
-  const fix = evaluateVersionBump('3.3.1', '3.3.1', 'patch');
-  assert.equal(fix.ok, false);
-  assert.equal(fix.expected, '3.3.2');
+  const minor = evaluateVersionBump('3.3.6', '3.3.6', 'minor');
+  assert.equal(minor.ok, false);
+  assert.equal(minor.expected, '3.4.0');
 
-  // 只 bump patch 但提交了 feat，仍然不通过
-  const wrong = evaluateVersionBump('3.3.1', '3.3.2', 'minor');
-  assert.equal(wrong.ok, false, 'feat 只 bump patch 属于规则违反，必须拦住');
+  // 带 ! 的提交只 bump patch，仍然不通过
+  const wrong = evaluateVersionBump('3.3.6', '3.3.7', 'minor');
+  assert.equal(wrong.ok, false, '不兼容改动只 bump patch 属于规则违反，必须拦住');
 });
 
 test('满足最低要求时放行，超前 bump 也放行', () => {
-  assert.equal(evaluateVersionBump('3.3.1', '3.4.0', 'minor').ok, true);
-  assert.equal(evaluateVersionBump('3.3.1', '3.3.2', 'patch').ok, true);
+  assert.equal(evaluateVersionBump('3.3.6', '3.4.0', 'minor').ok, true);
+  assert.equal(evaluateVersionBump('3.3.6', '3.3.7', 'patch').ok, true);
+  // 真实回归：v3.3.6 -> v3.3.7 只有 feat/fix 提交，按补丁号发布必须放行
+  assert.equal(evaluateVersionBump('3.3.6', '3.3.7', classifyBump(['feat(playback): 取址缓存', 'fix(login): 导航收口']).level).ok, true);
   assert.equal(evaluateVersionBump('3.3.1', '4.0.0', 'minor').ok, true);
   assert.equal(evaluateVersionBump('3.3.1', '3.3.1', 'none').ok, true);
   assert.equal(evaluateVersionBump('bad', '3.3.2', 'patch').ok, false);

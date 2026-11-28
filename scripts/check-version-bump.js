@@ -1,20 +1,21 @@
 'use strict';
 
 // =============================================================================
-// 语义化版本检查：加用户可见功能 bump minor，只修 bug bump patch。
+// 语义化版本检查：本仓库默认「功能也进补丁号」，只有不兼容改动才抬到 minor。
 //
 // 用法：
 //   node scripts/check-version-bump.js --base origin/main
-//   node scripts/check-version-bump.js --base v3.3.1        # 也可对 tag 比
+//   node scripts/check-version-bump.js --base v3.3.6        # 也可对 tag 比
 //
 // 判定基于 Conventional Commits 前缀（本仓库现有提交都遵循）：
-//   feat(...)        -> minor（用户可见功能）
-//   fix / perf(...)  -> patch（修 bug / 性能修复）
-//   docs/test/chore/refactor/build/ci/style/revert -> none（无需 bump）
+//   feat / fix / perf(...)  -> patch（功能与修复同走补丁号，按改动体量叫）
+//   feat! / fix!(...)       -> minor（不兼容改动至少抬一档；MAJOR 由人决定）
+//   docs/test/chore/refactor/build/ci/style/revert/merge -> none（无需 bump）
 // 未匹配前缀的提交按 none 处理并提示，不静默放过。
 //
-// 用途：CI 的 PR 检查里比较 merge-base，避免「功能加了版本号不动」导致
-// issue 里无法定位用户用的是哪一版。
+// 用途：CI 的 PR 检查里比较 merge-base，避免「改了东西版本号不动」导致
+// issue 里无法定位用户用的是哪一版。它只管「有没有动」，不管「动得多大」——
+// 该发 minor 还是 patch 由维护者按改动体量判断，见 VERSIONING.md。
 // =============================================================================
 
 const fs = require('fs');
@@ -48,9 +49,17 @@ function classifyBump(subjects) {
   for (const raw of subjects) {
     const s = String(raw || '').trim();
     if (!s) continue;
-    if (/^feat(\([^)]*\))?!?:/i.test(s)) { minor = true; continue; }
-    if (/^(fix|perf)(\([^)]*\))?!?:/i.test(s)) { patch = true; continue; }
-    if (/^(docs|test|tests|chore|refactor|build|ci|style|revert|merge)(\([^)]*\))?!?:|^Merge /i.test(s)) continue;
+    const m = /^(feat|fix|perf|docs|test|tests|chore|refactor|build|ci|style|revert|merge)(\([^)]*\))?(!)?:/i.exec(s);
+    if (m) {
+      const type = m[1].toLowerCase();
+      if (/^(docs|test|tests|chore|refactor|build|ci|style|revert|merge)$/.test(type)) continue;
+      /* 带 ! 的是不兼容改动：至少抬到 minor（MAJOR 不在闸门自动判定范围内）。 */
+      if (m[3]) { minor = true; continue; }
+      /* feat / fix / perf 一律先按补丁号 —— 本仓库功能不进 minor。 */
+      patch = true;
+      continue;
+    }
+    if (/^Merge /i.test(s)) continue;
     unknown.push(s);
   }
   return { level: minor ? 'minor' : (patch ? 'patch' : 'none'), unknown };

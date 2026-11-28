@@ -33,7 +33,8 @@ jobs:
       - name: Run full test suite
         run: node scripts/run-tests.js
 
-      # 语义化版本：加用户可见功能 bump minor，只修 bug bump patch。
+      # 语义化版本：默认按补丁号发（feat / fix / perf 都只要求 patch），
+      # 只有带 ! 的不兼容提交才要求 minor。判据见 VERSIONING.md。
       # 仅在 PR 上比较 merge-base，push 到 main 时不重复判定。
       - name: Check semantic version bump
         if: github.event_name == 'pull_request'
