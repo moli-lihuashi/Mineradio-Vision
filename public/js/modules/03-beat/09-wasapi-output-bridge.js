@@ -9,6 +9,9 @@ var wasapiOutputActive = false;
 var wasapiScriptNode = null;
 var wasapiTapConnected = false;
 var wasapiDetachedDestination = null;
+var wasapiOutputQueue = Promise.resolve();
+var wasapiOutputGeneration = 0;
+var wasapiOutputDeviceGeneration = 0;
 
 function readWasapiOutputPref() {
   try {
@@ -31,6 +34,16 @@ function wasapiDesktopApi() {
   return (typeof window !== 'undefined' && window.desktopWindow) ? window.desktopWindow : null;
 }
 
+function enqueueWasapiOutputOperation(operation) {
+  var result = wasapiOutputQueue.then(operation);
+  wasapiOutputQueue = result.catch(function () {});
+  return result;
+}
+
+function wasapiOutputSuperseded() {
+  return { ok: false, error: 'WASAPI_OUTPUT_SUPERSEDED', superseded: true };
+}
+
 async function setWasapiOutputEnabled(enabled) {
   enabled = !!enabled;
   writeWasapiOutputPref(enabled);
@@ -43,6 +56,14 @@ async function setWasapiOutputEnabled(enabled) {
 }
 
 async function startWasapiOutputBridge() {
+  var generation = ++wasapiOutputGeneration;
+  return enqueueWasapiOutputOperation(function () {
+    return startWasapiOutputBridgeOwned(generation);
+  });
+}
+
+async function startWasapiOutputBridgeOwned(generation) {
+  if (generation !== wasapiOutputGeneration) return wasapiOutputSuperseded();
   var api = wasapiDesktopApi();
   if (!api || typeof api.wasapiOpen !== 'function') {
     wasapiOutputActive = false;
@@ -55,13 +76,23 @@ async function startWasapiOutputBridge() {
 
   var avail = false;
   try { avail = !!(await api.wasapiAvailable()); } catch (_) { avail = false; }
+  if (generation !== wasapiOutputGeneration) return wasapiOutputSuperseded();
   if (!avail) return { ok: false, error: 'WASAPI unavailable' };
+  if (wasapiOutputDeviceGeneration || wasapiScriptNode) {
+    await stopWasapiOutputBridgeOwned(generation);
+    if (generation !== wasapiOutputGeneration) return wasapiOutputSuperseded();
+  }
 
   var sr = Math.round(audioCtx.sampleRate) || 48000;
   var opened;
   try { opened = await api.wasapiOpen({ sampleRate: sr, channels: 2 }); }
   catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  if (generation !== wasapiOutputGeneration) {
+    try { await api.wasapiClose(); } catch (_) {}
+    return wasapiOutputSuperseded();
+  }
   if (!opened || !opened.ok) return { ok: false, error: (opened && opened.error) || 'open failed' };
+  wasapiOutputDeviceGeneration = generation;
 
   try {
     if (wasapiScriptNode) {
@@ -115,12 +146,19 @@ async function startWasapiOutputBridge() {
     console.log('[WASAPI 3A] bridge started @', sr);
     return { ok: true, enabled: true, status: opened.status };
   } catch (e) {
-    await stopWasapiOutputBridge();
+    await stopWasapiOutputBridgeOwned(generation);
     return { ok: false, error: (e && e.message) || String(e) };
   }
 }
 
 async function stopWasapiOutputBridge() {
+  var generation = ++wasapiOutputGeneration;
+  return enqueueWasapiOutputOperation(function () {
+    return stopWasapiOutputBridgeOwned(generation);
+  });
+}
+
+async function stopWasapiOutputBridgeOwned(generation) {
   wasapiOutputActive = false;
   var api = wasapiDesktopApi();
   if (wasapiScriptNode) {
@@ -138,9 +176,10 @@ async function stopWasapiOutputBridge() {
     try { gainNode.gain.value = gainNode.__wasapiPrevGain; } catch (_) {}
     gainNode.__wasapiPrevGain = null;
   }
-  if (api && typeof api.wasapiClose === 'function') {
+  if (api && typeof api.wasapiClose === 'function' && wasapiOutputDeviceGeneration) {
     try { await api.wasapiClose(); } catch (_) {}
   }
+  wasapiOutputDeviceGeneration = 0;
   console.log('[WASAPI 3A] bridge stopped / fallback to WebAudio');
   return { ok: true, enabled: false };
 }
@@ -191,6 +230,7 @@ async function toggleWasapiOutput() {
   var result = null;
   try { result = await setWasapiOutputEnabled(next); }
   catch (e) { result = { ok: false, error: (e && e.message) || String(e) }; }
+  if (result && result.superseded) return;
   wasapiOutputLastError = (result && result.ok) ? '' : ((result && result.error) || '未知错误');
   if (typeof showToast === 'function') {
     showToast(result && result.ok
@@ -209,6 +249,7 @@ function bindWasapiAutoStart() {
     setTimeout(function () {
       if (!wasapiOutputEnabled || wasapiOutputActive) return;
       startWasapiOutputBridge().then(function (result) {
+        if (result && result.superseded) return;
         if (result && result.ok) {
           console.log('[WASAPI 3A] auto-recovered after play');
         } else {
