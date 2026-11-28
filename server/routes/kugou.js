@@ -12,6 +12,10 @@
 //    /api/kugou/recommend/history, /api/kugou/fm/dislike, /api/kugou/playlist/remove-song
 // ====================================================================
 const createKugouExtras = require('../kugou/extras');
+const playUrlCacheModule = require('../lib/play-url-cache');
+const playUrlCache = playUrlCacheModule.shared;
+const { playUrlCacheKey, playUrlCacheScope } = playUrlCacheModule;
+const { verifyResolvedQuality } = require('../lib/audio-quality-probe');
 
 module.exports = function register(ctx) {
   const extras = createKugouExtras(ctx);
@@ -231,8 +235,22 @@ module.exports = function register(ctx) {
         } catch (_) {
           qualityHashes = null;
         }
+        // 短 TTL 地址缓存（理由见 server/lib/play-url-cache.js）：酷狗直链带签名与 IP 绑定，
+        // TTL 保守 + 代理侧 403 精确失效；受限/未登录结果一律不缓存。
+        const cacheKey = playUrlCacheKey({
+          provider: 'kugou',
+          scope: playUrlCacheScope(ctx.kugouCookie),
+          quality,
+          id: hash,
+          extra: [albumAudioId, albumId, qualityHashes ? JSON.stringify(qualityHashes) : ''].join('|'),
+        });
+        const fresh = url.searchParams.get('fresh') === '1';
+        const cachedData = fresh ? null : playUrlCache.get(cacheKey);
+        if (cachedData) { sendJSON(res, { ...cachedData, cached: true }); return; }
         const data = await handleKugouSongUrl(hash, albumAudioId, albumId, quality, qualityHashes);
+        if (data && data.url && !data.trial) playUrlCache.set(cacheKey, data);
         sendJSON(res, data);
+        verifyResolvedQuality({ data, cache: playUrlCache, cacheKey });
       } catch (err) {
         console.error('[KugouSongUrl]', err);
         sendJSON(res, { provider: 'kugou', url: '', playable: false, error: err.message }, 500);

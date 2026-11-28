@@ -15,6 +15,10 @@
 //    /api/artist/albums, /api/user/albums, /api/search/collections, /api/playlist/remove-song
 // ====================================================================
 const createNeteaseExtras = require('../netease/extras');
+const playUrlCacheModule = require('../lib/play-url-cache');
+const playUrlCache = playUrlCacheModule.shared;
+const { playUrlCacheKey, playUrlCacheScope } = playUrlCacheModule;
+const { verifyResolvedQuality } = require('../lib/audio-quality-probe');
 
 module.exports = function register(ctx) {
   const extras = createNeteaseExtras(ctx);
@@ -227,16 +231,36 @@ module.exports = function register(ctx) {
           skipDirect: url.searchParams.get('skipDirect') === '1',
         };
         const loginInfo = await getLoginInfo();
-        const info = await handleSongUrl(sid, loginInfo, quality, matchHints);
-        sendJSON(res, {
-          ...info,
+        const loginBits = {
           loggedIn: loginInfo.loggedIn,
           vipType: loginInfo.vipType || 0,
           vipLevel: loginInfo.vipLevel || 'none',
           isVip: !!loginInfo.isVip,
           isSvip: !!loginInfo.isSvip,
           vipLabel: loginInfo.vipLabel || '无VIP',
+        };
+        /* 短 TTL 地址缓存：取址是起播链最慢的一跳，同一首歌回切/重播会重复打。
+           键里带账号维度（音质与可用性随登录态变化）与全部影响结果的匹配提示；
+           试听片段不写缓存 —— 否则登录后仍会拿到同一份片段。 */
+        const cacheKey = playUrlCacheKey({
+          provider: 'netease',
+          scope: playUrlCacheScope(ctx.userCookie),
+          quality,
+          id: sid,
+          extra: [matchHints.name, matchHints.artist, matchHints.album, matchHints.duration,
+            matchHints.excludeIds, matchHints.skipDirect ? '1' : '0'].join('|'),
         });
+        const fresh = url.searchParams.get('fresh') === '1';
+        const cachedInfo = fresh ? null : playUrlCache.get(cacheKey);
+        if (cachedInfo) {
+          sendJSON(res, { ...cachedInfo, ...loginBits, cached: true });
+          return;
+        }
+        const info = await handleSongUrl(sid, loginInfo, quality, matchHints);
+        if (info && info.url && !info.trial) playUrlCache.set(cacheKey, info);
+        sendJSON(res, { ...info, ...loginBits });
+        // 档位真实性：异步探测文件头，名不副实时纠正缓存里的 level（下次取址生效）
+        verifyResolvedQuality({ data: info, cache: playUrlCache, cacheKey, durationMs: Number(info && info.time) || 0 });
       } catch (err) { console.error('[SongUrl]', err); sendJSON(res, { error: err.message }, 500); }
       return;
     }

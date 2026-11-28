@@ -227,7 +227,10 @@ async function recoverCurrentTrackPlaybackFromFreshUrl(reason, opts) {
       manual: true,
       resumeAt: resumeAt,
       preserveHomeState: true,
-      resumeRecovery: true
+      resumeRecovery: true,
+      /* 必须绕过服务端地址缓存：这条路的前提是「旧链接已经不可用」，
+         命中缓存只会拿回同一枚签名，然后被判成「没换到源」而提前收工。 */
+      freshResolve: true
     });
     if (typeof playbackSourceRevisionChanged === 'function') {
       playbackResumeRecovery.recoveryRevisionChanged =

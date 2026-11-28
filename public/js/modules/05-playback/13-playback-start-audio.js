@@ -1019,7 +1019,7 @@ async function attemptAudioPlay(opts) {
 }
 async function playAudio(opts) {
   opts = opts || {};
-  return attemptAudioPlay({ manual: false, silent: !!opts.silent });
+  return attemptAudioPlay(Object.assign({}, opts, { silent: !!opts.silent }));
 }
 /* 「播不了的曲目」被 settleSourceFallbackTerminal 清掉 audio.src 之后，
  * 播放键会走 (!audio || !audio.src) 分支重新 playQueueAt(currentIdx,{manual:true})。

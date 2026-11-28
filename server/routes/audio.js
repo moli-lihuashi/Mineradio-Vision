@@ -6,6 +6,7 @@
 const { pipeline } = require('stream');
 const { decodeHeaderParam } = require('../lib/proxy-headers');
 const { Readable, Transform } = require('stream');
+const playUrlCache = require('../lib/play-url-cache').shared;
 
 const BODY_STALL_TIMEOUT_MS = 30000;
 
@@ -134,6 +135,12 @@ module.exports = function register(ctx) {
         const extraHeaders = decodeHeaderParam(url.searchParams.get('h'));
         const hdr = Object.assign(audioProxyHeadersFor(audioUrl, range), extraHeaders);
         const up = await fetchProxiedMedia(audioUrl, hdr);
+        /* 上游判死链（签名过期/资源下架）：按 URL 精确失效地址缓存。
+           不做这一步的话，下一次取址会命中缓存里的死链，重试路径会原地打转。 */
+        if (up.status === 403 || up.status === 404 || up.status === 410) {
+          const dropped = playUrlCache.invalidateByUrl(audioUrl);
+          if (dropped) console.warn('[AudioProxy] 上游 ' + up.status + '，已失效地址缓存 ' + dropped + ' 条');
+        }
         const out = {
           'Content-Type': audioContentTypeForUrl(audioUrl, up.headers.get('content-type')),
           'Accept-Ranges': 'bytes',

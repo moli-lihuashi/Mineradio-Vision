@@ -2048,6 +2048,7 @@ const routeCtx = {
   get userCookie() { return userCookie; },
   get qishuiCookie() { return qishuiCookie; },
   get kugouCookie() { return kugouCookie; },
+  get qqCookie() { return qqCookie; },
   // 明文诊断日志（写 <stableUserData>/cookie-debug.log）。汽水二维码轮询用它
   // 记录每次上游 error_code：7 的真实触发条件目前无法在离线探针里复现，
   // 只能在真实链路留痕，否则每次排查都只能靠猜。

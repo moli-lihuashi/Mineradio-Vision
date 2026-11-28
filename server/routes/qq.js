@@ -13,6 +13,10 @@
 //    /api/qq/playlist/remove-song
 // ====================================================================
 const createQQExtras = require('../qq/extras');
+const playUrlCacheModule = require('../lib/play-url-cache');
+const playUrlCache = playUrlCacheModule.shared;
+const { playUrlCacheKey, playUrlCacheScope } = playUrlCacheModule;
+const { verifyResolvedQuality } = require('../lib/audio-quality-probe');
 
 module.exports = function register(ctx) {
   const {
@@ -73,8 +77,22 @@ module.exports = function register(ctx) {
         const mid = url.searchParams.get('mid') || url.searchParams.get('id') || '';
         const mediaMid = url.searchParams.get('mediaMid') || url.searchParams.get('media_mid') || '';
         const quality = url.searchParams.get('quality') || '';
+        // 短 TTL 地址缓存（理由见 server/lib/play-url-cache.js）：QQ 对高频取址会风控，
+        // 回切/重播重复取址是最常见的浪费；未给出地址或试听片段不缓存。
+        const cacheKey = playUrlCacheKey({
+          provider: 'qq',
+          scope: playUrlCacheScope(ctx.qqCookie),
+          quality,
+          id: mid,
+          extra: String(mediaMid || ''),
+        });
+        const fresh = url.searchParams.get('fresh') === '1';
+        const cachedInfo = fresh ? null : playUrlCache.get(cacheKey);
+        if (cachedInfo) { sendJSON(res, { ...cachedInfo, cached: true }); return; }
         const info = await handleQQSongUrl(mid, mediaMid, quality);
+        if (info && info.url && !info.trial) playUrlCache.set(cacheKey, info);
         sendJSON(res, info);
+        verifyResolvedQuality({ data: info, cache: playUrlCache, cacheKey });
       } catch (err) {
         console.error('[QQSongUrl]', err);
         sendJSON(res, { provider: 'qq', url: '', playable: false, error: err.message }, 500);

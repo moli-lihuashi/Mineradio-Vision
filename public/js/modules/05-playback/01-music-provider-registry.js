@@ -108,15 +108,20 @@ function providerPlayUrlEndpoint(song, opts) {
   var resolved = resolveProviderRequestedQuality(song, opts);
   var provider = resolved.provider;
   var qualityParam = resolved.qualityParam;
+  /* 恢复链路要求「真的换一枚签名」：服务端有 5 分钟地址缓存，不带 fresh 会命中
+     同一条已失效直链，恢复代码再判成「没换到源」。只对走缓存的三家生效。 */
+  var freshParam = opts && opts.freshResolve && (provider === 'qq' || provider === 'kugou' || provider === 'netease')
+    ? '&fresh=1'
+    : '';
   if (provider === 'qq') {
     return '/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') +
-      '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qualityParam;
+      '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qualityParam + freshParam;
   }
   if (provider === 'kugou') {
     var hashExtra = typeof kugouQualityHashesParam === 'function' ? kugouQualityHashesParam(song) : '';
     return '/api/kugou/song/url?hash=' + encodeURIComponent(song.hash || song.fileHash || song.audioHash || song.id || '') +
       '&albumAudioId=' + encodeURIComponent(song.albumAudioId || song.album_audio_id || song.mixSongId || '') +
-      '&albumId=' + encodeURIComponent(song.albumId || song.album_id || '') + qualityParam + hashExtra;
+      '&albumId=' + encodeURIComponent(song.albumId || song.album_id || '') + qualityParam + hashExtra + freshParam;
   }
   if (provider === 'qishui') {
     return '/api/qishui/song/url?id=' + encodeURIComponent(song.id || song.providerSongId || '') + qualityParam;
@@ -127,7 +132,7 @@ function providerPlayUrlEndpoint(song, opts) {
       '&uri=' + encodeURIComponent(song.spotifyUri || song.uri || '') + qualityParam;
   }
   var matchQuery = typeof neteasePlaybackMatchQuery === 'function' ? neteasePlaybackMatchQuery(song, opts) : '';
-  return '/api/song/url?id=' + encodeURIComponent(song.id || '') + matchQuery + qualityParam;
+  return '/api/song/url?id=' + encodeURIComponent(song.id || '') + matchQuery + qualityParam + freshParam;
 }
 
 // ---- LX 音源兜底 ----

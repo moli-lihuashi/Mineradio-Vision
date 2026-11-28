@@ -266,6 +266,7 @@ function createSandbox(queue, overrides) {
   vm.runInNewContext(startText, sandbox, { filename: startPath });
   // 模块自身也声明了 playAudio（真实 attemptAudioPlay 路径）：这里换回可观测的桩，
   // 让测试只关心「谁有权起播」，而不是媒体元素细节。
+  sandbox.realPlayAudio = sandbox.playAudio;
   sandbox.playAudio = playAudioStub;
   // setPlayIcon 由模块自身声明：包一层以便观察「有没有改新曲目的播放图标」
   const realSetPlayIcon = sandbox.setPlayIcon;
@@ -615,6 +616,35 @@ async function testAttemptAudioPlayStillStartsWhenOwned() {
   assert.deepStrictEqual(sandbox.iconCalls, [true]);
 }
 
+async function testPlayAudioForwardsPlaybackOptions() {
+  const sandbox = createSandbox([song('a')]);
+  let captured = null;
+  sandbox.attemptAudioPlay = async function (opts) {
+    captured = opts;
+    return true;
+  };
+
+  const started = await sandbox.realPlayAudio({
+    manual: true,
+    userPick: true,
+    resumeRecovery: true,
+    fade: false,
+    holdPaused: true,
+    silent: false,
+  });
+  assert.strictEqual(started, true);
+  assert.strictEqual(captured.manual, true);
+  assert.strictEqual(captured.userPick, true);
+  assert.strictEqual(captured.resumeRecovery, true);
+  assert.strictEqual(captured.fade, false);
+  assert.strictEqual(captured.holdPaused, true);
+  assert.strictEqual(captured.silent, false);
+
+  await sandbox.realPlayAudio();
+  assert.strictEqual(captured.manual, undefined);
+  assert.strictEqual(captured.silent, false);
+}
+
 // --- 静态接线：确保加载的是实际生效文件 ------------------------------------
 function testLoaderWiring() {
   const loaderText = fs.readFileSync(loaderPath, 'utf8');
@@ -641,6 +671,7 @@ async function run() {
   await testStaleAttemptAudioPlayFailureLeavesNewTrackAlone();
   await testStaleManualPlayDoesNotWriteNewState();
   await testAttemptAudioPlayStillStartsWhenOwned();
+  await testPlayAudioForwardsPlaybackOptions();
   testLoaderWiring();
   console.log('OK playback-queue-identity-and-stale-requests');
 }
