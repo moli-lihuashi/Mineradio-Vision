@@ -1,5 +1,52 @@
 # Changelog
 
+## v3.3.7 · 2026-11-28
+
+### 播放：取址缓存与「必须换一枚签名」的恢复链路
+
+- 新增 `server/lib/play-url-cache.js`：网易云 / QQ / 酷狗三家取址结果做短 TTL（默认 5 分钟、上限 400 条）缓存。取址是起播链最慢的一跳（实测 100 ms–4 s），回切、重播、预取后再起播都会重新打一次上游；QQ 还会对高频取址风控。
+- TTL 保守 + 双重失效，避免「缓存死链」自我放大：媒体代理看到上游 403 / 404 / 410 时按 URL 精确失效（`invalidateByUrl`）；恢复链路显式带 `fresh=1` 绕过缓存。试听片段与失败结果一律不写缓存 —— 缓存了片段，用户登录或换音质后仍会拿到同一份错误答案。
+- 键里带账号维度与全部影响结果的匹配提示（`scope` + `quality` + `id` + `extra`）：音质与可用性随登录态变化，跨账号命中就是错答案。
+- 修复恢复链路「换不到源」：`recoverCurrentTrackPlaybackFromFreshUrl` 现在带 `freshResolve: true`，`providerPlayUrlEndpoint` 据此加 `&fresh=1`（只对走缓存的三家生效）。此前恢复路径会命中同一条已失效直链，再被判成「没换到源」提前收工。
+- `playAudio(opts)` 不再丢掉调用方选项，改为 `Object.assign` 透传。
+
+### 播放：音质档位真实性校验
+
+- 新增 `server/lib/audio-quality-probe.js`：上游声明的 `level` / `bitrate` 只是它自己的说法，CDN 实际发什么另说（已知「标 lossless 实发 320k mp3」「标 hires 实发 CD 级 FLAC」）。取址后异步拉前 128 KB 文件头，按容器魔数判有损/无损，FLAC 解 STREAMINFO 拿采样率与位深，MP3 解首帧头拿真实码率。
+- 只向下纠正：证明不了更好时不改上游标注，探测失败不降档。探测是 fire-and-forget（4 s 墙钟上限，慢 CDN 不占起播路径），结果写回地址缓存，因此同一次会话的后续播放显示真实档位。
+
+### 登录：登录窗口导航收口
+
+- 四家登录窗（网易云 / QQ / 酷狗 / Spotify）的弹窗与跳转改走统一 `guardLoginWindowNavigation`：host 白名单 + 严格 https，`will-navigate` / `will-redirect` 也纳入管控（此前只拦 `window.open`，主框架跳转是缺口），非信任域一律交给系统浏览器。
+- 修掉两份历史正则各自的绕过面：网易 / 酷狗那两条 `/^https?:\/\/([^/]+\.)?(163|music\.163|netease)\.com/i` 用的是前缀匹配，`qq.com.evil.com` 一类域名可穿；统一改成 `hostname` 精确比较或 `.` + 根域后缀比较。
+
+### 歌词：兜底译文不再贴错版本
+
+- 网易云兜底搜到的候选必须落在「同一录音」上，标题相同不算。版本标记集合（live / cover / remix / remaster / 重录 / 伴奏 / 不插电 / 变速 / 剪辑 / demo）必须完全一致；双方都有时长时差值不得超过 `max(5s, 2%)`，上限 10 s。
+- 起因：同题同艺人存在 Live / 重录 / 加速版时，相关性分看不出差别，兜底会把那一版译文按行序贴到当前曲目上 —— 正文没错、译文整段错位，比没有译文更糟。
+- 只认「有明确版本标记」的词，不引入泛化的 `version`：那会把「正式版 vs 专辑版」这类正常匹配一起拒掉。
+
+### 音频：WASAPI 输出桥并发序列化
+
+- `09-wasapi-output-bridge.js` 的开关改成串行队列 + generation 计数：快速连点或自动恢复与手动切换撞车时，旧的那次 open/close 会拿到 `WASAPI_OUTPUT_SUPERSEDED` 而不是照着过期状态改设备。
+- 新增设备代际（`wasapiOutputDeviceGeneration`）：没真正 open 过就不发 `wasapiClose`，避免把别的窗口/进程刚打开的设备关掉。
+
+### 界面
+
+- **多账号胶囊**：默认折叠成一行（只留当前账号），悬停或键盘聚焦展开；展开后整列等宽、行高 40，宽度跟内容收敛（`max-content`，上限 232px）。原来的四颗胶囊左边缘参差 65px（191 / 135 / 129 / 126 宽、右边缘对齐），还白占右上角 178px 高。折叠只对支持 hover 的设备生效 —— 纯触屏没有悬停，收起来就再也展不开了。
+- **调音面板拖动不再每帧落盘**：EQ / 前级 / 声像的 `input` 走 rAF 合并（`scheduleApply` / `scheduleSave`），`change` 时才同步 UI；拖动过程中不回写正在拖的那个滑块自身 `value`。
+- **开关可访问性**：`.fx-toggle` 补 `role="switch"`、`aria-checked`、`aria-disabled`，支持 Enter / Space 切换与 `focus-visible` 描边（用 MutationObserver 跟随后续动态插入与状态变化）。
+- **首页发现列表**：滚动重绘合并到 rAF，并跟随窗口尺寸变化重算虚拟窗口。
+
+### 构建
+
+- `build/organize-dist.js` 支持注入输出目录；`latest.yml` 不再被当成「不一致构建」丢进归档，改计入 publishable；去掉发布后整理阶段的 `try/catch` 吞错 —— 整理失败应当让构建失败，而不是留一个「看起来成功」的 dist。
+
+### 测试
+
+- 新增 8 个测试文件（`play-url-cache` 及其接线、`play-url-fresh-resolve`、`audio-quality-probe`、`lyric-fallback-version-gate`、`account-pill-collapse-guard`），并补充 `wasapi-tap-point-guard`、`fx-panel-unslop`、`bugfix-p0-p1-regression`、`release-provenance-guard` 等既有守卫。
+- 验证：ALL TESTS PASSED（1285 + 8）。
+
 ## v3.3.6 · 2026-11-27
 
 ### Folia 新样式：隐喻（metaphor）
