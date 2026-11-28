@@ -3,7 +3,7 @@
 **Windows 桌面沉浸式音乐播放器** —— 把五个音乐平台的曲库、可编程的歌词舞台和一整套实时视觉特效装进同一个窗口。
 
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
-![electron](https://img.shields.io/badge/Electron-42-47848F?style=flat-square)
+![electron](https://img.shields.io/badge/Electron-44-47848F?style=flat-square)
 ![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 ![version](https://img.shields.io/badge/version-3.3.7-success?style=flat-square)
 
@@ -113,7 +113,7 @@
 
 - **Windows 安装包（推荐）**：[Mineradio-3.3.7-Setup.exe](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.7/Mineradio-3.3.7-Setup.exe)
 - **免安装便携版**：[Mineradio-Vision-v3.3.7-portable-win-x64.zip](https://github.com/moli-lihuashi/Mineradio-Vision/releases/download/v3.3.7/Mineradio-Vision-v3.3.7-portable-win-x64.zip) —— 解压后运行 `Mineradio\Mineradio.exe`
-- **国内网盘镜像（夸克网盘，永久有效、无需提取码）**：[Mineradio Vision v3.3.7 安装包与免安装包](https://pan.quark.cn/s/a9dffab7ad84) —— GitHub 直连较慢时用这个，含上面两个文件，打开后可单独下载或转存到自己的网盘
+- **国内网盘镜像（夸克网盘）**：[Mineradio Vision v3.3.7](https://pan.quark.cn/s/b5052730b92e) —— GitHub 直连较慢时用这个，打开后可单独下载或转存到自己的网盘
 - 全部版本与更新说明：[Releases](https://github.com/moli-lihuashi/Mineradio-Vision/releases)
 
 > 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」：点「更多信息 → 仍要运行」即可安装。
