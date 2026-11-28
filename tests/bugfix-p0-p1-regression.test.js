@@ -22,6 +22,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { test } = require('node:test');
 
 const appRoot = path.resolve(__dirname, '..');
@@ -170,13 +171,87 @@ test('恢复背景按钮绑定的是真实存在的函数', () => {
   assert.match(html, /onclick="restoreOriginalBackgroundAfterWallpaperEngine\(\)"/, '应绑定到真实实现');
 });
 
-test('QQ 登录窗口的弹窗导航限制在 QQ 自有域', () => {
-  const handler = block(main, '// 和网易 / 酷狗登录窗口一致', '\n    });');
-  assert.match(handler, /new URL\(url\)\.hostname\.toLowerCase\(\)/, '用 hostname 精确比较，防前缀绕过');
-  assert.match(handler, /host\.endsWith\('\.qq\.com'\)/);
-  assert.match(handler, /const trusted = /, '必须有白名单判据');
-  assert.match(handler, /if \(trusted\) \{[\s\S]*?loginWindow\.loadURL/, '只有白名单域名才在本窗口导航');
-  assert.match(handler, /shell\.openExternal\(url\)/, '非白名单 http(s) 应交给外部浏览器');
+test('四个登录窗口统一使用带导航守卫的精确域名白名单', () => {
+  assert.ok(main.includes('guardLoginWindowNavigation(loginWindow, NETEASE_LOGIN_HOSTS);'));
+  assert.ok(main.includes('guardLoginWindowNavigation(loginWindow, QQ_LOGIN_HOSTS);'));
+  assert.ok(main.includes('guardLoginWindowNavigation(loginWindow, KUGOU_LOGIN_HOSTS);'));
+  assert.ok(main.includes('guardLoginWindowNavigation(loginWindow, SPOTIFY_LOGIN_HOSTS, handleMaybeRedirect);'));
+});
+
+function createLoginNavigationHarness(allowedHosts, onRedirect) {
+  const source = [
+    block(main, 'function parseHttpUrl('),
+    block(main, 'function isTrustedLoginUrl('),
+    block(main, 'function openExternalHttpUrl('),
+    block(main, 'function guardLoginWindowNavigation(', '\nasync function openNeteaseMusicLoginWindow'),
+  ].join('\n');
+  const external = [];
+  const loaded = [];
+  const listeners = {};
+  let popupHandler = null;
+  const loginWindow = {
+    webContents: {
+      on(name, handler) { listeners[name] = handler; },
+      setWindowOpenHandler(handler) { popupHandler = handler; },
+    },
+    loadURL(url) { loaded.push(url); return Promise.resolve(); },
+  };
+  const context = {
+    URL,
+    Promise,
+    console,
+    shell: {
+      openExternal(url) { external.push(url); return Promise.resolve(); },
+    },
+  };
+  vm.runInNewContext(source + '\nthis.guardLoginWindowNavigation = guardLoginWindowNavigation;', context);
+  context.guardLoginWindowNavigation(loginWindow, allowedHosts, onRedirect);
+  return { external, loaded, listeners, popup: (url) => popupHandler({ url }) };
+}
+
+test('登录导航拒绝前缀域名、userinfo 伪装和非 HTTPS 受信域名', () => {
+  const harness = createLoginNavigationHarness(['163.com', 'netease.com']);
+  assert.strictEqual(harness.popup('https://music.163.com/login').action, 'deny');
+  assert.deepStrictEqual(harness.loaded, ['https://music.163.com/login']);
+
+  const blockedUrls = [
+    'https://music.163.com.evil.com/phish',
+    'https://music.163.com@evil.com/phish',
+    'http://music.163.com/login',
+  ];
+  blockedUrls.forEach((url) => {
+    assert.strictEqual(harness.popup(url).action, 'deny');
+    assert.ok(harness.external.includes(url), '非受信 HTTP(S) 弹窗应交由系统浏览器：' + url);
+  });
+  assert.strictEqual(harness.loaded.length, 1, '被拒 URL 不得载入登录分区');
+
+  let prevented = false;
+  harness.listeners['will-navigate']({ preventDefault() { prevented = true; } }, 'https://music.163.com.evil.com/phish');
+  assert.strictEqual(prevented, true, '页面导航也必须阻止非受信域名');
+
+  prevented = false;
+  harness.listeners['will-redirect']({ preventDefault() { prevented = true; } }, 'file:///etc/passwd');
+  assert.strictEqual(prevented, true, '非 HTTP(S) 重定向必须阻止');
+  assert.strictEqual(harness.external.length, blockedUrls.length + 1, 'file: 等协议不得交给系统浏览器');
+});
+
+test('Spotify 本地 OAuth 回调优先于域名白名单处理', () => {
+  const callbackUrl = 'http://127.0.0.1:43879/callback?code=abc&state=state';
+  const callbacks = [];
+  const harness = createLoginNavigationHarness(['spotify.com'], (url, event) => {
+    callbacks.push({ url, event });
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    return url === callbackUrl;
+  });
+  assert.strictEqual(harness.popup(callbackUrl).action, 'deny');
+  assert.deepStrictEqual(harness.external, []);
+  assert.deepStrictEqual(harness.loaded, []);
+
+  let prevented = false;
+  harness.listeners['will-navigate']({ preventDefault() { prevented = true; } }, callbackUrl);
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(callbacks.length, 2);
+  assert.deepStrictEqual(harness.external, []);
 });
 
 // =========================================================================

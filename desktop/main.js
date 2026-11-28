@@ -255,12 +255,16 @@ const CURRENT_FX_AUTOSAVE_MAX_BYTES = 12 * 1024 * 1024;
 let cacheSettings = null;
 const NETEASE_LOGIN_PARTITION = 'persist:mineradio-netease-login';
 const NETEASE_LOGIN_URL = 'https://music.163.com/#/login';
+const NETEASE_LOGIN_HOSTS = ['163.com', 'netease.com'];
 const QQ_LOGIN_PARTITION = 'persist:mineradio-qqmusic-login';
 const QQ_LOGIN_URL = 'https://y.qq.com/n/ryqq/profile';
+const QQ_LOGIN_HOSTS = ['qq.com', 'qpic.cn', 'gtimg.cn'];
 const KUGOU_LOGIN_PARTITION = 'persist:mineradio-kugou-login';
 const KUGOU_LOGIN_URL = 'https://www.kugou.com/';
+const KUGOU_LOGIN_HOSTS = ['kugou.com', 'kgimg.com'];
 const SPOTIFY_LOGIN_PARTITION = 'persist:mineradio-spotify-login';
 const SPOTIFY_LOGIN_URL = 'https://accounts.spotify.com/authorize';
+const SPOTIFY_LOGIN_HOSTS = ['spotify.com', 'spotifycdn.com'];
 
 const CHROMIUM_PERFORMANCE_SWITCHES = [
   ['autoplay-policy', 'no-user-gesture-required'],
@@ -1343,6 +1347,52 @@ async function readKugouLoginCookieHeader(cookieSession) {
   return buildCookieHeaderFor(cookies, isKugouCookieDomain, KUGOU_LOGIN_COOKIE_PRIORITY);
 }
 
+function parseHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isTrustedLoginUrl(value, allowedHosts) {
+  const parsed = parseHttpUrl(value);
+  if (!parsed || parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  return allowedHosts.some(function (allowedHost) {
+    const root = String(allowedHost).toLowerCase().replace(/\.$/, '');
+    return host === root || host.endsWith('.' + root);
+  });
+}
+
+function openExternalHttpUrl(value) {
+  const parsed = parseHttpUrl(value);
+  if (parsed) shell.openExternal(parsed.href).catch(() => {});
+}
+
+function guardLoginWindowNavigation(loginWindow, allowedHosts, onRedirect) {
+  const webContents = loginWindow.webContents;
+  const handleNavigation = (url, event) => {
+    if (onRedirect && onRedirect(url, event)) return;
+    if (isTrustedLoginUrl(url, allowedHosts)) return;
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    openExternalHttpUrl(url);
+  };
+
+  webContents.on('will-navigate', (event, url) => handleNavigation(url, event));
+  webContents.on('will-redirect', (event, url) => handleNavigation(url, event));
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (onRedirect && onRedirect(url)) return { action: 'deny' };
+    if (isTrustedLoginUrl(url, allowedHosts)) {
+      loginWindow.loadURL(url).catch((e) => console.warn('Login popup navigation failed:', e.message));
+    } else {
+      openExternalHttpUrl(url);
+    }
+    return { action: 'deny' };
+  });
+}
+
 async function openNeteaseMusicLoginWindow(owner) {
   const cookieSession = session.fromPartition(NETEASE_LOGIN_PARTITION);
   const initialCookie = await readNeteaseLoginCookieHeader(cookieSession);
@@ -1393,14 +1443,7 @@ async function openNeteaseMusicLoginWindow(owner) {
       }
     };
 
-    loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\/([^/]+\.)?(163|music\.163|netease)\.com/i.test(url)) {
-        loginWindow.loadURL(url).catch((e) => console.warn('Netease login popup navigation failed:', e.message));
-      } else if (/^https?:\/\//i.test(url)) {
-        shell.openExternal(url).catch(() => {});
-      }
-      return { action: 'deny' };
-    });
+    guardLoginWindowNavigation(loginWindow, NETEASE_LOGIN_HOSTS);
 
     loginWindow.webContents.on('did-finish-load', () => {
       checkCookies();
@@ -1539,24 +1582,7 @@ async function openQQMusicLoginWindow(owner, options) {
       }
     };
 
-    loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      // 和网易 / 酷狗登录窗口一致：只有 QQ 自有域才能在登录分区内导航，
-      // 其余 http(s) 一律交给外部浏览器；非 http(s) 直接拒绝。
-      // 用 URL.hostname 精确比较，避免 "qq.com.evil.com" 这类前缀绕过。
-      let host = '';
-      try { host = new URL(url).hostname.toLowerCase(); } catch (_) {}
-      const trusted = /^https?:\/\//i.test(url) && (
-        host === 'qq.com' || host.endsWith('.qq.com')
-        || host === 'qpic.cn' || host.endsWith('.qpic.cn')
-        || host === 'gtimg.cn' || host.endsWith('.gtimg.cn')
-      );
-      if (trusted) {
-        loginWindow.loadURL(url).catch((e) => console.warn('QQ login popup navigation failed:', e.message));
-      } else if (/^https?:\/\//i.test(url)) {
-        shell.openExternal(url).catch(() => {});
-      }
-      return { action: 'deny' };
-    });
+    guardLoginWindowNavigation(loginWindow, QQ_LOGIN_HOSTS);
 
     loginWindow.webContents.on('did-finish-load', () => {
       checkCookies();
@@ -1720,14 +1746,7 @@ async function openKugouMusicLoginWindow(owner) {
       }
     };
 
-    loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\/([^/]+\.)?kugou\.com/i.test(url) || /^https?:\/\/([^/]+\.)?kgimg\.com/i.test(url)) {
-        loginWindow.loadURL(url).catch((e) => console.warn('Kugou login popup navigation failed:', e.message));
-      } else if (/^https?:\/\//i.test(url)) {
-        shell.openExternal(url).catch(() => {});
-      }
-      return { action: 'deny' };
-    });
+    guardLoginWindowNavigation(loginWindow, KUGOU_LOGIN_HOSTS);
 
     loginWindow.webContents.on('did-finish-load', () => {
       checkCookies();
@@ -2775,17 +2794,7 @@ async function openSpotifyMusicLoginWindow(owner, options) {
       return true;
     };
 
-    loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (handleMaybeRedirect(url)) return { action: 'deny' };
-      if (/^https?:\/\//i.test(url)) {
-        loginWindow.loadURL(url).catch((e) => console.warn('Spotify login popup navigation failed:', e.message));
-      } else {
-        shell.openExternal(url).catch(() => {});
-      }
-      return { action: 'deny' };
-    });
-    loginWindow.webContents.on('will-redirect', (event, url) => handleMaybeRedirect(url, event));
-    loginWindow.webContents.on('will-navigate', (event, url) => handleMaybeRedirect(url, event));
+    guardLoginWindowNavigation(loginWindow, SPOTIFY_LOGIN_HOSTS, handleMaybeRedirect);
     loginWindow.on('ready-to-show', () => loginWindow.show());
     loginWindow.on('closed', () => {
       if (!settled) finish({ ok: false, provider: 'spotify', cancelled: true, message: 'Spotify 授权窗口已关闭。' });
