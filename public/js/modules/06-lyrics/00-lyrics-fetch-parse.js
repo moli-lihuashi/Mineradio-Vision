@@ -302,6 +302,58 @@ function lyricNeteaseFallbackSearchQuery(song) {
   var artist = String(song.artist || '').split(/\s*\/\s*|\s*,\s*|\s*&\s*/)[0] || '';
   return [song.name || song.title || '', artist].filter(Boolean).join(' ').trim();
 }
+/* 歌词兜底候选必须落在「同一录音」上，标题相同不够。
+ *
+ * 事故形态：同题同艺人但存在 Live / 重录 / remaster / 加速版时，搜索相关性分
+ * （scoreSongSearchResult）看不出差别，兜底会把那一版的译文按行序贴到当前曲目上
+ * —— 正文没错、译文整段错位，比没有译文更糟（译文是按行序号/时间戳贴的）。
+ * 判据与 server/lib/netease-source-match.js 同源：版本标记集合必须完全一致；
+ * 双方都有时长时差值不得超过 max(5s, 2%)，上限 10s。
+ * 只认「有明确版本标记」的词（live/remaster/重录/伴奏…），不引入泛化的 version：
+ * 那会把「正式版 vs 专辑版」这类正常匹配一起拒掉，兜底覆盖率下降等于没有译文。 */
+var LYRIC_FALLBACK_VERSION_RULES = [
+  ['live', /\blive\b|现场|演唱会/],
+  ['cover', /\bcover\b|翻唱/],
+  ['remix', /\bremix\b|mix版|\bdj\b|dj版/],
+  ['remaster', /\bremaster(?:ed)?\b|重制/],
+  ['rerecord', /\bre[ -]?record(?:ed|ing)?\b|重录/],
+  ['instrumental', /\binstrumental\b|伴奏|\bkaraoke\b|纯音乐/],
+  ['acoustic', /\bacoustic\b|不插电/],
+  ['speed', /\bnightcore\b|\bsped[ -]?up\b|\bslowed\b|加速|慢速|变速/],
+  ['edit', /\bradio edit\b|\bedit\b|剪辑/],
+  ['demo', /\bdemo\b|试听版/]
+];
+function lyricFallbackVersionTokens(text) {
+  var raw = String(text || '').toLowerCase()
+    .replace(/（/g, '(').replace(/）/g, ')')
+    .replace(/【/g, '[').replace(/】/g, ']');
+  var tokens = [];
+  for (var i = 0; i < LYRIC_FALLBACK_VERSION_RULES.length; i++) {
+    if (LYRIC_FALLBACK_VERSION_RULES[i][1].test(raw)) tokens.push(LYRIC_FALLBACK_VERSION_RULES[i][0]);
+  }
+  return tokens.join(',');
+}
+/* 与 04-progress-seek 的 normalizePlaybackDurationSeconds 同一口径：>1000 视为毫秒。
+ * 服务端所有在线曲目（网易/QQ/酷狗/汽水）的 duration 都已归一成毫秒。 */
+function lyricFallbackDurationSeconds(song) {
+  song = song || {};
+  var raw = Number(song.duration || song.durationMs || song.dt || song.interval || 0) || 0;
+  if (!isFinite(raw) || raw <= 0) return 0;
+  return raw > 1000 ? raw / 1000 : raw;
+}
+function lyricFallbackCandidateRejectReason(song, candidate) {
+  if (!candidate) return 'no_candidate';
+  var wantTokens = lyricFallbackVersionTokens((song && (song.name || song.title)) || '');
+  var gotTokens = lyricFallbackVersionTokens(candidate.name || candidate.title || '');
+  if (wantTokens !== gotTokens) return 'version_mismatch';
+  var want = lyricFallbackDurationSeconds(song);
+  var got = lyricFallbackDurationSeconds(candidate);
+  if (want > 0 && got > 0) {
+    var tolerance = Math.min(10, Math.max(5, want * 0.02));
+    if (Math.abs(got - want) > tolerance) return 'duration_mismatch';
+  }
+  return '';
+}
 async function findNeteaseLyricFallbackCandidate(song) {
   var query = lyricNeteaseFallbackSearchQuery(song);
   if (!query) return null;
@@ -310,6 +362,10 @@ async function findNeteaseLyricFallbackCandidate(song) {
   if (!Array.isArray(list) || !list.length) return null;
   list = list.filter(function (candidate) {
     return !(typeof sourceCandidateRejectReason === 'function' && sourceCandidateRejectReason(song, candidate, 'netease'));
+  });
+  // 版本/时长闸门：同题翻唱、Live、重录、remaster 不许供译文
+  list = list.filter(function (candidate) {
+    return !lyricFallbackCandidateRejectReason(song, candidate);
   });
   if (!list.length) return null;
   for (var i = 0; i < list.length; i++) {
