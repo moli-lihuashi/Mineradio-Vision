@@ -6,6 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -32,6 +33,45 @@ test('npm run build:win 前自动写溯源，不允许靠手工记得', () => {
   const pkg = JSON.parse(read('package.json'));
   assert.equal(pkg.scripts['prebuild:win'], 'node scripts/write-build-provenance.js',
     'prebuild:win 钩子必须存在（npm 会在 build:win 前自动执行）');
+});
+
+test('dist 整理保留更新清单、归档旧包并传递关键错误', async () => {
+  const { organizeDist } = require('../build/organize-dist');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mineradio-dist-test-'));
+  try {
+    const version = JSON.parse(read('package.json')).version;
+    const latestPath = path.join(tempRoot, 'latest.yml');
+    fs.writeFileSync(latestPath, 'version: ' + version + '\n');
+    fs.writeFileSync(path.join(tempRoot, 'Mineradio-' + version + '-Setup.exe'), 'installer');
+    fs.writeFileSync(path.join(tempRoot, 'Mineradio-' + version + '-Setup.exe.blockmap'), 'blockmap');
+    fs.writeFileSync(path.join(tempRoot, 'Mineradio-0.0.0-to-' + version + '.patch.json'), '{}');
+    fs.writeFileSync(path.join(tempRoot, 'Mineradio-0.0.0-Setup.exe'), 'old installer');
+    fs.writeFileSync(path.join(tempRoot, 'builder-effective-config.yaml'), 'logs');
+    fs.mkdirSync(path.join(tempRoot, 'win-unpacked'), { recursive: true });
+    fs.writeFileSync(path.join(tempRoot, 'win-unpacked', 'Mineradio.exe'), 'app');
+
+    await organizeDist(tempRoot);
+
+    assert.strictEqual(fs.readFileSync(latestPath, 'utf8'), 'version: ' + version + '\n');
+    assert.ok(fs.existsSync(path.join(tempRoot, '_archive', 'previous-releases', 'Mineradio-0.0.0-Setup.exe')));
+    assert.ok(!fs.existsSync(path.join(tempRoot, 'Mineradio-0.0.0-Setup.exe')));
+    assert.ok(fs.existsSync(path.join(tempRoot, '_logs', 'builder-effective-config.yaml')));
+    assert.ok(fs.existsSync(path.join(tempRoot, 'Mineradio', 'Mineradio.exe')));
+
+    const invalidRoot = path.join(tempRoot, 'not-a-directory');
+    fs.writeFileSync(invalidRoot, 'x');
+    await assert.rejects(() => organizeDist(invalidRoot));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  const source = read('build/organize-dist.js');
+  assert.ok(source.includes('UPDATE_FILE.test(entry.name)'), 'latest.yml 必须计入发布物');
+  const hook = source.slice(
+    source.indexOf('module.exports = async function afterAllArtifactBuild'),
+    source.indexOf('module.exports.organizeDist')
+  );
+  assert.doesNotMatch(hook, /catch\s*\(/, '构建钩子不得吞掉整理错误');
 });
 
 test('/api/debug/build 必须返回随包的构建溯源', () => {

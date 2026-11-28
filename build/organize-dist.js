@@ -6,6 +6,7 @@ const DIST_ROOT = path.resolve(__dirname, '..', 'dist');
 const APP_DIR_NAME = 'Mineradio';
 const RELEASE_FILE = /^Mineradio-\d+\.\d+\.\d+-Setup\.(exe|exe\.blockmap)$/;
 const PATCH_FILE = /^Mineradio-.+-to-.+\.patch\.json$/;
+const UPDATE_FILE = /^latest\.yml$/i;
 const BUILDER_LOG = /^builder(-.*)?\.ya?ml$/i;
 
 function ensureDir(dir) {
@@ -40,37 +41,33 @@ function archivePreviousReleases(distRoot, currentVersion) {
   });
 }
 
-async function organizeDist() {
-  if (!fs.existsSync(DIST_ROOT)) return;
+async function organizeDist(distRoot) {
+  distRoot = distRoot || DIST_ROOT;
+  if (!fs.existsSync(distRoot)) return;
 
-  const logsDir = path.join(DIST_ROOT, '_logs');
-  const inconsistentDir = path.join(DIST_ROOT, '_archive', 'inconsistent-builds');
-  [logsDir, inconsistentDir].forEach(ensureDir);
+  const logsDir = path.join(distRoot, '_logs');
+  ensureDir(logsDir);
 
-  fs.readdirSync(DIST_ROOT, { withFileTypes: true }).forEach(function(entry) {
+  fs.readdirSync(distRoot, { withFileTypes: true }).forEach(function(entry) {
     if (!entry.isFile()) return;
     if (BUILDER_LOG.test(entry.name)) {
-      moveEntry(path.join(DIST_ROOT, entry.name), path.join(logsDir, entry.name));
-      return;
-    }
-    if (entry.name === 'latest.yml') {
-      moveEntry(path.join(DIST_ROOT, entry.name), path.join(inconsistentDir, entry.name));
+      moveEntry(path.join(distRoot, entry.name), path.join(logsDir, entry.name));
     }
   });
 
   // electron-builder emits dist/win-unpacked → promote to dist/Mineradio
-  const winUnpackedSrc = path.join(DIST_ROOT, 'win-unpacked');
-  const appDst = path.join(DIST_ROOT, APP_DIR_NAME);
+  const winUnpackedSrc = path.join(distRoot, 'win-unpacked');
+  const appDst = path.join(distRoot, APP_DIR_NAME);
   if (fs.existsSync(winUnpackedSrc)) {
     moveEntry(winUnpackedSrc, appDst);
   }
 
   // Legacy layouts from older organize-dist
-  const legacyDev = path.join(DIST_ROOT, '_dev', 'win-unpacked');
+  const legacyDev = path.join(distRoot, '_dev', 'win-unpacked');
   if (fs.existsSync(legacyDev) && !fs.existsSync(appDst)) {
     moveEntry(legacyDev, appDst);
   }
-  const legacyDevRoot = path.join(DIST_ROOT, '_dev');
+  const legacyDevRoot = path.join(distRoot, '_dev');
   if (fs.existsSync(legacyDevRoot)) {
     try {
       fs.rmSync(legacyDevRoot, { recursive: true, force: true });
@@ -78,13 +75,13 @@ async function organizeDist() {
   }
 
   const pkg = require(path.join(__dirname, '..', 'package.json'));
-  archivePreviousReleases(DIST_ROOT, pkg.version);
+  archivePreviousReleases(distRoot, pkg.version);
   cleanPackagedPublicJunk(path.join(appDst, 'resources', 'app', 'public'));
 
-  const rootEntries = fs.readdirSync(DIST_ROOT, { withFileTypes: true });
+  const rootEntries = fs.readdirSync(distRoot, { withFileTypes: true });
   const publishable = rootEntries.filter(function(entry) {
     if (!entry.isFile()) return false;
-    return RELEASE_FILE.test(entry.name) || PATCH_FILE.test(entry.name);
+    return RELEASE_FILE.test(entry.name) || PATCH_FILE.test(entry.name) || UPDATE_FILE.test(entry.name);
   });
   console.log(
     '  • dist organized: publishable=' + publishable.length +
@@ -93,8 +90,9 @@ async function organizeDist() {
 }
 
 module.exports = async function afterAllArtifactBuild() {
-  try { await organizeDist(); } catch (err) { console.warn('  • organize-dist non-fatal skip: ' + (err.message || err)); }
+  await organizeDist();
 };
+module.exports.organizeDist = organizeDist;
 
 if (require.main === module) {
   organizeDist().catch(function(err) {
