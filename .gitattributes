@@ -7,3 +7,4 @@
 *.ico binary
 *.png binary
 *.min.js text eol=lf
+LICENSE text eol=lf

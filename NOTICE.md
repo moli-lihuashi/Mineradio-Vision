@@ -2,6 +2,15 @@
 
 Mineradio 使用了以下第三方项目或服务。各项目版权归其原作者所有。
 
+## 本项目版权
+
+Copyright (C) 2026 moli-lihuashi
+
+本项目整体以 GPL-3.0 发布，`LICENSE` 为 GPL-3.0 标准全文（原样引用，未做改写）。
+
+原始 Mineradio 项目由 XxHuberrr 开发（见 README「致谢」）；本仓库是它的修改版，
+修改内容逐条记录在 `MODIFICATIONS.md`。
+
 ## Third-party Libraries
 
 - Electron
